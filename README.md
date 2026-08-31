@@ -30,6 +30,10 @@ python -m unittest discover -s tests  # suite de non-régression
 
 Seule dépendance externe : `PyYAML`, pour lire les cartes de contrôles.
 
+Pour écrire un scénario, lire [docs/GUIDE.md](docs/GUIDE.md) : référence
+complète du simulateur, catalogue d'invariants, et surtout la liste de ce que
+le simulateur **ne** modélise **pas**.
+
 ## Organisation
 
 | Chemin | Contenu |
@@ -41,6 +45,7 @@ Seule dépendance externe : `PyYAML`, pour lire les cartes de contrôles.
 | `pipelines/` | enchaînements de bout en bout — à construire |
 | `programmes/` | points d'entrée exécutables — à construire |
 | `tests/` | non-régression du simulateur et de la carte |
+| `docs/GUIDE.md` | référence d'usage du simulateur — exemples exécutés par les tests |
 | `docs/HARNESS.md` | ce que fournit le harness, et ce qu'il reste à construire |
 | `docs/TRAPS.md` | les douze pièges du terrain : symptôme, cause, règle |
 
