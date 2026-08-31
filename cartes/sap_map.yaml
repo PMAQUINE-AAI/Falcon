@@ -1,0 +1,187 @@
+# =====================================================================
+# Carte des controles SAP GUI — systeme K75, mandant 210
+#
+# Relevee empiriquement les 29 et 30/08/2026 par exploration de l'arbre
+# GUI et par enregistrements du SAP GUI Recorder. Chaque ID de ce fichier
+# a ete observe, aucun n'est deduit.
+#
+# A charger comme DONNEES. Ne pas coder ces valeurs en dur dans un
+# programme : elles changent avec le systeme, le mandant et la release.
+# =====================================================================
+
+systeme:
+  nom: K75
+  mandant: "210"
+  releve_le: "2026-08-30"
+  langue_extraction: EN
+  langue_injection: ES
+  # La langue de session conditionne tout : voir TRAPS.md, piege TXTSP.
+
+# ---------------------------------------------------------------------
+# IA08 — selection des gammes de maintenance
+# ---------------------------------------------------------------------
+ia08_selection:
+  transaction: IA08
+  programme: RIPLKO10
+  dynpro: 1000
+  champs:
+    division:        "wnd[0]/usr/ctxtWERKS-LOW"
+    groupe:          "wnd[0]/usr/ctxtPN_PLNNR-LOW"
+    compteur:        "wnd[0]/usr/txtPN_PLNAL-LOW"
+  # Les trois cases determinent QUELS types de gammes remontent.
+  # Aucune cochee => selection vide, SANS message d'erreur.
+  # Elles doivent etre positionnees TOUTES LES TROIS a chaque appel :
+  # SAP conserve les valeurs d'ecran d'un appel a l'autre.
+  cases_par_type:
+    generale:        PN_IHAN     # instructions / gammes generales, PLNTY = A
+    equipement:      PN_EQUI
+    poste_technique: PN_IFLO
+  executer: "wnd[0]/tbar[1]/btn[8]"   # F8
+
+# ---------------------------------------------------------------------
+# IA08 — resultat, grille ALV
+# ---------------------------------------------------------------------
+ia08_resultat:
+  programme: SAPLSLVC_FULLSCREEN
+  dynpro: 500
+  grille:
+    - "wnd[0]/usr/cntlGRID1/shellcont/shell"
+    - "wnd[0]/usr/cntlALV_CONTAINER/shellcont/shell"
+  # ALV : index de ligne ABSOLU. grid.GetCellValue(ligne, "COLONNE").
+  # Aucun defilement necessaire. Ne pas confondre avec le table control.
+  indexation: absolue
+  colonnes:
+    groupe:      PLNNR
+    compteur:    PLNAL
+    description: KTEXT
+    division:    WERKS
+    type_gamme:  PLNTY
+  ouvrir_gamme: "wnd[0]/tbar[1]/btn[43]"
+  # ATTENTION : avec UN SEUL resultat, SAP saute cet ecran et ouvre la
+  # gamme directement. Detecter en cherchant le table control des
+  # operations AVANT de chercher la grille.
+
+# ---------------------------------------------------------------------
+# Synthese des operations d'une gamme
+# ---------------------------------------------------------------------
+operations_synthese:
+  programme: SAPLCPDI
+  dynpro: 3400
+  table:
+    - "wnd[0]/usr/tblSAPLCPDITCTRL_3400"
+    - "wnd[0]/usr/tblSAPLCPDITCTRL_1200"
+  # Table control : index de ligne VISIBLE (0..VisibleRowCount-1).
+  # Au-dela : table.VerticalScrollbar.Position = n, puis repartir a 0.
+  # Chaque cellule est un objet GUI :
+  #   tbl.../txtPLPOD-VORNR[colonne,ligne_visible]
+  indexation: visible_avec_defilement
+  colonnes:
+    operation:      PLPOD-VORNR
+    sous_operation: PLPOD-UVORN
+    description:    PLPOD-LTXA1
+    indicateur_texte: RC270-TXTKZ    # peu fiable, cf. TRAPS.md
+  entetes_identite:
+    - "wnd[0]/usr/txtRC270-HEAD1"
+    - "wnd[0]/usr/txtRC270-HEAD2"
+  nombre_entrees: "wnd[0]/usr/txtRC27X-ENTRIES"
+  # NE JAMAIS utiliser RC27X-ENTRY_ACT comme total : c'est l'entree
+  # COURANTE, elle vaut 1 a l'ouverture.
+  boutons:
+    marquer_tout:        "wnd[0]/tbar[1]/btn[34]"   # Ctrl+F10
+    demarquer_tout:      "wnd[0]/tbar[1]/btn[8]"    # F8
+    ouvrir_detail:       "wnd[0]/tbar[1]/btn[17]"   # activite interne
+    ouvrir_detail_externe: "wnd[0]/tbar[1]/btn[18]"
+    texte_entete:        "wnd[0]/tbar[1]/btn[16]"   # texte d'EN-TETE
+    entete_vue_generale: "wnd[0]/tbar[1]/btn[32]"
+  boutons_dangereux:
+    "wnd[0]/tbar[1]/btn[7]":  "Inserer une operation"
+    "wnd[0]/tbar[1]/btn[14]": "Supprimer une operation"
+
+# ---------------------------------------------------------------------
+# Detail d'une operation
+# ---------------------------------------------------------------------
+operation_detail:
+  programme: SAPLCPDO
+  dynpro: 3370
+  # Le conteneur porte le numero de sous-ecran dans son ID, et ce numero
+  # CHANGE avec le type d'operation (interne, externe, service...).
+  # Resoudre les champs par SUFFIXE dans l'arbre de wnd[0]/usr, jamais
+  # par un chemin fige.
+  prefixe_observe: "wnd[0]/usr/subOPR_DETAIL:SAPLCPDO:3300"
+  resolution: par_suffixe
+  suffixes:
+    operation:        "txtPLPOD-VORNR"
+    sous_operation:   "txtPLPOD-UVORN"
+    description:      "txtPLPOD-LTXA1"
+    indicateur_texte: "chkRC270-TXTKZ"
+    bouton_texte_long: "btn*RC270-TXTKZ"
+  # Les fleches ne parcourent QUE les operations marquees sur la
+  # synthese. Sans "marquer tout" prealable, le perimetre vaut une seule
+  # operation et "suivante" ne fait rien.
+  navigation:
+    premiere: "wnd[0]/tbar[1]/btn[5]"
+    precedente: "wnd[0]/tbar[1]/btn[6]"
+    suivante: "wnd[0]/tbar[1]/btn[7]"
+    derniere: "wnd[0]/tbar[1]/btn[8]"
+    retour_synthese: "wnd[0]/tbar[1]/btn[35]"
+
+# ---------------------------------------------------------------------
+# Editeur SAPscript (texte long)
+# ---------------------------------------------------------------------
+editeur_sapscript:
+  programme: SAPLSTXX
+  dynpro: 2101
+  # AUCUN champ, aucun conteneur : deux explorations independantes ne
+  # remontent que des boutons. Le contenu n'est PAS adressable par
+  # findById. Toute lecture ou ecriture passe par un canal externe.
+  adressable: false
+  boutons:
+    couper:  "wnd[0]/tbar[1]/btn[37]"   # Ctrl+Maj+F1
+    copier:  "wnd[0]/tbar[1]/btn[38]"   # Ctrl+Maj+F2
+    inserer: "wnd[0]/tbar[1]/btn[9]"    # F9 — AJOUTE en bout
+    retour:  "wnd[0]/tbar[0]/btn[3]"    # F3
+  menus:
+    teledechargement: "wnd[0]/mbar/menu[0]/menu[4]"   # vers le PC
+    telechargement_import: null   # present, index non releve : chercher
+                                  # par libelle contenant "importer"
+    supprimer: null               # a confirmer par la commande 'menus'
+  boutons_dangereux:
+    "wnd[0]/tbar[1]/btn[7]":  "Afficher formats (et non 'suivante')"
+    "wnd[0]/tbar[1]/btn[35]": "Supprimer commande (et non 'retour')"
+
+# ---------------------------------------------------------------------
+# Echange de fichier (export / import du texte long)
+# ---------------------------------------------------------------------
+dialogue_fichier:
+  # L'export enchaine DEUX modales : format puis fichier. Ne pas cibler
+  # un indice fixe ; traverser la pile de la plus interne vers
+  # l'exterieur, remplir celle qui porte un champ de nom de fichier et
+  # valider les autres.
+  sequence_observee:
+    - "menu Teledechargement"
+    - "wnd[1]/tbar[0]/btn[0]        (choix de format, defaut = RTF)"
+    - "wnd[2]/usr/ctxtITCTK-TDFILENAME = <chemin absolu complet>"
+    - "wnd[2]/tbar[0]/btn[0]        (transfert)"
+  champs_nom_fichier:
+    - "usr/ctxtITCTK-TDFILENAME"    # editeur SAPscript
+    - "usr/ctxtDY_FILENAME"
+    - "usr/ctxtRLGRAP-FILENAME"
+  validation: "tbar[0]/btn[0]"
+  # Le champ prend le chemin ABSOLU complet, jamais une variable
+  # d'environnement : %TEMP% n'est pas interprete par SAP.
+
+# ---------------------------------------------------------------------
+# Stockage des textes longs (pour verification en SE16)
+# ---------------------------------------------------------------------
+textes_longs:
+  tables: [STXH, STXL]
+  objet: ROUTING
+  ids:
+    entete: PLKO
+    operation: PLPO
+  cle_langue: TDSPRAS        # 1 caractere : E, S — pas EN, ES
+  # Champ qui FIGE la langue de lecture cote application :
+  champ_langue_applicatif:
+    entete: PLKO-TXTSP
+    operation: PLPO-TXTSP
+  # Non maintenable par transaction ni par BAPI. Voir TRAPS.md.
