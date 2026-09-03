@@ -40,7 +40,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 |---|---|---|---|---|
 | 0 | `[x]` | Squelette : arborescence, `pyproject.toml`, tests de frontière, CI | — | la vérification est verte sur un dépôt neuf |
 | 1 | `[x]` | Modèles et interface de couture, erreurs typées (§3.4) | 0 | surface épinglée à 15 méthodes ; une implémentation partielle ne s'instancie pas ; `Refus` n'hérite pas d'`Echec` |
-| 2 | `[ ]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | reprise après interruption simulée : aucun item retraité, aucun perdu ; un item interrompu **après** sauvegarde sort en `douteux`, jamais rejoué |
+| 2 | `[x]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | 30 tests sur cinq axes ; un item interrompu **après** sauvegarde sort en `douteux` et n'est jamais rejoué ; reprise refusée sur jeu modifié |
 | 3 | `[ ]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | un message non répertorié bloque et produit un dump ; aucun joker ni réglage permissif n'existe ; ambiguïté entre deux entrées détectée **au chargement** |
 | 4 | `[ ]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | chaque garde a un test qui échoue si on la retire ; une pipeline ne peut en désactiver aucune |
 | 5 | `[ ]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | aller-retour prouvé : lire un jeu, tout marquer KO, réexporter, relire ⇒ identique champ à champ |
@@ -65,6 +65,22 @@ chose : le recorder est la vérité terrain, on ne théorise pas à sa place.
 Aucun autre lot n'est bloqué. Les lots 1 à 5 ne dépendent ni d'une trace ni
 d'un accès SAP.
 
+## Mode dégradé : quand la vérification locale est impossible
+
+Il est arrivé que l'outillage d'exécution du conteneur soit indisponible, donc
+que la suite ne puisse pas tourner sur place. La règle dans ce cas :
+
+- pousser quand même — le conteneur est éphémère, et perdre le travail est
+  pire que le livrer non vérifié sur une branche de développement ;
+- **le dire dans le message de commit**, sans ambiguïté ;
+- ne cocher la ligne qu'une fois la CI verte sur le commit poussé, la CI
+  lançant la même commande dans un environnement propre ;
+- ne jamais présenter une relecture à l'œil comme une vérification.
+
+Ce mode reste l'exception. Enchaîner plusieurs lots à l'aveugle en comptant
+sur la CI pour rattraper reviendrait à déplacer la boucle de vérification hors
+de portée, ce qui est précisément ce que ce projet cherche à éviter.
+
 ## Questions ouvertes qui toucheront un lot
 
 Reprises du §8 de la spec, avec le lot qu'elles concernent :
@@ -81,15 +97,13 @@ Reprises du §8 de la spec, avec le lot qu'elles concernent :
 Une revue indépendante de l'architecture a produit cinq corrections que
 j'intègre. Elles ne sont pas cosmétiques.
 
-**1. La couture du §3.4 était trop étroite pour le cas 1 lui-même** — tranché,
-décision n°9, couture élargie.
-
-L'analyse d'origine : Elle n'offre
-ni `select`, ni accès ALV, ni accès table control. Or l'audit du cas 1 lit une
-grille ALV, et `TRAPS #9` impose de positionner explicitement trois cases à
-chaque appel de IA08. Les huit méthodes ne suffisent donc pas à exprimer la
-première pipeline livrée. **Le lot 1 est bloqué sur cet arbitrage**, parce que
-la spec qualifie elle-même la couture d'irréversible.
+**1. La couture du §3.4 était trop étroite pour le cas 1 lui-même.** Elle
+n'offrait ni `select`, ni accès ALV, ni accès table control — alors que
+l'audit du cas 1 lit une grille ALV, et que le corollaire du piège des cases
+rémanentes impose de positionner explicitement les trois cases de IA08 à
+chaque appel. Les huit méthodes ne suffisaient donc pas à exprimer la première
+pipeline livrée. **Tranché : décision n°9, couture élargie à 15 méthodes**,
+figée au lot 1.
 
 **2. L'identité d'un item ne peut pas être l'index de ligne.** Le §4.7 exige
 que le fichier de KO soit réinjectable ; réinjecté, il n'a plus les mêmes
