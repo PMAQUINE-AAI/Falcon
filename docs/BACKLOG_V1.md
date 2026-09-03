@@ -41,7 +41,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 0 | `[x]` | Squelette : arborescence, `pyproject.toml`, tests de frontière, CI | — | la vérification est verte sur un dépôt neuf |
 | 1 | `[x]` | Modèles et interface de couture, erreurs typées (§3.4) | 0 | surface épinglée à 15 méthodes ; une implémentation partielle ne s'instancie pas ; `Refus` n'hérite pas d'`Echec` |
 | 2 | `[x]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | 30 tests sur cinq axes ; un item interrompu **après** sauvegarde sort en `douteux` et n'est jamais rejoué ; reprise refusée sur jeu modifié |
-| 3 | `[ ]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | un message non répertorié bloque et produit un dump ; aucun joker ni réglage permissif n'existe ; ambiguïté entre deux entrées détectée **au chargement** |
+| 3 | `[x]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | 30 tests ; `Registre.__init__` n'accepte que `entrees` ; joker et catégorie `inconnue` refusés au chargement ; ambiguïté détectée **au chargement** ; registre livré à 3 entrées, aucune n'inventant de message SAP |
 | 4 | `[ ]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | chaque garde a un test qui échoue si on la retire ; une pipeline ne peut en désactiver aucune |
 | 5 | `[ ]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | aller-retour prouvé : lire un jeu, tout marquer KO, réexporter, relire ⇒ identique champ à champ |
 | 6 | `[!]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | rejoue les traces fournies ; formes `.press` et `.press()` couvertes |
