@@ -83,6 +83,14 @@ class PlafondAtteint(ArretBloquant):
     """Garde 5 : le rayon d'action de l'execution est epuise."""
 
 
+class IncidentBloquant(ArretBloquant):
+    """Un incident que la taxonomie ne rend pas poursuivable.
+
+    Soit rien ne l'appariait — l'inconnu est bloquant par defaut — soit
+    l'entree qui l'apparie dit explicitement de ne pas poursuivre.
+    """
+
+
 class RepriseIncoherente(ArretBloquant):
     """La reprise porte sur un jeu ou une pipeline qui ont change.
 

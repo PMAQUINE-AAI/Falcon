@@ -30,6 +30,11 @@ MODULES_SAP = {"win32com", "pythoncom", "comtypes", "win32api", "win32gui"}
 # une pipeline declare une intention, le controleur applique les gardes.
 COUCHES_SANS_COUTURE = ("moteur", "pipeline")
 
+# Une pipeline ne peut nommer aucun type de driver, gardé ou non. Ne pouvant
+# pas en manipuler un, elle ne peut pas non plus desactiver une garde : la
+# regle du 5.2 devient une contrainte d'import plutot qu'une convention.
+COUCHES_SANS_CONTROLEUR = ("pipeline", "trace")
+
 
 def modules_python(base: Path) -> list[Path]:
     return sorted(base.rglob("*.py")) if base.exists() else []
@@ -105,6 +110,24 @@ class TestFrontiereControleur(unittest.TestCase):
                             f"{module.relative_to(RACINE)}:{ligne} importe {importe!r}. "
                             f"La couche {couche!r} passe par le controleur, qui porte "
                             f"les gardes : une pipeline ne peut pas les contourner (5.2).")
+
+
+class TestFrontierePipeline(unittest.TestCase):
+
+    def test_une_pipeline_ne_nomme_aucun_driver(self):
+        """Ne pouvant nommer aucun driver, elle ne peut en desactiver la garde."""
+        for couche in COUCHES_SANS_CONTROLEUR:
+            for module in modules_python(PAQUET / couche):
+                for importe, ligne, differe in imports(module):
+                    if differe:
+                        continue
+                    if not importe.startswith(("falcon.controleur", "falcon.couture")):
+                        continue
+                    with self.subTest(module=str(module.relative_to(RACINE)), ligne=ligne):
+                        self.fail(
+                            f"{module.relative_to(RACINE)}:{ligne} importe {importe!r}. "
+                            f"La couche {couche!r} declare une intention ; elle ne "
+                            f"doit pouvoir nommer aucun driver (5.2).")
 
 
 if __name__ == "__main__":
