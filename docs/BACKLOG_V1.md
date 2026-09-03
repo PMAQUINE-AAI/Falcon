@@ -17,9 +17,13 @@ parenthèses y renvoient.
    même commit.
 
 ```bash
-python -m unittest discover -s tests -t .                        # FALCON
-python -m unittest discover -s historique/tests -t historique    # l'archive ne régresse pas
+python outils/verifier.py       # les deux suites, FALCON et l'archive
+python outils/neutraliser.py    # chaque garde retirée doit faire tomber la suite
 ```
+
+La seconde commande existe parce qu'une garde couverte par des tests qui
+passent n'est pas une garde vérifiée : le test passerait aussi si la garde ne
+faisait rien.
 
 ## Garde-fous
 
@@ -42,7 +46,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 1 | `[x]` | Modèles et interface de couture, erreurs typées (§3.4) | 0 | surface épinglée à 15 méthodes ; une implémentation partielle ne s'instancie pas ; `Refus` n'hérite pas d'`Echec` |
 | 2 | `[x]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | 30 tests sur cinq axes ; un item interrompu **après** sauvegarde sort en `douteux` et n'est jamais rejoué ; reprise refusée sur jeu modifié |
 | 3 | `[x]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | 30 tests ; `Registre.__init__` n'accepte que `entrees` ; joker et catégorie `inconnue` refusés au chargement ; ambiguïté détectée **au chargement** ; registre livré à 3 entrées, aucune n'inventant de message SAP |
-| 4 | `[x]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | 30 tests ; les cinq gardes vérifiées par neutralisation — chacune neutralisée fait tomber la suite ; `Poste` n'expose que la surface de `Driver` |
+| 4 | `[x]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | 34 tests ; `python outils/neutraliser.py` prouve en CI que chaque garde retirée fait tomber la suite ; `Poste` n'expose que la surface de `Driver` |
 | 5 | `[x]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | 24 tests ; aller-retour prouvé champ à champ **et** octet pour octet une fois le diagnostic retiré ; dialecte (BOM, délimiteur, fins de ligne, ordre des colonnes) conservé |
 | 6 | `[!]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | rejoue les traces fournies ; formes `.press` et `.press()` couvertes |
 | 7 | `[ ]` | Brouillon de pipeline depuis une trace (§4.3) | 6 | une trace produit un YAML chargeable par le lot 8 |
