@@ -39,7 +39,7 @@ Quatre couches, indépendantes :
 
 | Couche | Rôle | Persistance |
 |---|---|---|
-| **Catalogue** | Cartographie des écrans SAP rencontrés | SQLite ou YAML |
+| **Catalogue** | Cartographie des écrans SAP rencontrés | YAML versionné |
 | **Pipeline** | Définition déclarative d'une automatisation | Fichier YAML versionnable |
 | **Moteur** | Exécute une pipeline contre une session SAP | — |
 | **Journal** | Trace d'exécution, reprise, métriques | JSONL append-only |
@@ -192,14 +192,14 @@ La pipeline **déclare** une intention ; le contrôleur **applique** les règles
 ## 6. Périmètre
 
 **V1**
-Catalogue (YAML versionné), primitive d'export via `SE16N`, pipelines YAML, moteur derrière une couture de driver unique, chaîne de pipelines bornée, gardes 1/2/3/5, journal + reprise, reporting terminal.
+Catalogue (YAML versionné), primitive d'export via `SE16N`, pipelines YAML, moteur derrière une couture de driver unique, chaîne de pipelines bornée, **les cinq gardes du §5**, journal + reprise, reporting terminal.
 
 **Première pipeline livrée : cas 1** (variantes d'affichage, BCP). Priorité imposée par la charge en cours.
 
 **Découpage obligatoire du cas 1.** Une seule transaction traitée de bout en bout — audit, remédiation, validation sur un site — avant d'en cartographier une deuxième. Les six transactions ne se cartographient pas en amont : ce serait cinq sixièmes du travail engagés avant la première preuve que le dispositif fonctionne.
 
 **V2**
-Harness de rejeu (§3.7), parseur de trace VBScript (supprime l'écriture manuelle de la première ébauche de pipeline), garde 4, historisation des durées.
+Harness de rejeu (§3.7), parseur de trace VBScript (supprime l'écriture manuelle de la première ébauche de pipeline), historisation des durées.
 
 **Packaging.** Le dépôt est modulaire, la livraison est un fichier unique exécutable (bundle). La contrainte d'autonomie au déploiement qui avait conduit EagleLoader à un fichier de 4500 lignes reste valable, mais elle se traite à la construction, pas dans l'organisation du code source.
 
@@ -221,7 +221,7 @@ Le cas 1 seul justifie l'investissement : le volume interdit le traitement manue
 
 **Actif produit par le cas 1.** Le traitement des six transactions cartographie au passage les écrans de sélection et de liste d'objets techniques. Ces écrans reviennent dans la plupart des automatisations futures : c'est la partie du catalogue à la plus longue durée de vie, et une raison supplémentaire de commencer par là.
 
-**Unité de travail à déterminer.** Six transactions × un site : s'agit-il de six pipelines indépendantes exécutées l'une après l'autre, ou d'un seul item composite par site ? La question n'est pas cosmétique. S'il existe une dépendance — une transaction dont la remédiation conditionne la suivante sur le même site — alors ce n'est pas du chaînage mais un item composite, avec une frontière transactionnelle et une reprise différentes (§3.3). S'il n'y a aucune dépendance, six exécutions lancées à la main suffisent et le chaînage reste en V2.
+**Unité de travail à déterminer.** Six transactions × un site : s'agit-il de six pipelines indépendantes exécutées l'une après l'autre, ou d'un seul item composite par site ? La question n'est pas cosmétique. S'il existe une dépendance — une transaction dont la remédiation conditionne la suivante sur le même site — alors ce n'est pas du chaînage mais un item composite, avec une frontière transactionnelle et une reprise différentes (§3.3). S'il n'y a aucune dépendance, ce sont six pipelines indépendantes que le moteur enchaîne — le chaînage est en V1 (décision n°6) et se réduit alors à un déclenchement successif, sans passage de données. La question de l'unité de travail reste entière : elle porte sur la frontière transactionnelle et la granularité de reprise, pas sur la disponibilité du chaînage.
 
 Le cas 2 a une remédiation simple à l'unité — le retrait de l'écrasement passe par `CL02` — mais le volume la rend impraticable à la main : trois cents caractéristiques fautives sont hors de portée d'un traitement manuel. Il relève donc pleinement du moteur itératif, avec regroupement préalable des constats par classe (§3.3, unité d'itération).
 
@@ -236,7 +236,14 @@ Le cas 3 ne produit pas de remédiation : FALCON automatise l'extraction, un pro
 | 1 | Format du catalogue | **YAML versionné** — diffable et relisible |
 | 2 | Socle EagleLoader | **Réutilisé**, sous contrôle strict de la doc de handoff existante |
 | 3 | Harness de test | **Rejeu du catalogue** (§3.7), pas un simulateur écrit à la main |
-| 4 | Canal d'export | **`SE16N`** |
+| 4 | Canal d'export | **`SE16N`** — disponibilité et autorisation confirmées sur les systèmes visés |
 | 5 | Déclencheur de la V1 | Cas 1 (BCP), priorité de la charge en cours. Le cas 2 reste un besoin récurrent, traité ensuite |
+| 6 | Chaînage de pipelines | **V1** — le chaînage n'est qu'un déclenchement successif de pipelines ; le périmètre fermé du §3.3 (aucun passage de données) le rend peu coûteux |
+| 7 | Garde 4, relecture après écriture | **V1** — implémentée dans la couture avec les quatre autres, plutôt que rétrofitée |
 
-**Reste ouvert :** périmètre exact du cas 1 — quelle transaction traitée en premier, et quelle est la norme client de référence pour les variantes (existe-t-elle sous forme exploitable, ou faut-il la reconstituer ?).
+**Reste ouvert :**
+
+- périmètre exact du cas 1 — quelle transaction traitée en premier, et quelle est la norme client de référence pour les variantes (existe-t-elle sous forme exploitable, ou faut-il la reconstituer ?) ;
+- unité de travail du cas 1 — six pipelines enchaînées ou un item composite par site (§7), question de frontière transactionnelle et non de chaînage ;
+- définition de « champ critique » pour la garde 4, maintenant qu'elle est en V1 : relecture de tout champ écrit par défaut, ou champs désignés étape par étape dans le YAML ;
+- convention de conservation des exports, que la comparaison au dernier export (§3.6) suppose sans la fixer.
