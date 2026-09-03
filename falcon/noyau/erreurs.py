@@ -41,6 +41,16 @@ class DelaiDepasse(ErreurCouture):
     """SAP n'a pas rendu la main dans le delai imparti."""
 
 
+class JournalCorrompu(Echec):
+    """Le journal ne peut pas etre relu de bout en bout.
+
+    Une derniere ligne tronquee est toleree : c'est une coupure pendant
+    l'ecriture, et l'evenement perdu est celui qu'on allait ecrire. Une ligne
+    tronquee AILLEURS est une corruption — le fichier ne dit plus ce qui a ete
+    fait, et rien ne doit etre repris dessus.
+    """
+
+
 # =====================================================================
 # Refus : deliberes, jamais rattrapes par un repli
 # =====================================================================
@@ -71,3 +81,12 @@ class FenetreImprevue(ArretBloquant):
 
 class PlafondAtteint(ArretBloquant):
     """Garde 5 : le rayon d'action de l'execution est epuise."""
+
+
+class RepriseIncoherente(ArretBloquant):
+    """La reprise porte sur un jeu ou une pipeline qui ont change.
+
+    C'est la garde d'identite appliquee a la reprise : reprendre sur un jeu
+    modifie, c'est avoir un modele du monde faux. Meme nature, donc meme
+    severite — on arrete.
+    """

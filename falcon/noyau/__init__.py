@@ -2,14 +2,17 @@
 
 from .erreurs import (
     ErreurFalcon, Echec, ErreurCouture, ObjetIntrouvable, SessionPerdue,
-    DelaiDepasse, Refus, RefusDryRun, ArretBloquant, EcartIdentite,
-    FenetreImprevue, PlafondAtteint,
+    DelaiDepasse, JournalCorrompu, Refus, RefusDryRun, ArretBloquant,
+    EcartIdentite, FenetreImprevue, PlafondAtteint, RepriseIncoherente,
 )
+from .horloge import Horloge, horloge_figee, maintenant
 from .types import Champ, Ecran, Fenetre, Identite, Statut, empreinte
 
 __all__ = [
     "ErreurFalcon", "Echec", "ErreurCouture", "ObjetIntrouvable",
-    "SessionPerdue", "DelaiDepasse", "Refus", "RefusDryRun", "ArretBloquant",
-    "EcartIdentite", "FenetreImprevue", "PlafondAtteint",
+    "SessionPerdue", "DelaiDepasse", "JournalCorrompu", "Refus",
+    "RefusDryRun", "ArretBloquant", "EcartIdentite", "FenetreImprevue",
+    "PlafondAtteint", "RepriseIncoherente",
     "Champ", "Ecran", "Fenetre", "Identite", "Statut", "empreinte",
+    "Horloge", "horloge_figee", "maintenant",
 ]
