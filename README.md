@@ -1,79 +1,65 @@
-# Phenix
+# FALCON
 
-Outillage de scripting SAP GUI : un **harness de test** qui rend détectables,
-hors SAP et en quelques secondes, les erreurs qui en production ne lèvent
-aucune exception.
+Framework d'automatisation SAP Front End (SAP GUI Scripting).
 
-Phenix reprend l'expérience du développement d'EagleLoader — une dizaine de
-simulateurs COM jetables, réécrits à chaque fois, chacun réencodant à la main
-les mécaniques pièges de SAP GUI. Ces mécaniques sont ici figées une bonne
-fois, dans le simulateur et dans la carte des contrôles.
+FALCON exécute des séquences d'actions dans SAP GUI à la place d'un
+utilisateur, de façon répétable et surveillée : corrections de masse que LSMW
+ne couvre pas, et extractions vers un format pivot exploitable par un
+programme tiers.
 
-## Le problème
+La forme canonique d'un travail FALCON est une **paire** :
 
-Les erreurs les plus graves du scripting SAP GUI sont **silencieuses**. Un
-bouton pressé sur le mauvais écran insère une opération. Un compteur mal lu
-arrête une boucle après le premier élément. Un contrôle mal identifié retourne
-`SAP.Toolbar.1` comme s'il s'agissait d'un texte métier. Le programme continue,
-produit un résultat plausible, et le défaut se découvre au contrôle qualité —
-ou jamais.
+```
+passe d'audit  →  fichier de constats (relisible, éditable)  →  passe de remédiation
+```
 
-Tester contre le vrai SAP est impraticable : c'est lent, ça nécessite un
-système, et ça écrit dans des données de production.
+L'humain valide le fichier intermédiaire avant toute écriture. C'est à la fois
+le contrat entre les deux passes, la trace d'audit, et la garde de sécurité la
+plus efficace du dispositif.
 
-## Démarrage
+## La référence
+
+**[SPEC_FALCON.md](SPEC_FALCON.md)** — spécification fonctionnelle complète :
+architecture en quatre couches, modèle de sécurité, périmètre V1/V2, cas
+d'usage et décisions arrêtées. C'est le document qui fait foi ; tout ce qui
+suit n'en est qu'un index.
+
+| Section | Sujet |
+|---|---|
+| §3.1 | catalogue d'écrans, et ses **variantes** — première cause d'échec d'un framework de ce type |
+| §3.3 | moteur : modes, chaîne de pipelines, unité d'itération = unité de sauvegarde SAP |
+| §3.4 | **couture de driver** — le seul module qui connaît SAP |
+| §3.5 | pipelines itératives vs volumiques : ne pas les confondre |
+| §3.7 | harness = rejeu du catalogue, magnétophone et non émulateur |
+| §5 | les cinq gardes, et la taxonomie d'erreurs qui se récolte |
+| §6 | périmètre V1 / V2 |
+
+## État
+
+Le dépôt contient aujourd'hui la spécification et l'archive du travail
+antérieur. Aucun code FALCON n'est écrit.
+
+Premier élément attendu en V1, et le plus contraignant dans l'ordre : la
+**couture de driver** (§3.4). La spec la qualifie d'irréversible — la
+rétrofiter sur du code déjà écrit coûte cher — et elle conditionne aussi bien
+les gardes du §5 que le harness du §3.7.
+
+## `historique/`
+
+Le socle EagleLoader et le harness artisanal développés avant cette spec.
+Conservés en l'état, sous le régime de la décision n°2 : **réutilisés sous
+contrôle strict**, jamais repris par défaut.
+
+| Contenu | Statut au regard de la spec |
+|---|---|
+| `historique/docs/TRAPS.md` | **vivant** — les douze pièges de terrain sont le matériau de départ de la taxonomie d'erreurs (§5.1), qui se récolte et ne se spécifie pas |
+| `historique/cartes/sap_map.yaml` | **référence** — relevé réel K75/210 ; parent du catalogue (§3.1), mais pas sa structure : le catalogue est clé par triplet + empreinte, et se remplit par dump, pas à la main |
+| `historique/sapharness/` | **remplacé** — la décision n°3 arrête un harness par rejeu du catalogue, pas un simulateur écrit à la main (§3.7) |
+| `historique/docs/GUIDE.md` | documentation de ce simulateur ; suit son sort |
+| `historique/docs/HARNESS.md` | le raisonnement qui a mené à la spec ; valeur historique |
+
+L'archive reste exécutable :
 
 ```bash
-python sapharness/sapmock.py          # auto-test du simulateur
-python -m unittest discover -s tests  # suite de non-régression
+python -m unittest discover -s historique/tests -t historique
 ```
-
-Seule dépendance externe : `PyYAML`, pour lire les cartes de contrôles.
-
-Pour écrire un scénario, lire [docs/GUIDE.md](docs/GUIDE.md) : référence
-complète du simulateur, catalogue d'invariants, et surtout la liste de ce que
-le simulateur **ne** modélise **pas**.
-
-## Organisation
-
-| Chemin | Contenu |
-|---|---|
-| `sapharness/sapmock.py` | simulateur SAP GUI : `Monde`, `Ecran`, `TableControl`, `Grille`, `Session`, `Journal` |
-| `sapharness/carte.py` | chargement des cartes de contrôles depuis YAML |
-| `sapharness/backends/` | canaux d'échange de texte (contrôle direct, fichier RTF, presse-papier) — à construire |
-| `cartes/sap_map.yaml` | identifiants réels relevés sur le système K75, mandant 210 |
-| `pipelines/` | enchaînements de bout en bout — à construire |
-| `programmes/` | points d'entrée exécutables — à construire |
-| `tests/` | non-régression du simulateur et de la carte |
-| `docs/GUIDE.md` | référence d'usage du simulateur — exemples exécutés par les tests |
-| `docs/HARNESS.md` | ce que fournit le harness, et ce qu'il reste à construire |
-| `docs/TRAPS.md` | les douze pièges du terrain : symptôme, cause, règle |
-
-## Deux principes structurants
-
-**Les identifiants sont des données.** `cartes/sap_map.yaml` est chargé, jamais
-codé en dur : les IDs changent avec le système, le mandant et la release. C'est
-ce qui rend le portage vers un autre mandant trivial.
-
-**Les assertions portent sur les gestes, pas sur le résultat.** Le `Journal`
-trace ce que le programme a réellement fait, et permet d'asserter des
-invariants :
-
-```python
-# btn[7] = "opération suivante" sur le détail, "Insérer" sur la synthèse
-journal.assert_jamais("wnd[0]/tbar[1]/btn[7]", hors_ecran="detail")
-
-# SAP enregistre la gamme entière : une sauvegarde par gamme, pas par texte
-journal.assert_au_plus("save", 1)
-
-# en dry-run, aucune écriture ne doit avoir lieu
-assert journal.compter("saisie") == 0
-```
-
-Ces trois assertions auraient détecté hors SAP trois défauts qui ont
-effectivement atteint la production.
-
-## Avant d'écrire du code SAP
-
-Lire `docs/TRAPS.md`. Chacun des pièges qui y figurent a coûté au moins un
-cycle complet de développement, et aucun ne produit d'erreur.
