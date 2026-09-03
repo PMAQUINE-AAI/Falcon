@@ -44,6 +44,28 @@ Premier élément attendu en V1, et le plus contraignant dans l'ordre : la
 rétrofiter sur du code déjà écrit coûte cher — et elle conditionne aussi bien
 les gardes du §5 que le harness du §3.7.
 
+## Développement
+
+État des lots et protocole de travail : [docs/BACKLOG_V1.md](docs/BACKLOG_V1.md).
+
+```bash
+python outils/verifier.py
+```
+
+Une seule dépendance d'exécution, `PyYAML`. Le reporting terminal est en
+stdlib : la livraison est un fichier unique, et chaque dépendance de plus est
+une pièce à embarquer.
+
+Deux règles d'architecture sont vérifiées mécaniquement par
+`tests/test_frontieres.py`, parce qu'une règle que rien ne vérifie tient
+jusqu'au premier import pressé :
+
+- un seul module de FALCON importe `win32com` — celui de la couture. Rien
+  d'autre ne connaît SAP (§3.4) ;
+- le moteur et les pipelines ne touchent jamais la couture nue : ils passent
+  par le contrôleur, qui porte les gardes. Une pipeline ne peut donc pas en
+  désactiver une (§5.2).
+
 ## `historique/`
 
 Le socle EagleLoader et le harness artisanal développés avant cette spec.

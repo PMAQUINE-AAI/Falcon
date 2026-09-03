@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falcon"
+version = "0.1.0"
+description = "Framework d'automatisation SAP Front End (SAP GUI Scripting)"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0"]
+
+# PyYAML est la seule dependance d'execution. Le reporting terminal est en
+# stdlib : la livraison est un fichier unique (SPEC_FALCON.md, §6), et chaque
+# dependance supplementaire est une piece a embarquer dans le bundle.
+
+[tool.setuptools]
+packages = ["falcon"]

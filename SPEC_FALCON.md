@@ -171,7 +171,7 @@ Un item en échec n'interrompt pas le lot par défaut : il est marqué dans le j
 
 ### 5.1 Taxonomie d'erreurs
 
-Les gardes détectent qu'quelque chose a mal tourné ; la taxonomie dit quoi en faire. Trois catégories seulement :
+Les gardes détectent que quelque chose a mal tourné ; la taxonomie dit quoi en faire. Trois catégories seulement :
 
 | Catégorie | Traitement |
 |---|---|
@@ -240,6 +240,7 @@ Le cas 3 ne produit pas de remédiation : FALCON automatise l'extraction, un pro
 | 5 | Déclencheur de la V1 | Cas 1 (BCP), priorité de la charge en cours. Le cas 2 reste un besoin récurrent, traité ensuite |
 | 6 | Chaînage de pipelines | **V1** — le chaînage n'est qu'un déclenchement successif de pipelines ; le périmètre fermé du §3.3 (aucun passage de données) le rend peu coûteux |
 | 7 | Garde 4, relecture après écriture | **V1** — implémentée dans la couture avec les quatre autres, plutôt que rétrofitée |
+| 8 | Parseur de trace VBScript | **V1** — avancé depuis la V2 : il alimente le brouillon de pipeline du §4.3, et ne dépend d'aucune autre brique |
 
 **Reste ouvert :**
 
