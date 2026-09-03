@@ -39,7 +39,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | # | État | Lot | Dépend de | Critère d'acceptation |
 |---|---|---|---|---|
 | 0 | `[x]` | Squelette : arborescence, `pyproject.toml`, tests de frontière, CI | — | la vérification est verte sur un dépôt neuf |
-| 1 | `[!]` | Modèles et interface de couture, erreurs typées (§3.4) | 0, **ratification de la couture** | aucun module hors du module de couture n'importe `win32com` |
+| 1 | `[x]` | Modèles et interface de couture, erreurs typées (§3.4) | 0 | surface épinglée à 15 méthodes ; une implémentation partielle ne s'instancie pas ; `Refus` n'hérite pas d'`Echec` |
 | 2 | `[ ]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | reprise après interruption simulée : aucun item retraité, aucun perdu ; un item interrompu **après** sauvegarde sort en `douteux`, jamais rejoué |
 | 3 | `[ ]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | un message non répertorié bloque et produit un dump ; aucun joker ni réglage permissif n'existe ; ambiguïté entre deux entrées détectée **au chargement** |
 | 4 | `[ ]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | chaque garde a un test qui échoue si on la retire ; une pipeline ne peut en désactiver aucune |
@@ -81,7 +81,10 @@ Reprises du §8 de la spec, avec le lot qu'elles concernent :
 Une revue indépendante de l'architecture a produit cinq corrections que
 j'intègre. Elles ne sont pas cosmétiques.
 
-**1. La couture du §3.4 est trop étroite pour le cas 1 lui-même.** Elle n'offre
+**1. La couture du §3.4 était trop étroite pour le cas 1 lui-même** — tranché,
+décision n°9, couture élargie.
+
+L'analyse d'origine : Elle n'offre
 ni `select`, ni accès ALV, ni accès table control. Or l'audit du cas 1 lit une
 grille ALV, et `TRAPS #9` impose de positionner explicitement trois cases à
 chaque appel de IA08. Les huit méthodes ne suffisent donc pas à exprimer la

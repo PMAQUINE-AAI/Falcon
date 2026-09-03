@@ -92,6 +92,16 @@ Tous les appels COM (`win32com`) vers SAP GUI sont confinés dans un module uniq
 | `press(id)` / `vkey(n)` | action |
 | `status()` | type, id et numéro du message de la barre de statut |
 | `windows()` | fenêtres ouvertes |
+| `select(id)` / `set_checked(id, bool)` | sélection, case à cocher |
+| `grid_*` | ALV : nombre de lignes, lecture par index **absolu**, colonnes |
+| `table_*` | table control : hauteur visible, défilement — index **visible** |
+
+Les huit premières ne suffisent pas au cas 1 lui-même : son audit lit une
+grille ALV, et le corollaire du §9 des pièges de terrain impose de positionner
+explicitement trois cases à chaque appel de IA08. Les deux familles de tableau
+portent des noms distincts parce que les confondre est un piège documenté :
+l'ALV s'indexe en absolu sans défilement, le table control en index visible
+avec défilement explicite.
 
 Trois bénéfices, dont un seul concerne les tests :
 
@@ -241,6 +251,7 @@ Le cas 3 ne produit pas de remédiation : FALCON automatise l'extraction, un pro
 | 6 | Chaînage de pipelines | **V1** — le chaînage n'est qu'un déclenchement successif de pipelines ; le périmètre fermé du §3.3 (aucun passage de données) le rend peu coûteux |
 | 7 | Garde 4, relecture après écriture | **V1** — implémentée dans la couture avec les quatre autres, plutôt que rétrofitée |
 | 8 | Parseur de trace VBScript | **V1** — avancé depuis la V2 : il alimente le brouillon de pipeline du §4.3, et ne dépend d'aucune autre brique |
+| 9 | Étendue de la couture | **Élargie** au-delà des huit méthodes du §3.4 : `select`, case à cocher, accès ALV et accès table control. La couture étant irréversible, l'étendre après coup coûterait la rétrofit que le §3.4 dit vouloir éviter — et, entretemps, quelqu'un contournerait en appelant COM ailleurs |
 
 **Reste ouvert :**
 
