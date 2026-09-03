@@ -81,6 +81,40 @@ Ce mode reste l'exception. Enchaîner plusieurs lots à l'aveugle en comptant
 sur la CI pour rattraper reviendrait à déplacer la boucle de vérification hors
 de portée, ce qui est précisément ce que ce projet cherche à éviter.
 
+## Ce que la revue adversariale a corrigé
+
+Une revue indépendante des lots 2 à 5 a trouvé huit défauts réels, tous de la
+classe qui compte ici : **aucun ne lève d'exception**. J'ai reproduit chacun
+avant de corriger, et chaque correction porte son test de non-régression.
+
+| # | Défaut | Conséquence en production |
+|---|---|---|
+| C1 | une sauvegarde réussie suivie d'une garde qui lève ne laissait aucune trace | item classé `en_cours`, donc rejoué : **double écriture** |
+| C2 | `Etape.item_id` facultatif — une sauvegarde sans lui n'était comptée pour personne | idem, et l'oubli d'un champ optionnel suffisait |
+| C3 | le compte de sauvegardes n'accompagnait pas le fichier de KO | l'humain relançait un item ayant déjà écrit, sans le savoir |
+| E1 | une relecture divergente ne faisait **rien** empêcher | on sauvegardait un écran dont le champ critique n'avait pas pris |
+| E2 | tout préfixe passait pour une « normalisation » | écrire `1000` et relire `1` était accepté : valeur fausse écrite en silence |
+| E4a | deux contextes simultanément vrais n'étaient pas détectés | l'ordre du fichier YAML décidait de la politique appliquée |
+| E4b | une surcouche projet pouvait assouplir le registre commun | `session_perdue` rendue bénigne par un fichier, sans motif ni trace |
+| M5 | les tests de frontière ignoraient les imports relatifs | `from ..couture.sapgui import …` passait toutes les frontières |
+| M6 | colonne dupliquée, ligne trop longue ou trop courte, clé JSONL absente | données corrompues ou perdues à la réinjection, sans erreur |
+
+Trois corrections ont demandé un niveau de plus dans le modèle :
+
+**`ItemAbandonne`**, un `Refus` distinct d'`ArretBloquant`. Il manquait le
+moyen d'exprimer « cet item est perdu, le lot continue » — qui est pourtant la
+définition même de `connue_fautive`. Sans lui, chaque appelant aurait dû se
+souvenir d'inspecter les constats après chaque appel : le « recopié puis
+oublié » que la couture existe pour supprimer.
+
+**Les modes de comparaison** passent de `exact`/`tronque_casse` à
+`exact`/`casse`/`prefixe`. Le défaut n'accepte plus que la casse et les
+espaces ; la troncature doit être déclarée étape par étape. La charge de la
+preuve revient à qui sait, pas au défaut.
+
+**L'annonce avant l'acte.** Une sauvegarde est journalisée *avant* d'être
+tentée. C'est la seule chose qui survive à une garde qui lève au milieu.
+
 ## Questions ouvertes qui toucheront un lot
 
 Reprises du §8 de la spec, avec le lot qu'elles concernent :

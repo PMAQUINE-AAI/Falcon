@@ -30,8 +30,14 @@ COLONNES_DIAGNOSTIC = (
     f"{PREFIXE_DIAGNOSTIC}categorie",
     f"{PREFIXE_DIAGNOSTIC}entree",
     f"{PREFIXE_DIAGNOSTIC}message",
+    f"{PREFIXE_DIAGNOSTIC}sauvegardes",
     f"{PREFIXE_DIAGNOSTIC}item_id",
 )
+
+#: `falcon_sauvegardes` porte le nombre de sauvegardes deja passees pour cet
+#: item. Sans lui, l'humain qui relance un fichier de KO n'a aucun moyen de
+#: savoir que l'item a DEJA ecrit dans SAP — et le relancer ecrit deux fois.
+#: C'est le pendant, cote fichier, de l'etat « douteux » cote journal.
 
 
 def ecrire_items(chemin: str | Path,
@@ -67,8 +73,12 @@ def ecrire_items(chemin: str | Path,
         colonnes = colonnes + COLONNES_DIAGNOSTIC
 
     if dialecte.format == "jsonl":
+        # Une clef absente le reste : pour une injection SAP, « ne touche pas
+        # a ce champ » et « vide ce champ » ne sont pas la meme instruction, et
+        # combler les trous par une chaine vide transforme la premiere en la
+        # seconde.
         texte = "".join(
-            json.dumps({c: ligne.get(c, "") for c in colonnes},
+            json.dumps({c: ligne[c] for c in colonnes if c in ligne},
                        ensure_ascii=False) + dialecte.fin_de_ligne
             for ligne in lignes)
     else:

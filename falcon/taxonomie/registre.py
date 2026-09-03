@@ -112,8 +112,13 @@ class Entree:
 
     @property
     def specificite(self) -> int:
-        """Une entree contextuelle bat une entree globale."""
-        return 1 if self.contexte else 0
+        """Plus une entree porte de contexte, plus elle est specifique.
+
+        Compter les clefs et non leur simple presence : deux entrees
+        contextuelles de finesse differente doivent se departager, sinon
+        l'ordre du fichier decide.
+        """
+        return len(self.contexte)
 
 
 @dataclass(frozen=True)
@@ -180,6 +185,60 @@ def _apparie(entree: Entree, signature: Signature) -> bool:
     return attendus.get("exception", "") == signature.exception
 
 
+def _contextes_departageables(gauche: Entree, droite: Entree) -> bool:
+    """Deux entrees contextuelles peuvent-elles etre departagees sans arbitraire ?
+
+    Oui dans deux cas seulement : soit leurs contextes se contredisent — ils
+    ne peuvent alors jamais etre vrais ensemble — soit l'un contient l'autre,
+    et la specificite tranche.
+
+    Le cas dangereux est celui de deux contextes qui ne se contredisent pas et
+    dont aucun ne contient l'autre : `{transaction: IA08}` et
+    `{dynpro: "1000"}` sont tous deux vrais sur l'ecran de selection de IA08,
+    et c'est alors l'ordre des entrees dans le fichier qui decide de la
+    politique appliquee. Intervertir deux blocs de YAML changerait le
+    comportement, sans erreur — exactement ce que la verification au
+    chargement existe pour empecher.
+    """
+    cg, cd = gauche.contexte, droite.contexte
+    communes = set(cg) & set(cd)
+    if any(cg[cle] != cd[cle] for cle in communes):
+        return True                       # incompatibles : jamais vrais ensemble
+
+    # Contextes identiques : la specificite est egale, donc c'est l'ordre du
+    # fichier qui trancherait. Ce n'est pas un departage.
+    return set(cg) != set(cd) and (set(cg) <= set(cd) or set(cd) <= set(cg))
+
+
+def _memes_criteres(gauche: Entree, droite: Entree) -> bool:
+    """Les deux entrees visent-elles le meme signal, contexte mis a part ?"""
+    if gauche.canal != droite.canal:
+        return False
+    g, d = gauche.correspondance, droite.correspondance
+    if gauche.canal == "statut":
+        return (g.get("id") == d.get("id")
+                and meme_numero(str(g.get("numero", "")), str(d.get("numero", "")))
+                and (not _types_declares(gauche) or not _types_declares(droite)
+                     or bool(_types_declares(gauche) & _types_declares(droite))))
+    if gauche.canal == "garde":
+        return all(g.get(cle) == d.get(cle)
+                   for cle in ("garde", "attendu", "observe"))
+    return g.get("exception") == d.get("exception")
+
+
+def _contextes_compatibles(gauche: Entree, droite: Entree) -> bool:
+    """Les deux contextes peuvent-ils etre vrais en meme temps ?"""
+    cg, cd = gauche.contexte, droite.contexte
+    return all(cg[cle] == cd[cle] for cle in set(cg) & set(cd))
+
+
+def _plus_permissive(posterieure: Politique, anterieure: Politique) -> bool:
+    """La seconde politique laisse-t-elle passer ce que la premiere arretait ?"""
+    return ((posterieure.poursuivre and not anterieure.poursuivre)
+            or (anterieure.arreter_chaine and not posterieure.arreter_chaine)
+            or (anterieure.item == "ko" and posterieure.item != "ko"))
+
+
 def _peuvent_se_confondre(gauche: Entree, droite: Entree) -> bool:
     """Deux entrees peuvent-elles apparier une meme signature ?
 
@@ -187,7 +246,9 @@ def _peuvent_se_confondre(gauche: Entree, droite: Entree) -> bool:
     decouverte en pleine execution obligerait a choisir au hasard entre deux
     politiques — ou pire, a en appliquer une silencieusement.
     """
-    if gauche.canal != droite.canal or gauche.contexte != droite.contexte:
+    if gauche.canal != droite.canal:
+        return False
+    if _contextes_departageables(gauche, droite):
         return False
 
     g, d = gauche.correspondance, droite.correspondance
@@ -236,7 +297,9 @@ class Registre:
         sources = chemins or (CHEMIN_REGISTRE_DEFAUT,)
         entrees: list[Entree] = []
         for chemin in sources:
-            entrees.extend(_lire_fichier(Path(chemin)))
+            nouvelles = _lire_fichier(Path(chemin))
+            _verifier_absence_d_assouplissement(entrees, nouvelles, Path(chemin))
+            entrees.extend(nouvelles)
         return cls(entrees)
 
     def _verifier_absence_d_ambiguite(self) -> None:
@@ -267,6 +330,37 @@ class Registre:
         return Verdict(categorie=retenue.categorie,
                        politique=retenue.politique,
                        entree=retenue.nom)
+
+
+def _verifier_absence_d_assouplissement(anterieures: Sequence[Entree],
+                                        nouvelles: Sequence[Entree],
+                                        chemin: Path) -> None:
+    """Une surcouche ajoute ; elle n'assouplit pas.
+
+    Sans cette verification, la promesse de `charger` etait fausse : il
+    suffisait a un fichier de projet d'ajouter une entree PLUS SPECIFIQUE et
+    plus permissive pour desactiver une entree commune. Une entree
+    `{exception: SessionPerdue, contexte: {transaction: IA08}}` en
+    `connue_benigne` rendait `session_perdue` non bloquante sur IA08 — sans
+    une ligne de code, sans motif, sans trace dans le rapport.
+
+    C'etait le contournement le plus praticable du dispositif : la separation
+    pipeline / controleur interdit a une pipeline de desactiver une garde,
+    mais rien n'interdisait a un YAML de neutraliser la politique qui la rend
+    bloquante.
+    """
+    for nouvelle in nouvelles:
+        for anterieure in anterieures:
+            if not _memes_criteres(anterieure, nouvelle):
+                continue
+            if not _contextes_compatibles(anterieure, nouvelle):
+                continue
+            if _plus_permissive(nouvelle.politique, anterieure.politique):
+                raise RegistreInvalide(
+                    f"{chemin} : {nouvelle.nom!r} assouplit {anterieure.nom!r}. "
+                    f"Une surcouche ajoute des entrees, elle n'en affaiblit "
+                    f"aucune — sinon la politique la plus stricte se contourne "
+                    f"par un fichier de configuration")
 
 
 # =====================================================================

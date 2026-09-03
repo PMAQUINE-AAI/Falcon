@@ -162,6 +162,96 @@ class TestChargementStrict(unittest.TestCase):
                 """)
         self.assertIn("meme signature", str(capture.exception))
 
+    def test_deux_contextes_simultanement_vrais_sont_ambigus(self):
+        """Constat de revue : `{transaction: IA08}` et `{dynpro: "1000"}` sont
+        tous deux vrais sur l'ecran de selection de IA08. Aucun ne contient
+        l'autre, donc l'ordre du fichier decidait de la politique — et
+        intervertir deux blocs de YAML changeait le comportement, sans erreur."""
+        with self.assertRaises(RegistreInvalide):
+            self._charger("""
+                version: 1
+                entrees:
+                  - nom: benigne_sur_ia08
+                    categorie: connue_benigne
+                    canal: statut
+                    correspondance:
+                      id: CP
+                      numero: "045"
+                      contexte: {transaction: IA08}
+                    politique: {poursuivre: true}
+                    origine: falcon_observe
+                    justification: une raison
+                  - nom: fautive_sur_dynpro_1000
+                    categorie: connue_fautive
+                    canal: statut
+                    correspondance:
+                      id: CP
+                      numero: "045"
+                      contexte: {dynpro: "1000"}
+                    politique: {poursuivre: true, item: ko}
+                    origine: falcon_observe
+                    justification: une autre raison
+                """)
+
+    def test_contextes_qui_se_contredisent_acceptes(self):
+        """Ils ne peuvent jamais etre vrais ensemble : rien a departager."""
+        registre = self._charger("""
+            version: 1
+            entrees:
+              - nom: sur_ia08
+                categorie: connue_benigne
+                canal: statut
+                correspondance:
+                  id: CP
+                  numero: "045"
+                  contexte: {transaction: IA08}
+                politique: {poursuivre: true}
+                origine: falcon_observe
+                justification: une raison
+              - nom: sur_cl02
+                categorie: connue_fautive
+                canal: statut
+                correspondance:
+                  id: CP
+                  numero: "045"
+                  contexte: {transaction: CL02}
+                politique: {poursuivre: true, item: ko}
+                origine: falcon_observe
+                justification: une autre raison
+            """)
+        self.assertEqual(len(registre), 2)
+
+    def test_une_surcouche_ne_peut_pas_assouplir_le_registre_commun(self):
+        """Constat de revue : ajouter un contexte suffisait a rendre
+        `session_perdue` non bloquante — sans code, sans motif, sans trace.
+        C'etait la porte la plus praticable du dispositif."""
+        commun = _ecrire(self.racine, """
+            version: 1
+            entrees:
+              - nom: session_perdue
+                categorie: connue_fautive
+                canal: com
+                correspondance: {exception: SessionPerdue}
+                politique: {poursuivre: false, item: ko, arreter_chaine: true}
+                origine: eagleloader
+                justification: la session ne repond plus
+            """, "commun.yaml")
+        projet = _ecrire(self.racine, """
+            version: 1
+            entrees:
+              - nom: assouplissement
+                categorie: connue_benigne
+                canal: com
+                correspondance:
+                  exception: SessionPerdue
+                  contexte: {transaction: IA08}
+                politique: {poursuivre: true}
+                origine: conjecture
+                justification: on a decide que ce cas passe
+            """, "projet.yaml")
+        with self.assertRaises(RegistreInvalide):
+            Registre.charger(commun, projet)
+
     def test_meme_message_types_disjoints_accepte(self):
         """Le meme message peut etre benin en S et fautif en E."""
         registre = self._charger("""

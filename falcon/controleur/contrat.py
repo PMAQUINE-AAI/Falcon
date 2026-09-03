@@ -28,7 +28,17 @@ DEROGEABLES = frozenset({"statut", "fenetre", "relecture"})
 #: betise, il empeche d'ecrire « ok » et de passer a autre chose.
 MOTIF_MINIMAL = 30
 
-COMPARAISONS = frozenset({"exact", "tronque_casse"})
+#: Comment comparer ce qu'on a ecrit a ce qu'on relit.
+#:
+#: `casse` est le defaut et n'accepte QUE les differences de casse et
+#: d'espaces. Une troncature n'y passe pas : accepter n'importe quel prefixe
+#: revenait a valider « 1 » comme normalisation de « 1000 », c'est-a-dire a
+#: laisser ecrire une valeur fausse en production sans un mot.
+#:
+#: `prefixe` accepte la troncature, pour les champs dont on SAIT qu'ils sont
+#: plus courts que la valeur ecrite. Il se declare etape par etape : la charge
+#: de la preuve revient a qui sait, pas au defaut.
+COMPARAISONS = frozenset({"exact", "casse", "prefixe"})
 
 
 class DerogationRefusee(Exception):
@@ -73,7 +83,7 @@ class Contrat:
     ecran_attendu: tuple[str, str, str] | None = None    # transaction, programme, dynpro
     fenetres_attendues: tuple[str, ...] = ("wnd[0]",)
     relire: bool = True                    # garde 4, active par defaut
-    comparaison: str = "tronque_casse"
+    comparaison: str = "casse"
     statut_attendu: str | None = None      # « S » si l'etape DOIT produire un message
     sauvegarde: bool = False
     derogations: tuple[Derogation, ...] = field(default_factory=tuple)

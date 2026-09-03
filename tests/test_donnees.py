@@ -80,6 +80,38 @@ class TestLecture(unittest.TestCase):
         self.assertEqual(dialecte.colonnes, ("site", "variante"))
         self.assertEqual(len(lignes), 2)
 
+    def test_colonne_dupliquee_refusee(self):
+        """Constat de revue : DictReader garde la DERNIERE valeur, donc la
+        premiere colonne homonyme etait perdue et remplacee par la seconde —
+        dans les deux positions au reexport. Sur un export SE16N avec deux
+        colonnes de meme nom, c'est une reinjection de valeurs fausses."""
+        chemin = self._poser("j.csv", b"site,site,variante\nFR12,FR13,BCP\n")
+        with self.assertRaises(JeuInvalide) as capture:
+            lire(chemin)
+        self.assertIn("double", str(capture.exception))
+
+    def test_ligne_plus_longue_que_l_entete_refusee(self):
+        """Le surplus etait jete sans erreur : perte pure."""
+        chemin = self._poser("j.csv", b"a,b\n1,2,3\n")
+        with self.assertRaises(JeuInvalide):
+            lire(chemin)
+
+    def test_ligne_plus_courte_que_l_entete_refusee(self):
+        chemin = self._poser("j.csv", b"a,b,c\n1,2\n")
+        with self.assertRaises(JeuInvalide):
+            lire(chemin)
+
+    def test_colonne_sans_nom_refusee(self):
+        chemin = self._poser("j.csv", b"a,,c\n1,2,3\n")
+        with self.assertRaises(JeuInvalide):
+            lire(chemin)
+
+    def test_octet_indefini_en_cp1252_ne_fait_pas_echouer_la_lecture(self):
+        """0x81 n'est pas defini en cp1252 : le repli final est latin-1."""
+        lignes, dialecte = lire(self._poser("j.csv", b"site\n\x81\n"))
+        self.assertEqual(dialecte.encodage, "latin-1")
+        self.assertEqual(len(lignes), 1)
+
     def test_jeu_absent(self):
         with self.assertRaises(JeuInvalide):
             lire(self.racine / "nexiste_pas.csv")
@@ -189,6 +221,22 @@ class TestAllerRetourKO(unittest.TestCase):
             b'{"site":"FR12"}\n{"site":"FR13"}\n', "j.jsonl", ["site"])
         relus, _ = lire_items(ko, ["site"])
         self.assertEqual([i.brut for i in relus], [i.brut for i in items])
+
+    def test_une_clef_absente_en_jsonl_le_reste(self):
+        """Constat de revue : combler les trous par une chaine vide
+        transformait « ne touche pas a ce champ » en « vide ce champ ». Pour
+        une injection SAP, ce ne sont pas les memes instructions."""
+        _, ko, _, _ = self._cycle(
+            b'{"site":"FR12","variante":"B"}\n{"site":"FR13"}\n',
+            "j.jsonl", ["site"])
+        secondes = [ligne for ligne in ko.read_text(encoding="utf-8").splitlines()
+                    if "FR13" in ligne]
+        self.assertNotIn("variante", secondes[0])
+
+    def test_le_compte_de_sauvegardes_accompagne_le_ko(self):
+        """Constat de revue : l'humain qui relance un fichier de KO n'avait
+        aucun moyen de savoir que l'item avait DEJA ecrit dans SAP."""
+        self.assertIn("falcon_sauvegardes", COLONNES_DIAGNOSTIC)
 
     def test_l_empreinte_du_jeu_change_avec_le_contenu(self):
         """Base de la garde de reprise."""

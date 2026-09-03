@@ -62,6 +62,24 @@ def _lignes_sous_type_checking(arbre: ast.Module) -> set[int]:
     return lignes
 
 
+def _absolu(chemin: Path, noeud: ast.ImportFrom) -> str:
+    """Resout un import relatif en nom de module absolu.
+
+    Sans cette resolution, `from ..couture.sapgui import SapGui` passerait
+    toutes les frontieres sans un bruit — et c'est la forme la plus naturelle
+    a l'interieur d'un paquet. Une regle d'architecture aveugle a la moitie
+    des imports ne vaut rien.
+    """
+    if noeud.level == 0:
+        return noeud.module or ""
+
+    paquet = list(chemin.relative_to(RACINE).parts[:-1])
+    remonte = noeud.level - 1
+    if remonte:
+        paquet = paquet[:-remonte] if remonte <= len(paquet) else []
+    return ".".join([*paquet, noeud.module] if noeud.module else paquet)
+
+
 def imports(chemin: Path) -> list[tuple[str, int, bool]]:
     """(module importe, ligne, sous TYPE_CHECKING) pour chaque import."""
     arbre = ast.parse(chemin.read_text(encoding="utf-8"), str(chemin))
@@ -71,8 +89,10 @@ def imports(chemin: Path) -> list[tuple[str, int, bool]]:
         if isinstance(noeud, ast.Import):
             for alias in noeud.names:
                 trouves.append((alias.name, noeud.lineno, noeud.lineno in differes))
-        elif isinstance(noeud, ast.ImportFrom) and noeud.module and noeud.level == 0:
-            trouves.append((noeud.module, noeud.lineno, noeud.lineno in differes))
+        elif isinstance(noeud, ast.ImportFrom):
+            nom = _absolu(chemin, noeud)
+            if nom:
+                trouves.append((nom, noeud.lineno, noeud.lineno in differes))
     return trouves
 
 

@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterator
 from falcon.couture import Driver
 from falcon.noyau import (
     Ecran, EcartIdentite, Fenetre, FenetreImprevue, Identite, IncidentBloquant,
-    PlafondAtteint, RefusDryRun, Statut,
+    ItemAbandonne, PlafondAtteint, RefusDryRun, Statut,
 )
 from falcon.taxonomie import Registre, Signature, Verdict
 
@@ -204,8 +204,8 @@ class DriverGarde(Driver):
                   "comparaison": self._contrat.comparaison,
                   "etape": self._contrat.nom}
 
-        if verdict == "normalise":
-            self._noter(Constat(garde="relecture", verdict="normalise",
+        if verdict in {"normalise", "tronque"}:
+            self._noter(Constat(garde="relecture", verdict=verdict,
                                 detail=detail))
             return
 
@@ -241,20 +241,39 @@ class DriverGarde(Driver):
         self._noter(Constat(garde=garde, verdict="violation", detail=detail,
                             taxonomie=verdict))
 
+        origine = f"etape {self._contrat.nom!r} : {verdict.categorie} " \
+                  f"({verdict.entree or 'non repertorie'}) — {detail}"
+
         if verdict.bloquant:
-            raise IncidentBloquant(
-                f"etape {self._contrat.nom!r} : incident "
-                f"{verdict.categorie} ({verdict.entree or 'non repertorie'}) — "
-                f"{detail}")
+            raise IncidentBloquant(origine)
+
+        if verdict.politique.item == "ko":
+            # « Connue fautive » : l'item est perdu, le lot continue. Sans
+            # cette levee, l'appel rendrait la main normalement et l'etape
+            # suivante — typiquement la sauvegarde — s'executerait sur un
+            # ecran dont on vient justement de constater qu'il est faux.
+            raise ItemAbandonne(origine)
 
     # -- sauvegarde et dry-run ----------------------------------------------
 
     def _avant_sauvegarde(self, geste: str) -> None:
+        """Verifie le rayon d'action, puis ANNONCE la sauvegarde a venir.
+
+        L'annonce precede l'acte, et c'est le point important. Si une garde
+        levait apres coup — une modale imprevue, un message d'erreur —
+        l'ecriture SAP aurait deja eu lieu et rien n'en garderait la trace :
+        le repli du journal classerait l'item `en_cours`, la reprise le
+        rejouerait, et SAP ecrirait deux fois. Journaliser l'intention est la
+        seule chose qui survive a une garde qui leve au milieu.
+        """
         if self._mode == "dry-run":
             raise RefusDryRun(
                 f"{geste} declencherait une sauvegarde, refuse en dry-run")
         self._garde_rayon()
         self._sauvegardes += 1
+        self._noter(Constat(garde="rayon", verdict="sauvegarde_imminente",
+                            detail={"geste": geste, "etape": self._contrat.nom,
+                                    "rang": self._sauvegardes}))
 
     def _est_sauvegarde(self, geste: str, cible: str = "", n: int = 0) -> bool:
         if self._contrat.sauvegarde:
@@ -349,11 +368,17 @@ class DriverGarde(Driver):
 
 
 def _comparer(ecrit: str, lu: str, mode: str) -> str:
-    """« conforme » | « normalise » | « divergent ».
+    """« conforme » | « normalise » | « tronque » | « divergent ».
 
-    `normalise` couvre ce que SAP fait legitimement subir a une saisie :
-    troncature a la longueur du champ, passage en majuscules. C'est trace,
-    donc auditable — pas silencieusement accepte.
+    `normalise` ne couvre que la casse et les espaces — ce que SAP fait subir
+    a toute saisie, sans perte d'information.
+
+    `tronque` couvre la perte de fin, et n'est accepte que sous le mode
+    `prefixe`, declare etape par etape. La version precedente acceptait
+    n'importe quel prefixe sous le nom de « normalisation » : ecrire « 1000 »
+    et relire « 1 » passait pour une troncature legitime. Sur une quantite, un
+    poste ou un numero de gamme, c'est une valeur fausse ecrite en production
+    sans un mot — exactement le genre de defaut que ce projet traque.
     """
     if ecrit == lu:
         return "conforme"
@@ -361,6 +386,9 @@ def _comparer(ecrit: str, lu: str, mode: str) -> str:
         return "divergent"
 
     attendu, obtenu = ecrit.strip(), lu.strip()
-    if obtenu and attendu.upper().startswith(obtenu.upper()):
+    if attendu.upper() == obtenu.upper():
         return "normalise"
+
+    if mode == "prefixe" and obtenu and attendu.upper().startswith(obtenu.upper()):
+        return "tronque"
     return "divergent"

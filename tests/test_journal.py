@@ -180,6 +180,26 @@ class TestRepli(unittest.TestCase):
         self.assertEqual(connus["a1"].etat, DOUTEUX)
         self.assertEqual(connus["a1"].sauvegardes, 1)
 
+    def test_une_sauvegarde_sans_item_id_est_rattachee_a_l_item_ouvert(self):
+        """Constat de revue : `Etape.item_id` est facultatif, et son oubli
+        faisait basculer l'item de « jamais rejoue » a « rejoue » — donc vers
+        une double ecriture. Le defaut du schema penchait du mauvais cote."""
+        connus = etats([
+            ItemDebut(run_id=RUN, item_id="a1"),
+            Etape(run_id=RUN, etape="valider", sauvegarde=True),   # sans item_id
+        ])
+        self.assertEqual(connus["a1"].etat, DOUTEUX)
+
+    def test_une_sauvegarde_hors_de_tout_item_n_est_rattachee_a_rien(self):
+        """Une pipeline volumique n'a pas d'items : rien a rattacher."""
+        connus = etats([
+            ItemDebut(run_id=RUN, item_id="a1"),
+            ItemFin(run_id=RUN, item_id="a1", etat=OK),
+            Etape(run_id=RUN, etape="exporter", sauvegarde=True),
+        ])
+        self.assertEqual(connus["a1"].etat, OK)
+        self.assertEqual(connus["a1"].sauvegardes, 0)
+
     def test_sauvegarde_puis_fin_normale_reste_ok(self):
         """Le doute ne porte que sur l'interruption, pas sur la sauvegarde."""
         connus = etats([

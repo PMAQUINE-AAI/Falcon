@@ -70,18 +70,27 @@ def etats(enregistrements: Iterable[Enregistrement]) -> dict[str, EtatItem]:
     ouverts: set[str] = set()
     sauvegardes: dict[str, int] = {}
     fins: dict[str, str] = {}
+    courant: str | None = None
 
     for enregistrement in enregistrements:
         if isinstance(enregistrement, ItemDebut):
             ouverts.add(enregistrement.item_id)
             sauvegardes.setdefault(enregistrement.item_id, 0)
             fins.pop(enregistrement.item_id, None)      # nouvelle tentative
+            courant = enregistrement.item_id
         elif isinstance(enregistrement, Etape) and enregistrement.sauvegarde:
-            if enregistrement.item_id is not None:
-                sauvegardes[enregistrement.item_id] = (
-                    sauvegardes.get(enregistrement.item_id, 0) + 1)
+            # `Etape.item_id` est facultatif — une pipeline volumique n'a pas
+            # d'items du tout. Mais entre un ItemDebut et son ItemFin, une
+            # sauvegarde appartient forcement a l'item ouvert : la rattacher
+            # est le seul moyen d'eviter qu'un oubli de `item_id` fasse
+            # basculer l'item de « jamais rejoue » a « rejoue ».
+            porteur = enregistrement.item_id or courant
+            if porteur is not None:
+                sauvegardes[porteur] = sauvegardes.get(porteur, 0) + 1
         elif isinstance(enregistrement, ItemFin):
             fins[enregistrement.item_id] = enregistrement.etat
+            if courant == enregistrement.item_id:
+                courant = None
 
     resultat: dict[str, EtatItem] = {}
     for item_id in ouverts | set(fins):

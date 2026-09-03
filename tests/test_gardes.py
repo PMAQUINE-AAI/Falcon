@@ -21,7 +21,7 @@ from falcon.couture import Driver
 from falcon.couture.double import DriverScripte
 from falcon.noyau import (
     EcartIdentite, Fenetre, FenetreImprevue, Identite, IncidentBloquant,
-    PlafondAtteint, RefusDryRun, Statut,
+    ItemAbandonne, PlafondAtteint, RefusDryRun, Statut,
 )
 from falcon.taxonomie import Registre
 
@@ -102,7 +102,9 @@ class TestGarde2Statut(unittest.TestCase):
         garde = _garde(brut)
         contrat = Contrat(ecran_attendu=IA08.triplet, statut_attendu="S")
         with garde.sous_contrat(contrat):
-            garde.press("executer")          # entree connue : poursuit
+            # « connue fautive » : l'item est perdu, le lot continue.
+            with self.assertRaises(ItemAbandonne):
+                garde.press("executer")
         constat = garde.constats[0]
         self.assertEqual(constat.garde, "statut")
         self.assertEqual(constat.taxonomie.entree,
@@ -154,7 +156,8 @@ class TestGarde4Relecture(unittest.TestCase):
         brut.a_l_ecriture = lambda id, valeur: ""      # SAP refuse la saisie
         garde = _garde(brut)
         with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
-            garde.write("champ", "FR12")               # entree connue : poursuit
+            with self.assertRaises(ItemAbandonne):
+                garde.write("champ", "FR12")
         constat = garde.constats[0]
         self.assertEqual(constat.garde, "relecture")
         self.assertEqual(constat.taxonomie.entree, "relecture_divergente")
@@ -167,25 +170,45 @@ class TestGarde4Relecture(unittest.TestCase):
             garde.write("champ", "FR12")
         self.assertEqual(garde.constats, [])
 
-    def test_la_troncature_de_sap_est_toleree_mais_tracee(self):
-        """Une comparaison stricte rendrait la garde insupportable et
-        quelqu'un la desactiverait ; une comparaison laxiste et muette
-        laisserait passer une vraie divergence."""
+    def test_la_casse_et_les_espaces_sont_normalises(self):
+        """Ce que SAP fait subir a toute saisie, sans perte d'information."""
+        brut = DriverScripte(identite=IA08)
+        brut.a_l_ecriture = lambda id, valeur: f"  {valeur.upper()} "
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            garde.write("champ", "fr12")
+        self.assertEqual(garde.constats[0].verdict, "normalise")
+
+    def test_la_troncature_est_refusee_par_defaut(self):
+        """Constat de revue : accepter n'importe quel prefixe validait « 1 »
+        comme normalisation de « 1000 » — une valeur fausse ecrite en
+        production sans un mot."""
+        brut = DriverScripte(identite=IA08)
+        brut.a_l_ecriture = lambda id, valeur: valeur[:1]
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            with self.assertRaises(ItemAbandonne):
+                garde.write("quantite", "1000")
+        self.assertEqual(garde.constats[0].verdict, "violation")
+
+    def test_la_troncature_n_est_acceptee_que_si_l_etape_la_declare(self):
+        """La charge de la preuve revient a qui sait, pas au defaut."""
         brut = DriverScripte(identite=IA08)
         brut.a_l_ecriture = lambda id, valeur: valeur[:4].upper()
         garde = _garde(brut)
-        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+        contrat = Contrat(ecran_attendu=IA08.triplet, comparaison="prefixe")
+        with garde.sous_contrat(contrat):
             garde.write("champ", "fr1234567")
-        self.assertEqual(garde.constats[0].verdict, "normalise")
+        self.assertEqual(garde.constats[0].verdict, "tronque")
 
-    def test_la_comparaison_exacte_refuse_la_troncature(self):
+    def test_la_comparaison_exacte_refuse_toute_transformation(self):
         brut = DriverScripte(identite=IA08)
-        brut.a_l_ecriture = lambda id, valeur: valeur[:4].upper()
+        brut.a_l_ecriture = lambda id, valeur: valeur.upper()
         garde = _garde(brut)
         contrat = Contrat(ecran_attendu=IA08.triplet, comparaison="exact")
         with garde.sous_contrat(contrat):
-            garde.write("champ", "fr1234567")
-        self.assertEqual(garde.constats[0].verdict, "violation")
+            with self.assertRaises(ItemAbandonne):
+                garde.write("champ", "fr12")
 
     def test_la_relecture_est_active_par_defaut(self):
         """Le defaut penche du cote sur : l'oubli doit couter, pas passer."""
@@ -256,6 +279,42 @@ class TestDryRun(unittest.TestCase):
         garde = _garde(brut, mode="dry-run")
         with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
             self.assertEqual(garde.read("champ"), "x")
+
+
+class TestSauvegardeAnnonceeAvantLActe(unittest.TestCase):
+    """Constat de revue : une sauvegarde reussie suivie d'une garde qui leve
+    ne laissait aucune trace, et l'item repartait en `en_cours` — donc rejoue,
+    donc ecrit deux fois dans SAP."""
+
+    def test_la_sauvegarde_est_annoncee_avant_l_action(self):
+        brut = DriverScripte(identite=IA08)
+        vus: list[str] = []
+        brut.apres_action = lambda d, geste, cible: vus.append("action")
+        garde = DriverGarde(brut, Registre.charger(), plafond_sauvegardes=10,
+                            noter=lambda c: vus.append(c.verdict))
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet,
+                                        sauvegarde=True)):
+            garde.press("valider")
+        self.assertEqual(vus[0], "sauvegarde_imminente")
+        self.assertEqual(vus[1], "action")
+
+    def test_l_annonce_survit_a_une_garde_qui_leve_apres_coup(self):
+        """Le cas exact : SAP a ecrit, puis une modale imprevue arrete tout."""
+        brut = DriverScripte(identite=IA08)
+
+        def surgir(driver, geste, cible):
+            driver.fenetres = (Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]"))
+
+        brut.apres_action = surgir
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet,
+                                        sauvegarde=True)):
+            with self.assertRaises(FenetreImprevue):
+                garde.press("valider")
+
+        annonces = [c for c in garde.constats
+                    if c.verdict == "sauvegarde_imminente"]
+        self.assertEqual(len(annonces), 1)
 
 
 class TestPipelineNePeutPasContourner(unittest.TestCase):

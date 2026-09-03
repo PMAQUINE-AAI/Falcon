@@ -67,6 +67,23 @@ class RefusDryRun(Refus):
     """
 
 
+class ItemAbandonne(Refus):
+    """Cet item est perdu ; le lot continue.
+
+    C'est la traduction en exception de la categorie « connue fautive » :
+    cause identifiee, politique definie, item marque KO, boucle poursuivie.
+
+    Pourquoi une exception plutot qu'un drapeau a consulter : sans elle,
+    chaque appelant devrait se souvenir d'inspecter les constats APRES chaque
+    appel, et celui qui oublie enchaine sur la sauvegarde d'un ecran dont le
+    champ critique n'a pas pris. C'est precisement le « recopie puis oublie »
+    que la couture existe pour supprimer.
+
+    Un `Refus` et non un `Echec` : la decision est deliberee, et un repli qui
+    la rattraperait retenterait le meme item par un mecanisme moins sur.
+    """
+
+
 class ArretBloquant(Refus):
     """Le modele du monde est faux. On interrompt tout, y compris la chaine."""
 

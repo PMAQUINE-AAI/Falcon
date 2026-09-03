@@ -102,9 +102,57 @@ def _decoder(brut: bytes) -> tuple[str, str, bool]:
     try:
         return brut.decode(encodage), encodage, bom
     except UnicodeDecodeError:
-        # Un export SAP passe par un poste Windows : cp1252 est le repli
-        # naturel, et il ne peut pas echouer.
-        return brut.decode("cp1252"), "cp1252", False
+        pass
+
+    # Un export SAP passe par un poste Windows : cp1252 est le repli naturel.
+    # Il PEUT echouer — les octets 0x81, 0x8D, 0x8F, 0x90 et 0x9D n'y sont pas
+    # definis — d'ou le dernier repli sur latin-1, qui accepte tout octet.
+    for encodage in ("cp1252", "latin-1"):
+        try:
+            return brut.decode(encodage), encodage, False
+        except UnicodeDecodeError:
+            continue
+    raise JeuInvalide("encodage non reconnu")
+
+
+#: Cle sous laquelle csv.DictReader range les cellules surnumeraires.
+_SURPLUS = "\x00surplus"
+
+
+def _verifier_entete(chemin: Path, colonnes: tuple[str, ...]) -> None:
+    """Refuse un en-tete qui ferait perdre des donnees en silence.
+
+    Une colonne dupliquee est le cas le plus vicieux : `DictReader` garde la
+    DERNIERE valeur, donc la premiere colonne homonyme est definitivement
+    perdue et remplacee par la seconde — dans les deux positions au reexport.
+    Sur un export SE16N avec deux colonnes de meme nom, c'est une reinjection
+    de valeurs fausses, sans une exception.
+    """
+    if not colonnes:
+        raise JeuInvalide(f"{chemin} : aucun en-tete")
+
+    vides = [rang for rang, nom in enumerate(colonnes, start=1) if not nom.strip()]
+    if vides:
+        raise JeuInvalide(f"{chemin} : colonne(s) sans nom en position {vides}")
+
+    doublons = sorted({nom for nom in colonnes if colonnes.count(nom) > 1})
+    if doublons:
+        raise JeuInvalide(
+            f"{chemin} : colonne(s) en double {doublons}. La valeur de la "
+            f"premiere serait perdue au profit de la seconde, sans erreur")
+
+
+def _verifier_ligne(chemin: Path, rang: int, ligne: dict[str, Any],
+                    colonnes: tuple[str, ...]) -> None:
+    if _SURPLUS in ligne:
+        raise JeuInvalide(
+            f"{chemin}, ligne {rang} : {len(colonnes) + len(ligne[_SURPLUS])} "
+            f"cellules pour {len(colonnes)} colonnes. Le surplus serait jete")
+
+    manquantes = [nom for nom, valeur in ligne.items() if valeur is None]
+    if manquantes:
+        raise JeuInvalide(
+            f"{chemin}, ligne {rang} : colonne(s) absente(s) {manquantes}")
 
 
 def _lire_csv(chemin: Path) -> tuple[list[dict[str, Any]], Dialecte]:
@@ -118,9 +166,14 @@ def _lire_csv(chemin: Path) -> tuple[list[dict[str, Any]], Dialecte]:
         delimiteur, guillemet = ",", '"'
 
     lecteur = csv.DictReader(io.StringIO(texte), delimiter=delimiteur,
-                             quotechar=guillemet)
+                             quotechar=guillemet, restkey=_SURPLUS)
     colonnes = tuple(lecteur.fieldnames or ())
-    lignes = [dict(ligne) for ligne in lecteur]
+    _verifier_entete(chemin, colonnes)
+
+    lignes = []
+    for rang, ligne in enumerate(lecteur, start=2):     # 1 = l'en-tete
+        _verifier_ligne(chemin, rang, ligne, colonnes)
+        lignes.append(dict(ligne))
 
     retenues = tuple(c for c in colonnes if not c.startswith(PREFIXE_DIAGNOSTIC))
     lignes = [{c: (ligne.get(c) or "") for c in retenues} for ligne in lignes]
