@@ -12,6 +12,7 @@ from .enregistrement import (
     depuis_dict,
 )
 from .lecteur import EtatItem, Reprise, etats, lire, preparer
+from .rapport import Rapport, depuis_journal, rendre
 
 __all__ = [
     "Ecrivain",
@@ -19,4 +20,5 @@ __all__ = [
     "ItemFin", "Etape", "Garde", "Incident", "depuis_dict",
     "VERSION", "EN_COURS", "OK", "KO", "IGNORE", "DOUTEUX", "TERMINAUX",
     "lire", "etats", "preparer", "EtatItem", "Reprise",
+    "Rapport", "depuis_journal", "rendre",
 ]

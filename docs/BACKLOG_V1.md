@@ -43,7 +43,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 2 | `[x]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | 30 tests sur cinq axes ; un item interrompu **après** sauvegarde sort en `douteux` et n'est jamais rejoué ; reprise refusée sur jeu modifié |
 | 3 | `[x]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | 30 tests ; `Registre.__init__` n'accepte que `entrees` ; joker et catégorie `inconnue` refusés au chargement ; ambiguïté détectée **au chargement** ; registre livré à 3 entrées, aucune n'inventant de message SAP |
 | 4 | `[x]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | 30 tests ; les cinq gardes vérifiées par neutralisation — chacune neutralisée fait tomber la suite ; `Poste` n'expose que la surface de `Driver` |
-| 5 | `[ ]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | aller-retour prouvé : lire un jeu, tout marquer KO, réexporter, relire ⇒ identique champ à champ |
+| 5 | `[x]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | 24 tests ; aller-retour prouvé champ à champ **et** octet pour octet une fois le diagnostic retiré ; dialecte (BOM, délimiteur, fins de ligne, ordre des colonnes) conservé |
 | 6 | `[!]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | rejoue les traces fournies ; formes `.press` et `.press()` couvertes |
 | 7 | `[ ]` | Brouillon de pipeline depuis une trace (§4.3) | 6 | une trace produit un YAML chargeable par le lot 8 |
 | 8 | `[ ]` | Pipeline : modèle, chargement, validation (§3.2) | 1 | un YAML invalide échoue avec un message situé, jamais en silence |
@@ -90,7 +90,7 @@ Reprises du §8 de la spec, avec le lot qu'elles concernent :
 | définition de « champ critique » pour la garde 4 | 4 | relecture de **tout** champ écrit, exclusion nommée et motivée |
 | convention de conservation des exports | 12 | un dossier par système, fichier horodaté, delta contre le plus récent |
 | unité de travail du cas 1 : six pipelines ou item composite | 10 | à trancher avant le lot 10, la frontière transactionnelle en dépend |
-| format d'entrée des constats | 5 | JSONL en sortie d'audit, CSV accepté en entrée de remédiation |
+| ~~format d'entrée des constats~~ | 5 | **tranché** : CSV et JSONL acceptés en entrée, le dialecte lu est celui réécrit |
 
 ## Ce que la revue de conception a changé
 
