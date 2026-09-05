@@ -11,5 +11,6 @@ implementation de cette meme interface, sans rien changer au reste.
 """
 
 from .interface import Driver
+from .lecture import OBSERVATION, DriverLecture
 
-__all__ = ["Driver"]
+__all__ = ["Driver", "DriverLecture", "OBSERVATION"]

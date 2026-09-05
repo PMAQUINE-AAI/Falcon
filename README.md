@@ -54,6 +54,7 @@ Les modules livrés :
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, rapport de couverture, esquisses d'écran |
+| `falcon/commandes/` | ligne de commande : `diagnostiquer` et `inventaire`, aucune n'écrit dans SAP |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
@@ -74,12 +75,23 @@ système réel reste entière.
 python outils/verifier.py
 ```
 
-Rapport de couverture d'un enregistrement du recorder — la première chose à
-passer sur toute nouvelle trace :
+Deux commandes, et aucune n'écrit dans SAP :
 
 ```bash
-python -m falcon.trace tests/fixtures/traces/megatrace_2026-09.vbs
+python -m falcon inventaire tests/fixtures/traces/megatrace_2026-09.vbs
+python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
 ```
+
+`inventaire` est la première chose à passer sur toute nouvelle trace : il dit
+ce que le parseur sait en lire, et ce qu'il n'en sait pas.
+
+`diagnostiquer` est le **premier contact réel** — il se greffe sur une session
+SAP que vous avez ouverte et sur laquelle vous vous êtes authentifié
+vous-même. Aucun mot de passe ne transite par FALCON. La commande ne reçoit
+qu'un `DriverLecture`, une façade qui n'a ni `write`, ni `press`, ni `vkey` :
+elle est en lecture seule par construction, pas par discipline. Avec
+`--catalogue`, le relevé est versé en **quarantaine** ; le promouvoir reste un
+geste explicite, celui par lequel un humain dit avoir relu l'écran.
 
 Une seule dépendance d'exécution, `PyYAML`. Le reporting terminal est en
 stdlib : la livraison est un fichier unique, et chaque dépendance de plus est

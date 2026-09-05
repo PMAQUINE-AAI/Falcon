@@ -56,7 +56,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 10 | `[ ]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8 | un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne |
 | 11 | `[ ]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | muet hors terminal, testable sans capture ANSI |
 | 12 | `[ ]` | Moteur volumique + primitive d'export `SE16N` (§3.6) | 8, 9 | en-tête de provenance complet ; delta avec l'export précédent |
-| 13 | `[~]` | Implémentation `win32com` de la couture + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. **Reste** : le bundle, et la validation sur un poste réel |
+| 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction** (`DriverLecture` n'a ni `write`, ni `press`, ni `vkey`). **Reste** : le bundle, et la validation sur un poste réel |
 
 ## Ce qui bloque, et sur quoi
 
@@ -92,6 +92,28 @@ avant le producteur.
 
 Reste demandé, non bloquant ici : la **convention de nommage des variantes**.
 Trois ou quatre noms réels suffisent. Ça bloquera la pipeline d'audit.
+
+## Le premier contact réel, quand tu voudras
+
+Sur un poste Windows, SAP GUI ouvert et connecté, scripting activé des deux
+côtés (client : Options > Accessibilité et scripting ; serveur :
+`sapgui/user_scripting`) :
+
+```bash
+pip install pywin32
+python -m falcon diagnostiquer
+python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
+```
+
+La commande n'écrit rien dans SAP — elle ne reçoit qu'une façade sans `write`,
+sans `press` et sans `vkey`. Avec `--catalogue`, elle verse le relevé en
+quarantaine : ce serait le **premier écran `observee` du projet**, et le point
+de départ de la cartographie.
+
+Ce qu'elle apprendra, et que rien ici ne peut deviner : les noms d'attributs
+COM tiennent-ils, l'arbre des contrôles se parcourt-il, un shell répond-il aux
+attributs facultatifs. Si un nom est faux, l'erreur sera lisible et nommée —
+c'est tout ce que ce dépôt peut garantir sans système.
 
 ## Mode dégradé : quand la vérification locale est impossible
 
