@@ -82,6 +82,26 @@ class TestReferencesDeFichiers(unittest.TestCase):
             self.assertTrue((RACINE / relatif).exists(),
                             f"{relatif} est dans DOCUMENTS_IGNORES mais n'existe pas")
 
+    def test_le_readme_connait_tous_les_modules(self):
+        """Detecteur de derive : le README affirmait « Aucun code FALCON n'est
+        ecrit » quatorze commits apres le premier module.
+
+        Verifier l'existence des chemins cites ne suffisait pas — le defaut
+        n'etait pas un chemin mort, c'etait une affirmation perimee. Cette
+        regle-ci mord dans l'autre sens : tout sous-paquet livre doit etre
+        nomme quelque part dans le README.
+        """
+        paquet = RACINE / "falcon"
+        readme = (RACINE / "README.md").read_text(encoding="utf-8")
+        livres = sorted(d.name for d in paquet.iterdir()
+                        if d.is_dir() and (d / "__init__.py").exists())
+        self.assertTrue(livres, "aucun sous-paquet : le detecteur ne mord pas")
+        for nom in livres:
+            with self.subTest(module=nom):
+                self.assertIn(f"falcon/{nom}/", readme,
+                              f"le module falcon/{nom}/ existe mais le README "
+                              f"ne le mentionne pas")
+
     def test_specification_presente(self):
         self.assertTrue((RACINE / "SPEC_FALCON.md").exists(),
                         "la specification est le document qui fait foi")

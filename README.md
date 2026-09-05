@@ -36,13 +36,30 @@ suit n'en est qu'un index.
 
 ## État
 
-Le dépôt contient aujourd'hui la spécification et l'archive du travail
-antérieur. Aucun code FALCON n'est écrit.
+L'état vivant des lots est dans [docs/BACKLOG_V1.md](docs/BACKLOG_V1.md), et
+nulle part ailleurs. Ce README dit ce que FALCON *est* ; le backlog dit où il
+en est. Dupliquer l'avancement ici garantirait qu'une des deux versions soit
+fausse — ça a déjà été le cas.
 
-Premier élément attendu en V1, et le plus contraignant dans l'ordre : la
-**couture de driver** (§3.4). La spec la qualifie d'irréversible — la
-rétrofiter sur du code déjà écrit coûte cher — et elle conditionne aussi bien
-les gardes du §5 que le harness du §3.7.
+Les modules livrés :
+
+| Module | Rôle |
+|---|---|
+| `falcon/noyau/` | types de la couture, hiérarchie d'erreurs, vocabulaire des gardes |
+| `falcon/couture/` | l'interface étroite par laquelle tout FALCON parle à SAP |
+| `falcon/controleur/` | les cinq gardes, les contrats d'étape, les dérogations |
+| `falcon/journal/` | JSONL append-only, repli des états, reprise, rapport |
+| `falcon/taxonomie/` | registre des erreurs connues, classement, dump d'inconnu |
+| `falcon/donnees/` | lecture des jeux, regroupement par unité de sauvegarde, réexport des KO |
+| `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
+| `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
+
+**Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
+encore parlé à un système SAP. Les tests établissent que FALCON se comporte
+correctement *étant donné* une réponse de driver — pas que SAP réponde ainsi.
+Le double de test le dit lui-même dans sa docstring, et la spec le dit au
+§3.7 : un mock nourri d'hypothèses confirme les hypothèses. La validation en
+système réel reste entière.
 
 ## Développement
 
