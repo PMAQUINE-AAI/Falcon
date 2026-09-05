@@ -29,6 +29,17 @@ class ErreurCouture(Echec):
     """Echec venant de la couche qui parle a SAP."""
 
 
+class SapIndisponible(ErreurCouture):
+    """Aucun SAP GUI joignable : pas de scripting, pas de session, pas de
+    pywin32 installe.
+
+    Nommee plutot que laissee sous la forme d'un `ImportError` nu ou d'une
+    erreur COM brute : c'est l'erreur que verra quiconque lance FALCON pour la
+    premiere fois, et « No module named 'win32com' » n'apprend rien a qui ne
+    sait pas encore que pywin32 existe.
+    """
+
+
 class ObjetIntrouvable(ErreurCouture):
     """`findById` n'a rien rendu : controle absent de l'ecran courant."""
 

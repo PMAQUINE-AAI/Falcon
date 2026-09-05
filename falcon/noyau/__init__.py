@@ -3,6 +3,7 @@
 from .erreurs import (
     ErreurFalcon, Echec, ErreurCouture, ObjetIntrouvable, SessionPerdue,
     DelaiDepasse, JournalCorrompu, IncidentBloquant, ItemAbandonne, Refus,
+    SapIndisponible,
     RefusDryRun, ArretBloquant,
     EcartIdentite, FenetreImprevue, PlafondAtteint, RepriseIncoherente,
 )
@@ -15,7 +16,8 @@ from .vocabulaire import (
 
 __all__ = [
     "ErreurFalcon", "Echec", "ErreurCouture", "ObjetIntrouvable",
-    "SessionPerdue", "DelaiDepasse", "JournalCorrompu", "Refus",
+    "SessionPerdue", "SapIndisponible", "DelaiDepasse", "JournalCorrompu",
+    "Refus",
     "RefusDryRun", "ArretBloquant", "EcartIdentite", "FenetreImprevue",
     "IncidentBloquant", "ItemAbandonne",
     "PlafondAtteint", "RepriseIncoherente",

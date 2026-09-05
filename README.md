@@ -56,7 +56,11 @@ Les modules livrés :
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, rapport de couverture, esquisses d'écran |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
-encore parlé à un système SAP. Les tests établissent que FALCON se comporte
+encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
+mais ni la suite locale ni la CI ne peuvent l'exécuter : elles tournent sur
+Linux, sans SAP GUI ni pywin32. Sa conformité réelle est marquée `skip` avec
+un motif lisible, et `python outils/verifier.py` liste en fin de course tout
+ce qui n'a **pas** été vérifié — un test qui ne s'exécute pas doit le dire. Les tests établissent que FALCON se comporte
 correctement *étant donné* une réponse de driver — pas que SAP réponde ainsi.
 Le double de test le dit lui-même dans sa docstring, et la spec le dit au
 §3.7 : un mock nourri d'hypothèses confirme les hypothèses. La validation en

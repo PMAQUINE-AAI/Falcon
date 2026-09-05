@@ -56,7 +56,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 10 | `[ ]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8 | un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne |
 | 11 | `[ ]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | muet hors terminal, testable sans capture ANSI |
 | 12 | `[ ]` | Moteur volumique + primitive d'export `SE16N` (§3.6) | 8, 9 | en-tête de provenance complet ; delta avec l'export précédent |
-| 13 | `[ ]` | Implémentation `win32com` de la couture + bundle (§6) | 1 | non testable hors Windows — validation en système réel, marquée comme telle |
+| 13 | `[~]` | Implémentation `win32com` de la couture + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. **Reste** : le bundle, et la validation sur un poste réel |
 
 ## Ce qui bloque, et sur quoi
 
