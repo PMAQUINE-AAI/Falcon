@@ -50,7 +50,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 5 | `[x]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | 24 tests ; aller-retour prouvé champ à champ **et** octet pour octet une fois le diagnostic retiré ; dialecte (BOM, délimiteur, fins de ligne, ordre des colonnes) conservé |
 | 6 | `[!]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | rejoue les traces fournies ; formes `.press` et `.press()` couvertes |
 | 7 | `[ ]` | Brouillon de pipeline depuis une trace (§4.3) | 6 | une trace produit un YAML chargeable par le lot 8 |
-| 8 | `[ ]` | Pipeline : modèle, chargement, validation (§3.2) | 1 | un YAML invalide échoue avec un message situé, jamais en silence |
+| 8 | `[x]` | Pipeline : modèle, chargement, validation (§3.2) | 1 | 39 tests ; chaque refus nomme le fichier, le rang et le nom de l'étape ; la frontière pipeline→contrôleur mord en import absolu **et** relatif |
 | 9 | `[ ]` | Catalogue : modèle, empreinte de variante, dépôt YAML (§3.1) | 1 | deux rendus du même dynpro avec des `id` différents donnent deux variantes |
 | 10 | `[ ]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8 | un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne |
 | 11 | `[ ]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | muet hors terminal, testable sans capture ANSI |

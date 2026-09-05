@@ -8,6 +8,10 @@ from .erreurs import (
 )
 from .horloge import Horloge, horloge_figee, maintenant
 from .types import Champ, Ecran, Fenetre, Identite, Statut, empreinte
+from .vocabulaire import (
+    COMPARAISONS, DEROGEABLES, FENETRE, GARDES, IDENTITE, MOTIF_MINIMAL,
+    PORTEE_TOTALE, RAYON, RELECTURE, STATUT,
+)
 
 __all__ = [
     "ErreurFalcon", "Echec", "ErreurCouture", "ObjetIntrouvable",
@@ -17,4 +21,6 @@ __all__ = [
     "PlafondAtteint", "RepriseIncoherente",
     "Champ", "Ecran", "Fenetre", "Identite", "Statut", "empreinte",
     "Horloge", "horloge_figee", "maintenant",
+    "GARDES", "IDENTITE", "STATUT", "FENETRE", "RELECTURE", "RAYON",
+    "DEROGEABLES", "MOTIF_MINIMAL", "PORTEE_TOTALE", "COMPARAISONS",
 ]

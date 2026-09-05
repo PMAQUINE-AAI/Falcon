@@ -16,32 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-#: Gardes sur lesquelles une derogation est concevable.
-#:
-#: L'identite d'ecran et le rayon d'action n'y sont PAS, et ne peuvent pas y
-#: etre ajoutees par un fichier : une identite violee signale que le modele du
-#: monde est faux, et un plafond est la derniere barriere avant le lot entier.
-#: Deroger a l'une ou l'autre reviendrait a retirer le fond du filet.
-DEROGEABLES = frozenset({"statut", "fenetre", "relecture"})
+from falcon.noyau import (
+    COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, PORTEE_TOTALE,
+)
 
-#: Un motif doit dire quelque chose. Ce seuil n'empeche pas d'ecrire une
-#: betise, il empeche d'ecrire « ok » et de passer a autre chose.
-MOTIF_MINIMAL = 30
-
-#: Portee d'une derogation qui vaut pour toutes les etapes du contrat.
-PORTEE_TOTALE = "*"
-
-#: Comment comparer ce qu'on a ecrit a ce qu'on relit.
-#:
-#: `casse` est le defaut et n'accepte QUE les differences de casse et
-#: d'espaces. Une troncature n'y passe pas : accepter n'importe quel prefixe
-#: revenait a valider « 1 » comme normalisation de « 1000 », c'est-a-dire a
-#: laisser ecrire une valeur fausse en production sans un mot.
-#:
-#: `prefixe` accepte la troncature, pour les champs dont on SAIT qu'ils sont
-#: plus courts que la valeur ecrite. Il se declare etape par etape : la charge
-#: de la preuve revient a qui sait, pas au defaut.
-COMPARAISONS = frozenset({"exact", "casse", "prefixe"})
 
 
 class DerogationRefusee(Exception):
@@ -161,3 +139,28 @@ class Contrat:
                             "motif": derogation.motif}))
 
         return tuple(traces)
+
+
+def contrat_pour(etape: "Etape") -> Contrat:
+    """Traduit une etape declaree en contrat de garde.
+
+    La conversion vit ici, dans le controleur, et non dans la pipeline. C'est
+    l'asymetrie du modele de securite rendue structurelle : le controleur
+    connait la pipeline, la pipeline ignore le controleur. Une derogation
+    DEMANDEE dans le YAML ne devient une derogation ACCORDEE qu'en passant par
+    ce point, ou `Derogation.__post_init__` la revalide.
+    """
+    from falcon.pipeline.modele import Etape       # noqa: F401 — annotation
+
+    return Contrat(
+        nom=etape.nom,
+        ecran_attendu=etape.ecran,
+        navigation_libre=etape.navigation_libre,
+        fenetres_attendues=etape.fenetres,
+        comparaison=etape.comparaison,
+        statut_attendu=etape.statut_attendu,
+        sauvegarde=etape.sauvegarde,
+        derogations=tuple(
+            Derogation(garde=d.garde, portee=d.portee, motif=d.motif)
+            for d in etape.derogations),
+    )
