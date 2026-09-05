@@ -57,6 +57,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 11 | `[ ]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | muet hors terminal, testable sans capture ANSI |
 | 12 | `[ ]` | Moteur volumique + primitive d'export `SE16N` (§3.6) | 8, 9 | en-tête de provenance complet ; delta avec l'export précédent |
 | 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction** (`DriverLecture` n'a ni `write`, ni `press`, ni `vkey`). **Reste** : le bundle, et la validation sur un poste réel |
+| 14 | `[x]` | Console interactive : tests, traces, catalogue, diagnostic | 6, 9, 13 | 28 tests ; une session complète se rejoue sans terminal ; le décor s'encode en cp1252 ; aucun écran n'atteint une méthode mutante (vérifié sur l'AST) |
 
 ## Ce qui bloque, et sur quoi
 
@@ -92,6 +93,20 @@ avant le producteur.
 
 Reste demandé, non bloquant ici : la **convention de nommage des variantes**.
 Trois ou quatre noms réels suffisent. Ça bloquera la pipeline d'audit.
+
+## Tout piloter depuis un seul endroit
+
+```bash
+python -m falcon console
+```
+
+Menus numérotés : vérification (les deux suites, le neutraliseur, une suite au
+choix), traces du recorder (couverture, écrans conjecturés, gestes
+significatifs), catalogue (curé et quarantaine), session SAP (diagnostic en
+lecture seule). Aucun écran n'écrit dans SAP.
+
+La commande exige un terminal interactif et le dit sinon : hors terminal,
+`inventaire` et `diagnostiquer` restent scriptables.
 
 ## Le premier contact réel, quand tu voudras
 

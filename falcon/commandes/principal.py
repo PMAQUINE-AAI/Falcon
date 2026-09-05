@@ -18,10 +18,13 @@ from falcon.noyau import ErreurFalcon
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Deux commandes, et aucune n'ecrit dans SAP :
+Trois commandes, et aucune n'ecrit dans SAP :
 
+  console         menus interactifs : tests, traces, catalogue, diagnostic
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
+
+Pour tout faire depuis un seul endroit :  python -m falcon console
 """
 
 
@@ -32,6 +35,11 @@ def analyseur() -> argparse.ArgumentParser:
     principal.add_argument("--aide", action="help",
                            help="affiche cette aide et sort")
     sous = principal.add_subparsers(dest="commande")
+
+    sous.add_parser(
+        "console", help="menus interactifs (tests, traces, catalogue, SAP)",
+        description="Tout FALCON depuis un seul endroit. Aucun ecran n'ecrit "
+                    "dans SAP.")
 
     diagnostic = sous.add_parser(
         "diagnostiquer",
@@ -70,12 +78,26 @@ def _diagnostiquer(options: argparse.Namespace) -> int:
     return 0
 
 
+def _console(options: argparse.Namespace) -> int:
+    from falcon.console import Console, parcourir, racine
+
+    if not sys.stdin.isatty():
+        # Une console interactive sur un flux non interactif ne peut rien
+        # faire d'utile, et boucler sur un `input` qui leve immediatement
+        # produirait un mur d'ecrans. Mieux vaut le dire.
+        print("`console` demande un terminal interactif. Hors terminal, "
+              "utiliser `inventaire` ou `diagnostiquer`.", file=sys.stderr)
+        return 2
+    return parcourir(racine(), Console())
+
+
 def _inventaire(options: argparse.Namespace) -> int:
     from falcon.trace.inventaire import main as inventorier
     return inventorier(list(options.traces))
 
 
-COMMANDES = {"diagnostiquer": _diagnostiquer, "inventaire": _inventaire}
+COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
+             "inventaire": _inventaire}
 
 
 def main(arguments: list[str] | None = None) -> int:

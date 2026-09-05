@@ -54,7 +54,8 @@ Les modules livrés :
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, rapport de couverture, esquisses d'écran |
-| `falcon/commandes/` | ligne de commande : `diagnostiquer` et `inventaire`, aucune n'écrit dans SAP |
+| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire` — aucune n'écrit dans SAP |
+| `falcon/console/` | menus interactifs : tests, traces, catalogue, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
@@ -75,7 +76,18 @@ système réel reste entière.
 python outils/verifier.py
 ```
 
-Deux commandes, et aucune n'écrit dans SAP :
+Tout depuis un seul endroit :
+
+```bash
+python -m falcon console
+```
+
+Menus numérotés — vérification, traces, catalogue, session SAP. Pas de
+`curses` et pas de dépendance : `curses` n'est pas fourni avec CPython sous
+Windows, or c'est la seule machine où SAP GUI existe. Le décor s'encode en
+cp1252, ce qu'écrit une console Windows française redirigée.
+
+Les mêmes choses en scriptable, hors terminal :
 
 ```bash
 python -m falcon inventaire tests/fixtures/traces/megatrace_2026-09.vbs
