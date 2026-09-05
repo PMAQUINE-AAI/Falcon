@@ -48,7 +48,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 3 | `[x]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | 30 tests ; `Registre.__init__` n'accepte que `entrees` ; joker et catégorie `inconnue` refusés au chargement ; ambiguïté détectée **au chargement** ; registre livré à 3 entrées, aucune n'inventant de message SAP |
 | 4 | `[x]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | 34 tests ; `python outils/neutraliser.py` prouve en CI que chaque garde retirée fait tomber la suite ; `Poste` n'expose que la surface de `Driver` |
 | 5 | `[x]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | 24 tests ; aller-retour prouvé champ à champ **et** octet pour octet une fois le diagnostic retiré ; dialecte (BOM, délimiteur, fins de ligne, ordre des colonnes) conservé |
-| 6 | `[!]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | rejoue les traces fournies ; formes `.press` et `.press()` couvertes |
+| 6 | `[x]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | 66 tests ; `megatrace_2026-09.vbs` lue intégralement, zéro ligne non appariée ; aller-retour geste ↔ ligne **et** fichier entier octet pour octet ; `.press()` **refusée** (décision n°13) |
 | 7 | `[ ]` | Brouillon de pipeline depuis une trace (§4.3) | 6 | une trace produit un YAML chargeable par le lot 8 |
 | 8 | `[x]` | Pipeline : modèle, chargement, validation (§3.2) | 1 | 39 tests ; chaque refus nomme le fichier, le rang et le nom de l'étape ; la frontière pipeline→contrôleur mord en import absolu **et** relatif |
 | 9 | `[x]` | Catalogue : modèle, empreinte de variante, dépôt YAML (§3.1) | 1 | 20 tests ; deux rendus du même dynpro donnent deux variantes ; `pour_garde` refuse une esquisse **et** une variante absente ; quarantaine avec promotion explicite |
@@ -59,15 +59,38 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 
 ## Ce qui bloque, et sur quoi
 
-**Lot 6** — en attente des enregistrements `.vbs` réels, bruts, non reformatés.
-Le format documenté dans l'archive écrit `.press()`, mais le recorder SAP
-produit du VBScript, où un appel sans argument s'écrit sans parenthèses
-(`.press`, `.sendVKey 8`). Le parseur tolérera les deux, et la trace réelle
-tranchera. Le §3.7 et les règles transverses de l'archive disent la même
-chose : le recorder est la vérité terrain, on ne théorise pas à sa place.
+**Plus rien n'est bloqué.** Le lot 6 l'a été jusqu'à l'arrivée d'un
+enregistrement réel : l'archive documentait `.press()`, le recorder écrit
+`.press`. Refuser de trancher par hypothèse était le bon choix — la trace a
+tranché, et dans l'autre sens que la documentation.
 
-Aucun autre lot n'est bloqué. Les lots 1 à 5 ne dépendent ni d'une trace ni
-d'un accès SAP.
+Écart assumé par rapport au critère d'origine, qui demandait de couvrir les
+deux formes : `.press()` est **refusée**, pas tolérée (décision n°13). Accepter
+une forme que le recorder ne produit pas, ce serait lire sans le savoir un
+fichier retouché à la main — et rejouer sur un système réel ce que personne
+n'a enregistré.
+
+Ce que la trace a appris, et qui n'était pas déductible :
+
+| | |
+|---|---|
+| `selectedRows = "0"` est une **chaîne**, `currentCellRow = 4` un **entier** | sur le même shell ALV. Normaliser les deux produit un rejeu que SAP refuse |
+| `doubleClickCurrentCell` agit sur la cellule **courante** | omettre `currentCellRow` double-clique la première ligne, sans lever |
+| la sélection ALV se fait **par index** | l'index dépend du contenu de la base à l'enregistrement : un brouillon qui le rejoue traite la mauvaise variante, en silence. Le lot 7 doit marquer ces gestes non rejouables |
+| vider `ENAME-LOW` **élargit** la recherche de variantes | le premier bloc de la trace ne le fait pas : ses résultats ne sont pas comparables aux quatre autres |
+| les cases `DY_*` sont repositionnées **après** le chargement de la variante | le piège des cases rémanentes, observé plutôt que déduit |
+
+Les cinq sont épinglés par des tests dans `tests/test_trace.py`, sur la trace
+elle-même — pas sur une reformulation.
+
+**Ce que le parseur ne fera jamais.** Le recorder enregistre des actions : ni
+l'identité des écrans traversés, ni les champs présents. Une trace ne peut
+donc pas peupler le catalogue — elle produit une *esquisse*, que
+`Depot.pour_garde` refuse déjà de servir (lot 9). Le raccordement était prêt
+avant le producteur.
+
+Reste demandé, non bloquant ici : la **convention de nommage des variantes**.
+Trois ou quatre noms réels suffisent. Ça bloquera la pipeline d'audit.
 
 ## Mode dégradé : quand la vérification locale est impossible
 

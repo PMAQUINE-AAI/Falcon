@@ -53,6 +53,7 @@ Les modules livrés :
 | `falcon/donnees/` | lecture des jeux, regroupement par unité de sauvegarde, réexport des KO |
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
+| `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, rapport de couverture |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. Les tests établissent que FALCON se comporte
@@ -67,6 +68,13 @@ système réel reste entière.
 
 ```bash
 python outils/verifier.py
+```
+
+Rapport de couverture d'un enregistrement du recorder — la première chose à
+passer sur toute nouvelle trace :
+
+```bash
+python -m falcon.trace tests/fixtures/traces/megatrace_2026-09.vbs
 ```
 
 Une seule dépendance d'exécution, `PyYAML`. Le reporting terminal est en
