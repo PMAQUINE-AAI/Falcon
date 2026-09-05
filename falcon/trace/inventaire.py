@@ -14,6 +14,10 @@ Le rapport nomme trois choses distinctes, qu'il ne faut pas confondre :
   d'esquisse qui devra refuser d'en faire une etape ;
 - **l'encodage retenu** — pour qu'une lecture de travers soit diagnosticable.
 
+Quand toutes les lignes sont appariees, il ajoute l'apercu des ecrans
+conjectures. Quand elles ne le sont pas, il ne l'ajoute PAS : un decoupage
+d'ecrans fait sur des lignes manquantes serait faux sans le dire.
+
     python -m falcon.trace trace.vbs
 """
 
@@ -22,8 +26,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from .esquisse import apercu
 from .modele import CONFORT, Inventaire
-from .vbs import inventorier
+from .vbs import inventorier, lire
 
 AIDE = """Usage : python -m falcon.trace <trace.vbs> [...]
 
@@ -100,9 +105,14 @@ def main(arguments: list[str] | None = None) -> int:
     for chemin in arguments:
         inventaire = inventorier(Path(chemin))
         print(rapport(inventaire))
-        print()
-        if not inventaire.complet:
+        if inventaire.complet:
+            # L'apercu se rend depuis une lecture stricte : un decoupage fait
+            # sur des lignes manquantes serait faux sans le dire.
+            print()
+            print(apercu(lire(Path(chemin))))
+        else:
             code = 1
+        print()
     return code
 
 
