@@ -55,6 +55,13 @@ class DriverScripte(Driver):
         self.grilles: dict[str, list[dict[str, str]]] = {}
         self.tables: dict[str, dict[str, int]] = {}
 
+        #: Cellule courante de chaque grille. Distincte de la selection, et
+        #: c'est ce que `grid_double_click` consulte : le double-clic agit sur
+        #: la cellule COURANTE, un piege releve sur une trace reelle. Le double
+        #: la reproduit pour qu'un test puisse l'exercer — il n'etablit
+        #: toujours aucune fidelite.
+        self.cellules_courantes: dict[str, int] = {}
+
     # -- identite et releve ---------------------------------------------
 
     def screen(self) -> Identite:
@@ -110,6 +117,17 @@ class DriverScripte(Driver):
         if ligne >= len(lignes):
             raise ObjetIntrouvable(f"{id}[{ligne}]")
         return lignes[ligne].get(colonne, "")
+
+    def grid_select_rows(self, id: str, rangs: tuple[int, ...]) -> None:
+        self._noter("grid_select_rows", id, ",".join(str(r) for r in rangs))
+
+    def grid_set_current_row(self, id: str, ligne: int) -> None:
+        self.cellules_courantes[id] = ligne
+        self._noter("grid_set_current_row", id, str(ligne))
+
+    def grid_double_click(self, id: str) -> None:
+        self._noter("grid_double_click", id,
+                    str(self.cellules_courantes.get(id, 0)))
 
     # -- table control -----------------------------------------------------
 

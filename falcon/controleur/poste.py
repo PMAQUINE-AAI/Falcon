@@ -10,9 +10,15 @@ sortie du modele de securite.
 Une etape Python peut coder n'importe quelle mecanique bizarre — sans jamais
 sortir des gardes.
 
-Les quinze methodes sont ecrites une par une plutot que generees. Sur une
+Les dix-huit methodes sont ecrites une par une plutot que generees. Sur une
 facade dont le role est de borner ce qui est accessible, on doit pouvoir lire
 la liste, pas la deduire.
+
+Elle doit rester EXACTEMENT aussi large que la couture, et un test l'epingle.
+Plus large, elle rendrait le mecanisme des gardes accessible ; plus etroite,
+elle rendrait une manipulation legitime inexprimable — et quelqu'un irait
+appeler COM ailleurs, ce que toute l'architecture existe pour empecher. C'est
+ce test qui a rattrape l'oubli des trois methodes ALV en ecriture.
 """
 
 from __future__ import annotations
@@ -74,6 +80,15 @@ class Poste:
 
     def grid_read(self, id: str, ligne: int, colonne: str) -> str:
         return self.__garde.grid_read(id, ligne, colonne)
+
+    def grid_select_rows(self, id: str, rangs: tuple[int, ...]) -> None:
+        self.__garde.grid_select_rows(id, rangs)
+
+    def grid_set_current_row(self, id: str, ligne: int) -> None:
+        self.__garde.grid_set_current_row(id, ligne)
+
+    def grid_double_click(self, id: str) -> None:
+        self.__garde.grid_double_click(id)
 
     # -- table control -------------------------------------------------------
 

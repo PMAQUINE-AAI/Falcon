@@ -9,7 +9,10 @@ Pourquoi cette interface deborde les huit methodes de la specification
 initiale : ses huit methodes ne suffisaient pas a exprimer la premiere
 pipeline livree. L'audit du cas 1 lit une grille ALV, et le corollaire du
 piege des cases remanentes impose de positionner explicitement les trois
-cases de selection a chaque appel. La couture etant irreversible, l'etendre
+cases de selection a chaque appel. Elle a ete etendue une seconde fois quand
+une trace reelle a montre que le flux « Obtenir variante » ECRIT dans la
+grille — `selectedRows`, `currentCellRow`, `doubleClickCurrentCell` — la ou la
+couture ne savait que la lire (decision n°14). La couture etant irreversible, l'etendre
 apres coup aurait coute la retrofit qu'on cherche a eviter — et, entretemps,
 quelqu'un aurait contourne en appelant COM ailleurs.
 
@@ -104,6 +107,38 @@ class Driver(abc.ABC):
     @abc.abstractmethod
     def grid_read(self, id: str, ligne: int, colonne: str) -> str:
         """Valeur d'une cellule, par index ABSOLU. Aucun defilement requis."""
+
+    @abc.abstractmethod
+    def grid_select_rows(self, id: str, rangs: tuple[int, ...]) -> None:
+        """Selectionne des lignes, par index ABSOLU.
+
+        **Selectionner par index est un piege, pas une commodite.** L'index
+        depend du contenu de la base au moment ou on regarde. Une pipeline qui
+        fige un index traite la mauvaise ligne des que la liste change, et ne
+        leve pas. La regle : lire la grille avec `grid_read` pour retrouver la
+        ligne voulue par son contenu, et n'appeler ceci qu'avec l'index ainsi
+        obtenu.
+
+        La couture doit neanmoins l'exposer : c'est ce que SAP offre, et le
+        traduire ailleurs mettrait de la logique metier dans la couture.
+        """
+
+    @abc.abstractmethod
+    def grid_set_current_row(self, id: str, ligne: int) -> None:
+        """Place la cellule courante sur une ligne, par index ABSOLU.
+
+        **Ce n'est pas la meme chose que selectionner**, et c'est le piege que
+        la trace du recorder revele : `grid_double_click` agit sur la cellule
+        COURANTE, pas sur la selection. Omettre cet appel double-clique la
+        premiere ligne — sans erreur, sur la mauvaise donnee.
+        """
+
+    @abc.abstractmethod
+    def grid_double_click(self, id: str) -> None:
+        """Double-clique la cellule COURANTE. Declenche une navigation.
+
+        Positionner la cellule courante d'abord : voir `grid_set_current_row`.
+        """
 
     # -- table control : index VISIBLE, defilement explicite ------------
 

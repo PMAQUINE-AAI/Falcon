@@ -23,6 +23,10 @@ SURFACE = {
     # doivent etre positionnees explicitement a chaque appel
     "select", "set_checked",
     "grid_rows", "grid_columns", "grid_read",
+    # seconde extension (decision n°14) : une trace reelle montre que le flux
+    # « Obtenir variante » ECRIT dans la grille, la ou la couture ne savait que
+    # la lire. Sans elles, la premiere pipeline reelle n'est pas exprimable
+    "grid_select_rows", "grid_set_current_row", "grid_double_click",
     "table_visible_rows", "table_scroll",
 }
 

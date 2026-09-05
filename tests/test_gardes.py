@@ -33,6 +33,14 @@ AUTRE = Identite(transaction="CL02", programme="SAPLCLFM", dynpro="0100")
 
 MOTIF = "l'editeur SAPscript n'est pas adressable, verifie par retelechargement"
 
+#: Classement EXHAUSTIF de la surface de couture. Toute methode nouvelle doit
+#: etre rangee d'un cote ou de l'autre, sinon
+#: `test_toute_methode_de_la_surface_est_classee_lecture_ou_mutation` tombe.
+LECTURES = {"screen", "fields", "windows", "status", "read",
+            "grid_rows", "grid_columns", "grid_read", "table_visible_rows"}
+MUTATIONS = {"write", "set_checked", "press", "select", "vkey", "table_scroll",
+             "grid_select_rows", "grid_set_current_row", "grid_double_click"}
+
 
 def _garde(brut: DriverScripte, *, mode: str = "run",
            plafond: int = 100) -> DriverGarde:
@@ -204,16 +212,134 @@ class TestToutesLesMutationsSontGardees(unittest.TestCase):
             with self.assertRaises(FenetreImprevue):
                 garde.table_scroll("tbl", 5)
 
+    def test_une_selection_alv_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="s", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.grid_select_rows("alv", (0,))
+
+    def test_un_positionnement_de_cellule_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="p", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.grid_set_current_row("alv", 4)
+
+    def test_un_double_clic_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="d", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.grid_double_click("alv")
+
+    def test_toute_methode_de_la_surface_est_classee_lecture_ou_mutation(self):
+        """Le classement doit etre EXHAUSTIF, pas une liste tenue a la main.
+
+        La version precedente enumerait les mutantes connues : ajouter une
+        methode de couture sans la garder ne cassait rien, il suffisait de ne
+        pas penser a la liste. C'est ce qui est arrive aux trois methodes ALV
+        en ecriture. Desormais toute methode nouvelle doit etre rangee d'un
+        cote ou de l'autre pour que ce test passe.
+        """
+        self.assertEqual(LECTURES & MUTATIONS, set())
+        self.assertEqual(LECTURES | MUTATIONS, set(Driver.__abstractmethods__),
+                         "une methode de couture n'est ni classee lecture ni "
+                         "classee mutation")
+
     def test_toute_mutation_de_la_surface_releve_l_ecran(self):
-        """Epingle la liste : ajouter une methode mutante sans la garder
-        devient un geste delibere qui met a jour ce test."""
-        mutantes = {"write", "set_checked", "press", "select", "vkey",
-                    "table_scroll"}
         source = Path("falcon/controleur/gardes.py").read_text(encoding="utf-8")
-        for methode in sorted(mutantes):
+        for methode in sorted(MUTATIONS):
             corps = source.split(f"def {methode}(self")[1].split("\n    def ")[0]
             with self.subTest(methode=methode):
                 self.assertIn("_apres_action()", corps)
+
+    def test_toute_methode_de_la_surface_verifie_l_identite(self):
+        """Lecture comprise : lire le mauvais ecran rend une valeur qui a
+        l'air bonne, et c'est le pire des resultats."""
+        source = Path("falcon/controleur/gardes.py").read_text(encoding="utf-8")
+        observation = {"screen", "fields", "windows", "status"}
+        for methode in sorted(LECTURES | MUTATIONS):
+            if methode in observation:
+                continue        # les gardes elles-memes s'en servent
+            corps = source.split(f"def {methode}(self")[1].split("\n    def ")[0]
+            with self.subTest(methode=methode):
+                self.assertIn("_garde_identite()", corps)
+
+
+class TestAlvEnEcriture(unittest.TestCase):
+    """Decision n°14 : ecrire dans une grille ALV.
+
+    Sans ces trois methodes, le flux « Obtenir variante » — le premier flux
+    reel du projet, releve sur une trace du recorder — n'etait pas exprimable
+    en dehors d'un appel COM sauvage.
+    """
+
+    def _alv(self) -> DriverScripte:
+        brut = DriverScripte(identite=IA08)
+        brut.grilles = {"alv": [{"VARIANT": "BCP_FR12"},
+                                {"VARIANT": "BCP_FR13"}]}
+        return brut
+
+    def test_le_double_clic_est_traite_comme_une_navigation(self):
+        """Il charge une variante, ouvre un detail, descend dans une ligne."""
+        source = Path("falcon/controleur/gardes.py").read_text(encoding="utf-8")
+        corps = source.split("def grid_double_click(self")[1]
+        self.assertIn("_est_sauvegarde", corps.split("\n    def ")[0])
+
+    def test_une_etape_declaree_sauvegarde_est_honoree_au_double_clic(self):
+        """Le geste par lequel une etape sauve ne change pas le fait qu'elle
+        sauve : le plafond doit la compter."""
+        garde = _garde(self._alv(), plafond=1)
+        contrat = Contrat(nom="charger", ecran_attendu=IA08.triplet,
+                          sauvegarde=True)
+        with garde.sous_contrat(contrat):
+            garde.grid_double_click("alv")
+            with self.assertRaises(PlafondAtteint):
+                garde.grid_double_click("alv")
+        self.assertEqual(garde.sauvegardes, 1)
+
+    def test_un_double_clic_sauvegardant_est_refuse_en_dry_run(self):
+        garde = _garde(self._alv(), mode="dry-run")
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet,
+                                        sauvegarde=True)):
+            with self.assertRaises(RefusDryRun):
+                garde.grid_double_click("alv")
+
+    def test_la_selection_et_le_positionnement_ne_sauvent_jamais_d_office(self):
+        """Ni l'un ni l'autre n'ecrit dans SAP : les compter consommerait le
+        plafond avant la premiere vraie sauvegarde."""
+        garde = _garde(self._alv(), plafond=1)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            garde.grid_select_rows("alv", (0, 1))
+            garde.grid_set_current_row("alv", 1)
+        self.assertEqual(garde.sauvegardes, 0)
+
+    def test_le_mauvais_ecran_arrete_le_double_clic(self):
+        brut = self._alv()
+        brut.identite = AUTRE
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(nom="c", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(EcartIdentite):
+                garde.grid_double_click("alv")
+
+    def test_le_double_clic_agit_sur_la_cellule_courante_pas_sur_la_selection(self):
+        """Le piege releve sur la trace, exerce bout a bout.
+
+        Selectionner la ligne 1 ne suffit pas : sans positionnement, le
+        double-clic porte sur la ligne 0. C'est une valeur fausse traitee sans
+        la moindre erreur.
+        """
+        brut = self._alv()
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            garde.grid_select_rows("alv", (1,))
+            garde.grid_double_click("alv")
+        self.assertEqual(brut.gestes[-1], ("grid_double_click", "alv", "0"))
+
+        brut.gestes.clear()
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            garde.grid_set_current_row("alv", 1)
+            garde.grid_select_rows("alv", (1,))
+            garde.grid_double_click("alv")
+        self.assertEqual(brut.gestes[-1], ("grid_double_click", "alv", "1"))
 
 
 class TestGarde4Relecture(unittest.TestCase):

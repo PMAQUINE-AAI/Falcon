@@ -374,6 +374,27 @@ class DriverGarde(Driver):
         self._garde_identite()
         return self.__brut.grid_read(id, ligne, colonne)
 
+    def grid_select_rows(self, id: str, rangs: tuple[int, ...]) -> None:
+        self._garde_identite()
+        self.__brut.grid_select_rows(id, rangs)
+        self._apres_action()
+
+    def grid_set_current_row(self, id: str, ligne: int) -> None:
+        self._garde_identite()
+        self.__brut.grid_set_current_row(id, ligne)
+        self._apres_action()
+
+    def grid_double_click(self, id: str) -> None:
+        # Le double-clic NAVIGUE : il charge une variante, ouvre un detail,
+        # descend dans une ligne. Il est traite comme `press`, y compris pour
+        # le rayon d'action — une etape qui se declare `sauvegarde` est honoree
+        # quel que soit le geste par lequel elle sauve.
+        self._garde_identite()
+        if self._est_sauvegarde("grid_double_click", cible=id):
+            self._avant_sauvegarde(f"grid_double_click({id!r})")
+        self.__brut.grid_double_click(id)
+        self._apres_action()
+
     # -- table control -----------------------------------------------------------
 
     def table_visible_rows(self, id: str) -> int:
