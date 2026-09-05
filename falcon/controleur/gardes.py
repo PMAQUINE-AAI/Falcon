@@ -175,8 +175,16 @@ class DriverGarde(Driver):
         if attendu is not None and statut.type != attendu:
             # Le silence est un signal : une selection qui ne remonte rien et
             # n'emet aucun message n'est pas une preuve d'absence de donnees.
+            #
+            # La signature porte AUSSI l'identite du message. Sans elle,
+            # declarer `statut_attendu` sur une etape tuait la liste blanche :
+            # un message benin connu prenait cette branche, perdait son id et
+            # son numero, et n'etait plus appariable par aucune entree. Le
+            # renforcement d'une etape produisait son affaiblissement.
             signature = Signature(canal="garde", garde="statut",
                                   attendu=attendu, observe=statut.type,
+                                  type=statut.type, id=statut.id,
+                                  numero=statut.numero, texte=statut.texte,
                                   contexte=self._contexte())
         elif statut.type in {"E", "A"}:
             signature = Signature(canal="statut", type=statut.type,
@@ -319,11 +327,15 @@ class DriverGarde(Driver):
     def write(self, id: str, valeur: str) -> None:
         self._garde_identite()
         self.__brut.write(id, valeur)
+        # Fenetres et statut AVANT la relecture : si SAP a mal reagi, on
+        # l'apprend avant de relire un champ qui n'a peut-etre plus de sens.
+        self._apres_action()
         self._garde_relecture(id, valeur)
 
     def set_checked(self, id: str, coche: bool) -> None:
         self._garde_identite()
         self.__brut.set_checked(id, coche)
+        self._apres_action()
 
     # -- actions --------------------------------------------------------------
 
@@ -371,6 +383,9 @@ class DriverGarde(Driver):
     def table_scroll(self, id: str, position: int) -> None:
         self._garde_identite()
         self.__brut.table_scroll(id, position)
+        # Un defilement de table control declenche un aller-retour serveur :
+        # un popup surgi la ne doit pas etre attribue a l'action suivante.
+        self._apres_action()
 
 
 def _comparer(ecrit: str, lu: str, mode: str) -> str:

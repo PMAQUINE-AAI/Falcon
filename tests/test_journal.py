@@ -228,15 +228,24 @@ class TestReprise(unittest.TestCase):
             for enregistrement in enregistrements:
                 journal.ecrire(enregistrement)
 
+    def test_les_empreintes_sont_obligatoires(self):
+        """Constat de revue : elles valaient « » par defaut et la comparaison
+        etait gardee par un `if`, si bien qu'un appel distrait ne verifiait
+        rien. La garde la plus severe s'obtenait a l'envers, par omission."""
+        with self.assertRaises(TypeError):
+            preparer(self.chemin, ["a1"])           # type: ignore[call-arg]
+
     def test_journal_absent_tout_est_a_traiter(self):
-        reprise = preparer(self.chemin, ["a1", "a2"])
+        reprise = preparer(self.chemin, ["a1", "a2"],
+                           pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
         self.assertEqual(reprise.a_traiter, ("a1", "a2"))
 
     def test_les_items_termines_ne_sont_pas_repris(self):
         self._journal(_ouverture(),
                       ItemDebut(run_id=RUN, item_id="a1"),
                       ItemFin(run_id=RUN, item_id="a1", etat=OK))
-        reprise = preparer(self.chemin, ["a1", "a2", "a3"])
+        reprise = preparer(self.chemin, ["a1", "a2", "a3"],
+                           pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
         self.assertEqual(reprise.a_traiter, ("a2", "a3"))
 
     def test_un_ko_n_est_pas_rejoue_par_la_reprise(self):
@@ -245,32 +254,39 @@ class TestReprise(unittest.TestCase):
         self._journal(_ouverture(),
                       ItemDebut(run_id=RUN, item_id="a1"),
                       ItemFin(run_id=RUN, item_id="a1", etat=KO))
-        self.assertEqual(preparer(self.chemin, ["a1", "a2"]).a_traiter, ("a2",))
+        self.assertEqual(
+            preparer(self.chemin, ["a1", "a2"], pipeline_empreinte="pipe1",
+                     jeu_empreinte="jeu1").a_traiter, ("a2",))
 
     def test_les_douteux_sont_ecartes_et_listes(self):
         self._journal(_ouverture(),
                       ItemDebut(run_id=RUN, item_id="a1"),
                       Etape(run_id=RUN, etape="valider", item_id="a1",
                             sauvegarde=True))
-        reprise = preparer(self.chemin, ["a1", "a2"])
+        reprise = preparer(self.chemin, ["a1", "a2"],
+                           pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
         self.assertEqual(reprise.a_traiter, ("a2",))
         self.assertEqual(reprise.douteux, ("a1",))
 
     def test_un_item_interrompu_sans_sauvegarde_est_repris(self):
         self._journal(_ouverture(), ItemDebut(run_id=RUN, item_id="a1"))
-        self.assertEqual(preparer(self.chemin, ["a1"]).a_traiter, ("a1",))
+        self.assertEqual(
+            preparer(self.chemin, ["a1"], pipeline_empreinte="pipe1",
+                     jeu_empreinte="jeu1").a_traiter, ("a1",))
 
     def test_jeu_modifie_refuse_la_reprise(self):
         """Garde d'identite appliquee a la reprise : reprendre sur un jeu
         modifie, c'est avoir un modele du monde faux."""
         self._journal(_ouverture())
         with self.assertRaises(RepriseIncoherente):
-            preparer(self.chemin, ["a1"], jeu_empreinte="AUTRE")
+            preparer(self.chemin, ["a1"], pipeline_empreinte="pipe1",
+                     jeu_empreinte="AUTRE")
 
     def test_pipeline_modifiee_refuse_la_reprise(self):
         self._journal(_ouverture())
         with self.assertRaises(RepriseIncoherente):
-            preparer(self.chemin, ["a1"], pipeline_empreinte="AUTRE")
+            preparer(self.chemin, ["a1"], pipeline_empreinte="AUTRE",
+                     jeu_empreinte="jeu1")
 
     def test_empreintes_identiques_acceptent_la_reprise(self):
         self._journal(_ouverture())
@@ -281,12 +297,14 @@ class TestReprise(unittest.TestCase):
     def test_forcer_exige_un_motif(self):
         self._journal(_ouverture())
         with self.assertRaises(ValueError):
-            preparer(self.chemin, ["a1"], jeu_empreinte="AUTRE", forcer=True)
+            preparer(self.chemin, ["a1"], pipeline_empreinte="pipe1",
+                     jeu_empreinte="AUTRE", forcer=True)
 
     def test_forcer_avec_motif_passe(self):
         self._journal(_ouverture())
-        reprise = preparer(self.chemin, ["a1"], jeu_empreinte="AUTRE",
-                           forcer=True, motif="lignes deja traitees retirees")
+        reprise = preparer(self.chemin, ["a1"], pipeline_empreinte="pipe1",
+                           jeu_empreinte="AUTRE", forcer=True,
+                           motif="lignes deja traitees retirees")
         self.assertEqual(reprise.a_traiter, ("a1",))
 
     def test_le_refus_de_reprise_est_bloquant(self):

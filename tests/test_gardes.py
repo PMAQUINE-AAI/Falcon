@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from pathlib import Path
 from dataclasses import fields
 
 from falcon.controleur import (
@@ -166,6 +167,53 @@ class TestGarde3Fenetres(unittest.TestCase):
         # garde relachee doit rester visible au rapport.
         self.assertEqual([(c.garde, c.verdict) for c in garde.constats],
                          [("fenetre", "elargie")])
+
+
+class TestToutesLesMutationsSontGardees(unittest.TestCase):
+    """Constat de revue : fenetres et statut n'etaient releves qu'apres
+    `press`, `select` et `vkey`. `write`, `set_checked` et `table_scroll`
+    mutent pourtant l'ecran — un `table_scroll` declenche un aller-retour
+    serveur — et un popup surgi la n'etait vu qu'a l'action suivante, donc
+    attribue a la mauvaise etape."""
+
+    def _surgissement(self):
+        brut = DriverScripte(identite=IA08, valeurs={"champ": "x"})
+        brut.tables = {"tbl": {"visibles": 5}}
+
+        def surgir(driver, geste, cible):
+            driver.fenetres = (Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]"))
+
+        brut.apres_action = surgir
+        return brut
+
+    def test_une_ecriture_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="e", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.write("champ", "x")
+
+    def test_une_case_a_cocher_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="c", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.set_checked("case", True)
+
+    def test_un_defilement_voit_la_fenetre_imprevue(self):
+        garde = _garde(self._surgissement())
+        with garde.sous_contrat(Contrat(nom="d", ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.table_scroll("tbl", 5)
+
+    def test_toute_mutation_de_la_surface_releve_l_ecran(self):
+        """Epingle la liste : ajouter une methode mutante sans la garder
+        devient un geste delibere qui met a jour ce test."""
+        mutantes = {"write", "set_checked", "press", "select", "vkey",
+                    "table_scroll"}
+        source = Path("falcon/controleur/gardes.py").read_text(encoding="utf-8")
+        for methode in sorted(mutantes):
+            corps = source.split(f"def {methode}(self")[1].split("\n    def ")[0]
+            with self.subTest(methode=methode):
+                self.assertIn("_apres_action()", corps)
 
 
 class TestGarde4Relecture(unittest.TestCase):

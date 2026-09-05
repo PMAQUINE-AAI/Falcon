@@ -355,6 +355,71 @@ class TestAppariement(unittest.TestCase):
                                        numero="045")).entree, "exemple")
 
 
+class TestListeBlancheSurEcart(unittest.TestCase):
+    """Constat de revue : declarer `statut_attendu` sur une etape tuait la
+    liste blanche. Le message benin prenait la branche « ecart », perdait son
+    id et son numero, et n'etait plus appariable — le renforcement d'une etape
+    produisait son affaiblissement."""
+
+    def setUp(self):
+        self.dossier = tempfile.TemporaryDirectory()
+        self.racine = Path(self.dossier.name)
+        self.addCleanup(self.dossier.cleanup)
+        self.registre = Registre.charger(_ecrire(self.racine, """
+            version: 1
+            entrees:
+              - nom: avertissement_benin_connu
+                categorie: connue_benigne
+                canal: garde
+                correspondance:
+                  garde: statut
+                  attendu: "S"
+                  observe: "W"
+                  id: CP
+                  numero: "042"
+                politique: {poursuivre: true}
+                origine: falcon_observe
+                justification: une raison
+            """))
+
+    def test_un_message_connu_reste_apparie_malgre_l_ecart(self):
+        verdict = self.registre.classer(
+            Signature(canal="garde", garde="statut", attendu="S", observe="W",
+                      id="CP", numero="042"))
+        self.assertEqual(verdict.entree, "avertissement_benin_connu")
+        self.assertFalse(verdict.bloquant)
+
+    def test_un_autre_message_produisant_le_meme_ecart_reste_inconnu(self):
+        """L'entree ne doit pas apparier indifferemment tout ce qui produit
+        le meme ecart."""
+        verdict = self.registre.classer(
+            Signature(canal="garde", garde="statut", attendu="S", observe="W",
+                      id="ZZ", numero="999"))
+        self.assertTrue(verdict.inconnu)
+        self.assertTrue(verdict.bloquant)
+
+    def test_deux_ecarts_visant_des_messages_differents_coexistent(self):
+        registre = Registre.charger(_ecrire(self.racine, """
+            version: 1
+            entrees:
+              - nom: sur_cp_042
+                categorie: connue_benigne
+                canal: garde
+                correspondance: {garde: statut, attendu: "S", observe: "W", id: CP, numero: "042"}
+                politique: {poursuivre: true}
+                origine: falcon_observe
+                justification: une raison
+              - nom: sur_cp_043
+                categorie: connue_fautive
+                canal: garde
+                correspondance: {garde: statut, attendu: "S", observe: "W", id: CP, numero: "043"}
+                politique: {poursuivre: true, item: ko}
+                origine: falcon_observe
+                justification: une autre raison
+            """, "deux.yaml"))
+        self.assertEqual(len(registre), 2)
+
+
 class TestRegistreLivre(unittest.TestCase):
     """Le registre livre demarre presque vide — c'est voulu."""
 

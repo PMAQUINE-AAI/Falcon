@@ -113,16 +113,18 @@ class Reprise:
     douteux: tuple[str, ...]
     etats: dict[str, EtatItem]
 
-    @property
-    def deja_faits(self) -> int:
-        return len(self.etats) - len(self.douteux)
+    #: Items du jeu courant deja termines. Ne compte QUE le jeu courant :
+    #: `etats` couvre tout le journal, executions et jeux confondus, et
+    #: melanger les deux pouvait donner un compteur superieur au nombre
+    #: d'items a traiter.
+    deja_faits: int = 0
 
 
 def preparer(chemin: str | Path,
              items: Sequence[str],
              *,
-             pipeline_empreinte: str = "",
-             jeu_empreinte: str = "",
+             pipeline_empreinte: str,
+             jeu_empreinte: str,
              forcer: bool = False,
              motif: str = "") -> Reprise:
     """Prepare une reprise sur un journal existant.
@@ -134,6 +136,12 @@ def preparer(chemin: str | Path,
 
     La comparaison des empreintes est la garde d'identite appliquee a la
     reprise. Passer outre demande `forcer` ET un motif, qui sera trace.
+
+    Les empreintes n'ont deliberement PAS de valeur par defaut : les omettre
+    est une `TypeError` a l'appel, pas un silence. La version precedente les
+    laissait vides et gardait la comparaison derriere un `if`, si bien qu'un
+    `preparer(chemin, items)` distrait ne verifiait rien — la garde la plus
+    severe du dispositif s'obtenait a l'envers, par omission.
     """
     enregistrements = lire(chemin)
 
@@ -162,4 +170,7 @@ def preparer(chemin: str | Path,
                       or connus[i].etat not in TERMINAUX)
     douteux = tuple(i for i in items
                     if connus.get(i) is not None and connus[i].etat == DOUTEUX)
-    return Reprise(a_traiter=a_traiter, douteux=douteux, etats=connus)
+    faits = sum(1 for i in items
+                if connus.get(i) is not None and connus[i].etat in TERMINAUX)
+    return Reprise(a_traiter=a_traiter, douteux=douteux, etats=connus,
+                   deja_faits=faits)

@@ -179,6 +179,15 @@ def _apparie(entree: Entree, signature: Signature) -> bool:
         for cle in ("attendu", "observe"):
             if cle in attendus and attendus[cle] != getattr(signature, cle):
                 return False
+        # L'identite du message, quand l'entree la declare. C'est ce qui rend
+        # la liste blanche utilisable sur une etape qui declare un statut
+        # attendu : sans elle, une entree d'ecart apparierait indifferemment
+        # tous les messages produisant le meme ecart.
+        if "id" in attendus and attendus["id"] != signature.id:
+            return False
+        if "numero" in attendus and not meme_numero(str(attendus["numero"]),
+                                                    signature.numero):
+            return False
         return True
 
     # canaux com et python : appariement sur le nom d'exception
@@ -221,8 +230,14 @@ def _memes_criteres(gauche: Entree, droite: Entree) -> bool:
                 and (not _types_declares(gauche) or not _types_declares(droite)
                      or bool(_types_declares(gauche) & _types_declares(droite))))
     if gauche.canal == "garde":
-        return all(g.get(cle) == d.get(cle)
-                   for cle in ("garde", "attendu", "observe"))
+        if any(g.get(cle) != d.get(cle)
+               for cle in ("garde", "attendu", "observe")):
+            return False
+        if "id" in g and "id" in d and g["id"] != d["id"]:
+            return False
+        if "numero" in g and "numero" in d:
+            return meme_numero(str(g["numero"]), str(d["numero"]))
+        return True
     return g.get("exception") == d.get("exception")
 
 
@@ -263,8 +278,14 @@ def _peuvent_se_confondre(gauche: Entree, droite: Entree) -> bool:
         return not types_g or not types_d or bool(types_g & types_d)
 
     if gauche.canal == "garde":
-        return all(g.get(cle) == d.get(cle)
-                   for cle in ("garde", "attendu", "observe"))
+        if any(g.get(cle) != d.get(cle)
+               for cle in ("garde", "attendu", "observe")):
+            return False
+        if "id" in g and "id" in d and g["id"] != d["id"]:
+            return False
+        if "numero" in g and "numero" in d:
+            return meme_numero(str(g["numero"]), str(d["numero"]))
+        return True
 
     return g.get("exception") == d.get("exception")
 
