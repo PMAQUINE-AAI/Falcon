@@ -37,7 +37,11 @@ class Rapport:
 def depuis_journal(enregistrements: Iterable[Enregistrement]) -> Rapport:
     enregistrements = list(enregistrements)
 
-    ouverture = next((e for e in enregistrements
+    # La DERNIERE ouverture, pas la premiere. Le journal est partage entre
+    # executions — c'est ce qui rend la reprise possible — donc prendre la
+    # premiere ouverture avec la derniere cloture affichait la provenance d'un
+    # run et la duree d'un autre.
+    ouverture = next((e for e in reversed(enregistrements)
                       if isinstance(e, ExecutionDebut)), None)
     cloture = next((e for e in reversed(enregistrements)
                     if isinstance(e, ExecutionFin)), None)

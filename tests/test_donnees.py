@@ -296,6 +296,25 @@ class TestRapport(unittest.TestCase):
         self.assertEqual(len(rapport.derogations), 1)
         self.assertIn("editeur non adressable", rendre(rapport))
 
+    def test_la_provenance_et_la_duree_viennent_du_meme_run(self):
+        """Constat de revue : le journal etant partage entre executions,
+        prendre la premiere ouverture avec la derniere cloture affichait la
+        provenance d'un run et la duree d'un autre."""
+        enregistrements = self._journal(
+            ExecutionDebut(run_id="r1", mode="run", classe="iterative",
+                           pipeline="ancienne", pipeline_empreinte="p",
+                           systeme="K75"),
+            ExecutionFin(run_id="r1", etat="interrompu", duree_ms=100),
+            ExecutionDebut(run_id="r2", mode="resume", classe="iterative",
+                           pipeline="courante", pipeline_empreinte="p",
+                           systeme="P75"),
+            ExecutionFin(run_id="r2", etat="termine", duree_ms=4200),
+        )
+        rapport = depuis_journal(enregistrements)
+        self.assertEqual(rapport.pipeline, "courante")
+        self.assertEqual(rapport.systeme, "P75")
+        self.assertEqual(rapport.duree_ms, 4200)
+
     def test_un_journal_vide_ne_fait_pas_echouer_le_rapport(self):
         self.assertIn("aucun", rendre(depuis_journal([])))
 

@@ -499,6 +499,17 @@ class TestDump(unittest.TestCase):
         chemin = ecrire_dump(self.racine / "dumps", {"objet": object()})
         self.assertIn("object", chemin.read_text(encoding="utf-8"))
 
+    def test_deux_dumps_de_la_meme_milliseconde_coexistent(self):
+        """Constat de revue : le second ecrasait le premier. Un dump perdu est
+        un incident qu'on ne pourra pas classer, donc une entree de taxonomie
+        qui ne sera jamais ecrite."""
+        fige = horloge_figee("2026-09-03T12:00:00.000Z")
+        premier = ecrire_dump(self.racine / "d", {"rang": 1}, horloge=fige)
+        second = ecrire_dump(self.racine / "d", {"rang": 2}, horloge=fige)
+        self.assertNotEqual(premier, second)
+        self.assertEqual(json.loads(premier.read_text(encoding="utf-8"))["rang"], 1)
+        self.assertEqual(json.loads(second.read_text(encoding="utf-8"))["rang"], 2)
+
     def test_cree_les_dossiers_parents(self):
         chemin = ecrire_dump(self.racine / "a" / "b" / "c", {})
         self.assertTrue(chemin.parent.is_dir())

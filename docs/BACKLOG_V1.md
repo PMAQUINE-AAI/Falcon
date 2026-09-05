@@ -119,6 +119,29 @@ preuve revient à qui sait, pas au défaut.
 **L'annonce avant l'acte.** Une sauvegarde est journalisée *avant* d'être
 tentée. C'est la seule chose qui survive à une garde qui lève au milieu.
 
+### Deuxième passe : les neuf constats restants
+
+Les quatre moyens et les cinq mineurs de la même revue, fermés dans un second
+temps. Le séquencement n'était pas libre : `Contrat` devait être refermé
+**avant** le lot 8, qui mappe du YAML de pipeline sur cet objet.
+
+| # | Défaut | Conséquence |
+|---|---|---|
+| M1 | `Contrat` offrait trois neutralisations sans trace, dont une **par défaut** | une étape distraite désarmait la garde qui attrape le plus de dérives |
+| M2 | la garde de reprise était optionnelle par défaut | `preparer(chemin, items)` ne vérifiait rien et ne levait rien |
+| M3 | `write`, `set_checked`, `table_scroll` ne relevaient ni fenêtre ni statut | un popup surgi là était attribué à la mauvaise étape |
+| M4 | déclarer `statut_attendu` tuait la liste blanche de messages | renforcer une étape produisait son affaiblissement |
+| m1 | `Reprise.deja_faits` mélangeait deux périmètres | compteur pouvant dépasser le nombre d'items à traiter |
+| m2 | rapport : première ouverture, dernière clôture | provenance d'un run, durée d'un autre |
+| m3 | `Derogation.portee` déclarée et jamais lue | une dérogation d'étape valait pour tout le contrat |
+| m4 | deux dumps de la même milliseconde s'écrasaient | un incident qu'on ne pourra jamais classer |
+| m5 | plafond en sauvegardes là où la spec dit items | écart non inscrit — décision n°11 |
+
+Le principe retenu pour M1 est celui de tout le dispositif : **les trois
+relâchements restent possibles, mais deviennent des décisions au lieu de
+s'obtenir par omission**, et les trois laissent une trace posée une fois par
+étape. C'est la différence entre une décision et un oubli.
+
 ## Questions ouvertes qui toucheront un lot
 
 Reprises du §8 de la spec, avec le lot qu'elles concernent :

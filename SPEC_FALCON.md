@@ -253,6 +253,7 @@ Le cas 3 ne produit pas de remédiation : FALCON automatise l'extraction, un pro
 | 8 | Parseur de trace VBScript | **V1** — avancé depuis la V2 : il alimente le brouillon de pipeline du §4.3, et ne dépend d'aucune autre brique |
 | 9 | Étendue de la couture | **Élargie** au-delà des huit méthodes du §3.4 : `select`, case à cocher, accès ALV et accès table control. La couture étant irréversible, l'étendre après coup coûterait la rétrofit que le §3.4 dit vouloir éviter — et, entretemps, quelqu'un contournerait en appelant COM ailleurs |
 | 10 | Gardes dérogeables | **Statut, fenêtres, relecture uniquement.** L'identité d'écran et le rayon d'action ne le sont pas : une identité violée signale que le modèle du monde est faux, et le plafond est la dernière barrière avant le lot entier. Une dérogation ne désactive rien — la garde s'exécute et son constat reste tracé, seule l'issue passe de « interrompre » à « noter » |
+| 11 | Rayon d'action | **Deux plafonds.** La couture porte un plafond de **sauvegardes** — seule chose qu'elle sache compter, et dernière barrière avant l'écriture ; le moteur portera un plafond d'**items** (§5 point 5) au lot 10. Un item à plusieurs sauvegardes consomme plusieurs unités du premier et une seule du second |
 
 **Reste ouvert :**
 

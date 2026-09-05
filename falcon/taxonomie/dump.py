@@ -40,7 +40,16 @@ def ecrire_dump(dossier: str | Path,
     dossier.mkdir(parents=True, exist_ok=True)
 
     instant = horloge()
-    chemin = dossier / f"{_horodatage_pour_nom(instant)}_{nom}.json"
+    base = f"{_horodatage_pour_nom(instant)}_{nom}"
+    chemin = dossier / f"{base}.json"
+
+    # Deux incidents dans la meme milliseconde ecrasaient le premier. Un dump
+    # perdu est un incident qu'on ne pourra pas classer, donc une entree de
+    # taxonomie qui ne sera jamais ecrite.
+    rang = 1
+    while chemin.exists():
+        rang += 1
+        chemin = dossier / f"{base}_{rang}.json"
 
     charge = {"horodatage": instant, "nom": nom, **contexte}
     chemin.write_text(
