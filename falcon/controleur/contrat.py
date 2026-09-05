@@ -28,6 +28,9 @@ DEROGEABLES = frozenset({"statut", "fenetre", "relecture"})
 #: betise, il empeche d'ecrire « ok » et de passer a autre chose.
 MOTIF_MINIMAL = 30
 
+#: Portee d'une derogation qui vaut pour toutes les etapes du contrat.
+PORTEE_TOTALE = "*"
+
 #: Comment comparer ce qu'on a ecrit a ce qu'on relit.
 #:
 #: `casse` est le defaut et n'accepte QUE les differences de casse et
@@ -70,19 +73,35 @@ class Derogation:
                 f"desactivee en douce")
 
 
+class ContratIncomplet(Exception):
+    """Une etape qui ne dit pas ou elle s'execute."""
+
+
 @dataclass(frozen=True)
 class Contrat:
     """Ce qu'une etape declare, et que les gardes verifient.
 
-    `ecran_attendu` a None signifie navigation libre : l'etape ne sait pas
-    encore ou elle atterrit. C'est le seul cas ou la garde d'identite ne
-    s'applique pas, et il doit rester rare.
+    **Une etape doit dire ou elle s'execute.** L'ecran attendu est obligatoire,
+    ou bien la navigation libre est declaree explicitement. La version
+    precedente laissait `ecran_attendu` a None PAR DEFAUT, ce qui faisait
+    qu'une etape distraite neutralisait sans un mot la garde qui attrape a
+    elle seule la majorite des derives.
+
+    Trois relachements sont possibles, et les trois laissent une trace au
+    moment ou le contrat est pose :
+
+        navigation_libre=True       la garde d'identite ne s'applique pas
+        Derogation("relecture")     la relecture apres ecriture est sautee
+        fenetres_attendues elargie  une modale est prevue par l'etape
+
+    Aucun n'est silencieux, et aucun ne s'obtient par omission : c'est la
+    difference entre une decision et un oubli.
     """
 
     nom: str = ""
     ecran_attendu: tuple[str, str, str] | None = None    # transaction, programme, dynpro
+    navigation_libre: bool = False
     fenetres_attendues: tuple[str, ...] = ("wnd[0]",)
-    relire: bool = True                    # garde 4, active par defaut
     comparaison: str = "casse"
     statut_attendu: str | None = None      # « S » si l'etape DOIT produire un message
     sauvegarde: bool = False
@@ -94,8 +113,51 @@ class Contrat:
                 f"comparaison {self.comparaison!r} inconnue, "
                 f"attendu {sorted(COMPARAISONS)}")
 
+        if self.ecran_attendu is None and not self.navigation_libre:
+            raise ContratIncomplet(
+                f"etape {self.nom!r} : declarer `ecran_attendu`, ou "
+                f"`navigation_libre=True` si l'etape ne sait pas encore ou "
+                f"elle atterrit. Une etape muette neutralise la garde "
+                f"d'identite sans que personne ne le voie")
+
+        if self.ecran_attendu is not None and self.navigation_libre:
+            raise ContratIncomplet(
+                f"etape {self.nom!r} : `navigation_libre` et `ecran_attendu` "
+                f"ensemble n'ont pas de sens — l'un des deux est de trop")
+
     def derogation_pour(self, garde: str) -> Derogation | None:
+        """La derogation applicable a cette garde, si sa portee couvre l'etape.
+
+        `portee` etait declaree et jamais lue : une derogation ecrite pour une
+        etape valait pour toutes celles qui partageaient le contrat.
+        """
         for derogation in self.derogations:
-            if derogation.garde == garde:
+            if derogation.garde != garde:
+                continue
+            if derogation.portee in (PORTEE_TOTALE, f"etape:{self.nom}"):
                 return derogation
         return None
+
+    @property
+    def relachements(self) -> tuple[tuple[str, str, dict], ...]:
+        """(garde, verdict, detail) pour chaque garde relachee par ce contrat.
+
+        Lu une fois par etape, au moment ou le contrat est pose — pas a chaque
+        action, ce qui noierait le journal.
+        """
+        traces: list[tuple[str, str, dict]] = []
+
+        if self.navigation_libre:
+            traces.append(("identite", "non_gardee", {"etape": self.nom}))
+
+        elargies = [f for f in self.fenetres_attendues if f != "wnd[0]"]
+        if elargies:
+            traces.append(("fenetre", "elargie",
+                           {"etape": self.nom, "attendues": elargies}))
+
+        for derogation in self.derogations:
+            traces.append((derogation.garde, "derogee",
+                           {"etape": self.nom, "portee": derogation.portee,
+                            "motif": derogation.motif}))
+
+        return tuple(traces)

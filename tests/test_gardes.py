@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from dataclasses import fields
 
 from falcon.controleur import (
-    DEROGEABLES, Contrat, Derogation, DerogationRefusee, DriverGarde, Poste,
+    DEROGEABLES, Contrat, ContratIncomplet, Derogation, DerogationRefusee,
+    DriverGarde, Poste,
 )
 from falcon.couture import Driver
 from falcon.couture.double import DriverScripte
@@ -54,12 +56,27 @@ class TestGarde1Identite(unittest.TestCase):
         with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
             self.assertEqual(garde.read("champ"), "x")
 
-    def test_navigation_libre_n_est_pas_gardee(self):
-        """Une etape qui ne sait pas encore ou elle atterrit."""
+    def test_navigation_libre_se_declare_et_se_trace(self):
+        """Le besoin reste legitime — une etape qui ne sait pas encore ou elle
+        atterrit — mais il devient une decision, pas un oubli."""
         brut = DriverScripte(identite=AUTRE, valeurs={"champ": "x"})
         garde = _garde(brut)
-        with garde.sous_contrat(Contrat(ecran_attendu=None)):
+        contrat = Contrat(nom="atterrir", navigation_libre=True)
+        with garde.sous_contrat(contrat):
             self.assertEqual(garde.read("champ"), "x")
+        self.assertEqual([(c.garde, c.verdict) for c in garde.constats],
+                         [("identite", "non_gardee")])
+
+    def test_une_etape_muette_est_refusee(self):
+        """Constat de revue : `ecran_attendu=None` etait le DEFAUT, donc une
+        etape distraite neutralisait sans un mot la garde qui attrape a elle
+        seule la majorite des derives."""
+        with self.assertRaises(ContratIncomplet):
+            Contrat(nom="distraite")
+
+    def test_declarer_les_deux_est_refuse(self):
+        with self.assertRaises(ContratIncomplet):
+            Contrat(nom="x", ecran_attendu=IA08.triplet, navigation_libre=True)
 
     def test_l_ecart_est_trace(self):
         brut = DriverScripte(identite=AUTRE, valeurs={"champ": "x"})
@@ -115,7 +132,7 @@ class TestGarde2Statut(unittest.TestCase):
         brut = DriverScripte(identite=IA08,
                              statut=Statut(type="E", id="ZZ", numero="999"))
         garde = _garde(brut)
-        contrat = Contrat(ecran_attendu=IA08.triplet,
+        contrat = Contrat(nom="x", ecran_attendu=IA08.triplet,
                           derogations=(Derogation("statut", "etape:x", MOTIF),))
         with garde.sous_contrat(contrat):
             garde.press("bouton")            # ne leve pas
@@ -141,11 +158,14 @@ class TestGarde3Fenetres(unittest.TestCase):
         brut = DriverScripte(identite=IA08,
                              fenetres=(Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]")))
         garde = _garde(brut)
-        contrat = Contrat(ecran_attendu=IA08.triplet,
+        contrat = Contrat(nom="modale", ecran_attendu=IA08.triplet,
                           fenetres_attendues=("wnd[0]", "wnd[1]"))
         with garde.sous_contrat(contrat):
             garde.press("bouton")
-        self.assertEqual(garde.constats, [])
+        # La modale est acceptee, mais l'elargissement laisse une trace : une
+        # garde relachee doit rester visible au rapport.
+        self.assertEqual([(c.garde, c.verdict) for c in garde.constats],
+                         [("fenetre", "elargie")])
 
 
 class TestGarde4Relecture(unittest.TestCase):
@@ -210,9 +230,19 @@ class TestGarde4Relecture(unittest.TestCase):
             with self.assertRaises(ItemAbandonne):
                 garde.write("champ", "fr12")
 
-    def test_la_relecture_est_active_par_defaut(self):
-        """Le defaut penche du cote sur : l'oubli doit couter, pas passer."""
-        self.assertTrue(Contrat().relire)
+    def test_la_relecture_ne_se_saute_que_par_derogation(self):
+        """Il n'existe plus de drapeau booleen pour la sauter en silence."""
+        self.assertNotIn("relire", {c.name for c in fields(Contrat)})
+
+        brut = DriverScripte(identite=IA08)
+        brut.a_l_ecriture = lambda id, valeur: ""       # SAP refuse la saisie
+        garde = _garde(brut)
+        contrat = Contrat(nom="coller", ecran_attendu=IA08.triplet,
+                          derogations=(Derogation("relecture", "etape:coller",
+                                                  MOTIF),))
+        with garde.sous_contrat(contrat):
+            garde.write("champ", "FR12")                # ne leve pas
+        self.assertEqual([c.verdict for c in garde.constats], ["derogee"])
 
 
 class TestGarde5Rayon(unittest.TestCase):

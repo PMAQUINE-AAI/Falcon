@@ -5,13 +5,14 @@ cette asymetrie qui fait qu'une pipeline ne peut pas desactiver une garde.
 """
 
 from .contrat import (
-    COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, Contrat, Derogation,
-    DerogationRefusee,
+    COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, PORTEE_TOTALE, Contrat,
+    ContratIncomplet, Derogation, DerogationRefusee,
 )
 from .gardes import Constat, DriverGarde
 from .poste import Poste
 
 __all__ = [
-    "Contrat", "Derogation", "DerogationRefusee", "DEROGEABLES",
+    "Contrat", "ContratIncomplet", "Derogation", "DerogationRefusee",
+    "DEROGEABLES", "PORTEE_TOTALE",
     "MOTIF_MINIMAL", "COMPARAISONS", "DriverGarde", "Constat", "Poste",
 ]

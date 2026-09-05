@@ -77,7 +77,10 @@ class DriverGarde(Driver):
         self._mode = mode
         self._plafond = plafond_sauvegardes
         self._sauvegardes = 0
-        self._contrat = Contrat()
+        # Hors etape : aucun ecran n'est attendu parce qu'aucune etape ne
+        # tourne. Ce contrat n'est jamais pose par `sous_contrat`, donc il ne
+        # trace rien — et toute action reelle passe par un contrat d'etape.
+        self._contrat = Contrat(nom="(hors etape)", navigation_libre=True)
         self.constats: list[Constat] = []
         self._noter_externe = noter
 
@@ -92,6 +95,9 @@ class DriverGarde(Driver):
         """
         precedent = self._contrat
         self._contrat = contrat
+        for garde, verdict, detail in contrat.relachements:
+            self._noter(Constat(garde=garde, verdict=verdict, detail=detail,
+                                derogation=contrat.derogation_pour(garde)))
         try:
             yield self
         finally:
@@ -123,7 +129,9 @@ class DriverGarde(Driver):
         """
         attendu = self._contrat.ecran_attendu
         if attendu is None:
-            return                              # etape de navigation libre
+            # Navigation libre : declaree explicitement par l'etape, et deja
+            # tracee au moment ou le contrat a ete pose.
+            return
         observe = self.__brut.screen().triplet
         if tuple(attendu) != observe:
             self._noter(Constat(garde="identite", verdict="violation",
@@ -192,7 +200,11 @@ class DriverGarde(Driver):
         desactiverait ; une comparaison laxiste et muette laisserait passer une
         vraie divergence.
         """
-        if not self._contrat.relire:
+        # Une etape qui ne PEUT pas relire — l'editeur SAPscript n'est pas
+        # adressable — le declare par une derogation nommee et motivee, deja
+        # tracee a la pose du contrat. Il n'existe plus de drapeau booleen
+        # pour sauter la relecture en silence.
+        if self._contrat.derogation_pour("relecture") is not None:
             return
 
         lu = self.__brut.read(id)
@@ -207,12 +219,6 @@ class DriverGarde(Driver):
         if verdict in {"normalise", "tronque"}:
             self._noter(Constat(garde="relecture", verdict=verdict,
                                 detail=detail))
-            return
-
-        derogation = self._contrat.derogation_pour("relecture")
-        if derogation is not None:
-            self._noter(Constat(garde="relecture", verdict="derogee",
-                                detail=detail, derogation=derogation))
             return
 
         self._traiter("relecture",
