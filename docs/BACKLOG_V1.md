@@ -55,7 +55,8 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 9 | `[x]` | Catalogue : modèle, empreinte de variante, dépôt YAML (§3.1) | 1 | 20 tests ; deux rendus du même dynpro donnent deux variantes ; `pour_garde` refuse une esquisse **et** une variante absente ; quarantaine avec promotion explicite |
 | 10 | `[x]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8b | 31 tests ; un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne ; un item interrompu **après** sauvegarde ressort `douteux` de bout en bout et la reprise ne le rejoue pas ; le jeu est vérifié **avant** la première action |
 | 11 | `[x]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | 25 tests ; muet hors terminal ; rendu = fonction pure, aucun test ne capture de terminal ; ETA glissant qui **se tait** tant qu'il n'est pas fiable |
-| 12 | `[ ]` | Moteur volumique + primitive d'export `SE16N` (§3.6) | 8, 9 | en-tête de provenance complet ; delta avec l'export précédent |
+| 12a | `[x]` | Format d'export, provenance, conservation, delta (§3.6) | — | 28 tests ; provenance **refusée incomplète avant écriture** ; un dossier par système, fichier horodaté ; delta par clef déclarée, jamais par rang |
+| 12b | `[ ]` | Navigation `SE16N` (§3.6) | 12a, **carte d'écran relevée** | refuse de tourner tant que la carte n'est pas remplie sur un système réel |
 | 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction** (`DriverLecture` n'a ni `write`, ni `press`, ni `vkey`). **Reste** : le bundle, et la validation sur un poste réel |
 | 14 | `[x]` | Console interactive : tests, traces, catalogue, diagnostic | 6, 9, 13 | 28 tests ; une session complète se rejoue sans terminal ; le décor s'encode en cp1252 ; aucun écran n'atteint une méthode mutante (vérifié sur l'AST) |
 
@@ -210,7 +211,7 @@ Reprises du §8 de la spec, avec le lot qu'elles concernent :
 | Question | Lot | Défaut retenu à défaut d'arbitrage |
 |---|---|---|
 | définition de « champ critique » pour la garde 4 | 4 | relecture de **tout** champ écrit, exclusion nommée et motivée |
-| convention de conservation des exports | 12 | un dossier par système, fichier horodaté, delta contre le plus récent |
+| ~~convention de conservation des exports~~ | 12a | **tranché** : un dossier par système, fichier horodaté à nom triable, delta contre le plus récent |
 | unité de travail du cas 1 : six pipelines ou item composite | ~~10~~ | **ne bloque plus le moteur** : les deux formes sont exprimables — six pipelines, c'est la chaîne ; un item composite, c'est une déclaration de `cles`. L'arbitrage porte sur la définition de la pipeline du cas 1 |
 | boucle sur les lignes **à l'intérieur** d'un item | à venir | le cas 2 (CL02, N caractéristiques dans une classe) l'exigera. Le moteur refuse aujourd'hui un item dont les lignes se contredisent sur une colonne lue, plutôt que d'en choisir une au hasard |
 | ~~format d'entrée des constats~~ | 5 | **tranché** : CSV et JSONL acceptés en entrée, le dialecte lu est celui réécrit |

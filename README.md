@@ -54,6 +54,7 @@ Les modules livrés :
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
 | `falcon/moteur/` | la boucle itérative, la chaîne de pipelines, la reprise |
 | `falcon/supervision/` | progression et ETA glissant, muets hors terminal |
+| `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
 | `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire` — aucune n'écrit dans SAP |
