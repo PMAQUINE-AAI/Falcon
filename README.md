@@ -53,7 +53,7 @@ Les modules livrés :
 | `falcon/donnees/` | lecture des jeux, regroupement par unité de sauvegarde, réexport des KO |
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
-| `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, rapport de couverture, esquisses d'écran |
+| `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
 | `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire` — aucune n'écrit dans SAP |
 | `falcon/console/` | menus interactifs : tests, traces, catalogue, diagnostic |
 
@@ -91,8 +91,15 @@ Les mêmes choses en scriptable, hors terminal :
 
 ```bash
 python -m falcon inventaire tests/fixtures/traces/megatrace_2026-09.vbs
+python -m falcon brouillon tests/fixtures/traces/megatrace_2026-09.vbs
 python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
 ```
+
+`brouillon` produit une ébauche de pipeline **inachevée à dessein** : tout ce
+que la trace ne dit pas — l'identité des écrans, avant tout — porte un
+marqueur, et `charger()` refuse le fichier tant qu'il en reste un. Le
+générateur n'émet jamais `navigation_libre` : ce serait désarmer la garde
+d'identité sur toute pipeline née d'une trace, sans que personne l'ait décidé.
 
 `inventaire` est la première chose à passer sur toute nouvelle trace : il dit
 ce que le parseur sait en lire, et ce qu'il n'en sait pas.

@@ -253,9 +253,31 @@ def ecran_traces(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def ebauche(console: Console) -> str:
+        from falcon.trace.brouillon import apercu, brouillon_de
+
+        trace = _trace_choisie(console, env)
+        if trace is None:
+            return CONTINUER
+        brouillon = brouillon_de(trace)
+        console.titre("Brouillon de pipeline")
+        console.ecrire()
+        console.ecrire(apercu(brouillon))
+        console.ecrire()
+        try:
+            sortie = console.lire("\n  ecrire dans (vide = ne rien ecrire) : ")
+        except (EOFError, KeyboardInterrupt):
+            return CONTINUER
+        if sortie.strip():
+            Path(sortie.strip()).write_text(brouillon.yaml, encoding="utf-8")
+            console.ecrire(f"\n  {sortie.strip()} ecrit.")
+        console.pause()
+        return CONTINUER
+
     return Menu(
         titre="FALCON — traces du recorder",
-        preambule="Lecture seule d'enregistrements .vbs. Rien n'est ecrit.",
+        preambule="Lecture seule d'enregistrements .vbs. Seul le brouillon "
+                  "ecrit,\net seulement un fichier que vous nommez.",
         entrees=(
             Entree("1", "Couverture du parseur", inventaire,
                    "ce qu'il sait lire, et ce qu'il n'en sait pas"),
@@ -263,6 +285,8 @@ def ecran_traces(env: Environnement) -> Menu:
                    "decoupage en visites, et champs touches"),
             Entree("3", "Gestes significatifs", gestes,
                    "la trace, sans les gestes de confort"),
+            Entree("4", "Brouillon de pipeline", ebauche,
+                   "ebauche YAML, inachevee a dessein"),
         ))
 
 

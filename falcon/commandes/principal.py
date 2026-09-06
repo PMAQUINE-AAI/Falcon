@@ -1,28 +1,45 @@
 """La ligne de commande de FALCON.
 
-Minimale, et delibere : deux commandes, `diagnostiquer` et `inventaire`. Ce
-sont les deux seules qui aient du sens tant qu'aucune pipeline n'a tourne sur
-un systeme reel — l'une regarde un ecran, l'autre regarde une trace, et
-aucune n'ecrit nulle part dans SAP.
+Minimale, et delibere. Aucune de ces commandes n'ecrit dans SAP : elles
+regardent un ecran, une trace, un catalogue. C'est tout ce qui a du sens tant
+qu'aucune pipeline n'a tourne sur un systeme reel.
 
 `argparse` plutot qu'une bibliotheque : la livraison est un fichier unique, et
 chaque dependance de plus est une piece a embarquer.
+
+**Les erreurs de lecture se rendent lisibles, pas en trace de pile.** Elles
+disent deja ce qui ne va pas — un YAML mal forme, une ligne de trace inconnue,
+un registre ambigu — et une trace de pile ferait croire a un defaut du
+programme la ou c'est le fichier qui est en cause. Elles n'heritent pas toutes
+d'`ErreurFalcon` : `ErreurFalcon` est la hierarchie de l'EXECUTION, ces
+erreurs-la sont celles du CHARGEMENT. D'ou la liste explicite ci-dessous.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
+from falcon.catalogue import CatalogueInvalide
+from falcon.donnees import JeuInvalide
 from falcon.noyau import ErreurFalcon
+from falcon.pipeline import PipelineInvalide
+from falcon.taxonomie import RegistreInvalide
+from falcon.trace import TraceInvalide
+
+#: Ce qui se rend lisible plutot qu'en trace de pile.
+ERREURS_LISIBLES = (ErreurFalcon, TraceInvalide, PipelineInvalide,
+                    CatalogueInvalide, JeuInvalide, RegistreInvalide)
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Trois commandes, et aucune n'ecrit dans SAP :
+Quatre commandes, et aucune n'ecrit dans SAP :
 
   console         menus interactifs : tests, traces, catalogue, diagnostic
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
+  brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
 """
@@ -61,6 +78,18 @@ def analyseur() -> argparse.ArgumentParser:
                     "qu'il n'en sait pas.")
     trace.add_argument("traces", nargs="+", metavar="TRACE.vbs")
 
+    ebauche = sous.add_parser(
+        "brouillon", help="ebauche de pipeline depuis une trace .vbs",
+        description="Produit un YAML de pipeline INACHEVE : tout ce que la "
+                    "trace ne dit pas porte un marqueur, et `charger()` "
+                    "refuse le fichier tant qu'il en reste un.")
+    ebauche.add_argument("trace", metavar="TRACE.vbs")
+    ebauche.add_argument("-o", "--sortie", metavar="PIPELINE.yaml",
+                         default=None,
+                         help="fichier a ecrire (defaut : sortie standard)")
+    ebauche.add_argument("--nom", default="",
+                         help="nom de la pipeline (defaut : un marqueur)")
+
     return principal
 
 
@@ -96,8 +125,25 @@ def _inventaire(options: argparse.Namespace) -> int:
     return inventorier(list(options.traces))
 
 
+def _brouillon(options: argparse.Namespace) -> int:
+    from falcon.trace import brouillon_de, lire
+    from falcon.trace.brouillon import apercu
+
+    # Lecture STRICTE : un brouillon bati sur des lignes non appariees serait
+    # faux sans le dire. Une trace que `lire` refuse doit passer par
+    # `inventaire`, qui nomme ce qui manque.
+    ebauche = brouillon_de(lire(Path(options.trace)), nom=options.nom)
+    if options.sortie:
+        Path(options.sortie).write_text(ebauche.yaml, encoding="utf-8")
+        print(f"{options.sortie} ecrit.\n")
+    else:
+        print(ebauche.yaml)
+    print(apercu(ebauche), file=sys.stderr)
+    return 0
+
+
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
-             "inventaire": _inventaire}
+             "inventaire": _inventaire, "brouillon": _brouillon}
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -114,7 +160,7 @@ def main(arguments: list[str] | None = None) -> int:
         # n'est pas une erreur du programme. Une trace de pile ici ferait
         # croire a un defaut.
         return 0
-    except ErreurFalcon as erreur:
+    except ERREURS_LISIBLES as erreur:
         # Une erreur de FALCON se rend lisible, pas sous forme de trace de
         # pile : elle dit deja ce qui ne va pas, et une trace de pile ferait
         # croire a un defaut du programme.

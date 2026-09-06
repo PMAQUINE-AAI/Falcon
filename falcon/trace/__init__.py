@@ -11,6 +11,7 @@ ne peut donc pas peupler le catalogue — elle ne produit qu'une *esquisse*, que
 `catalogue.Depot.pour_garde` refuse deja de servir.
 """
 
+from .brouillon import Brouillon, BrouillonImpossible, brouillon_de
 from .inventaire import rapport
 from .modele import (
     AFFECTATION, APPEL, APPEL_ARGUMENT, CONFORT, FENETRE_RACINE, FORMES,
@@ -21,6 +22,7 @@ from .vbs import decoder, decouper, inventorier, lire, litteral
 
 __all__ = [
     "lire", "inventorier", "rapport",
+    "brouillon_de", "Brouillon", "BrouillonImpossible",
     "Trace", "Geste", "Inventaire", "TraceInvalide",
     "APPEL", "AFFECTATION", "APPEL_ARGUMENT", "FORMES", "VERBES", "CONFORT",
     "FENETRE_RACINE",
