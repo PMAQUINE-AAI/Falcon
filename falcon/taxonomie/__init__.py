@@ -5,6 +5,7 @@ une signature, elle rend un verdict.
 """
 
 from .dump import ecrire_dump
+from .politique import appliquer
 from .registre import (
     ARRET, BENIGNE, CANAUX, CHEMIN_REGISTRE_DEFAUT, DECLARABLES, FAUTIVE,
     INCONNUE, Entree, Politique, Registre, RegistreInvalide, Signature,
@@ -14,5 +15,5 @@ from .registre import (
 __all__ = [
     "Registre", "RegistreInvalide", "Signature", "Verdict", "Entree",
     "Politique", "ARRET", "BENIGNE", "FAUTIVE", "INCONNUE", "DECLARABLES",
-    "CANAUX", "CHEMIN_REGISTRE_DEFAUT", "ecrire_dump",
+    "CANAUX", "CHEMIN_REGISTRE_DEFAUT", "ecrire_dump", "appliquer",
 ]

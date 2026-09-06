@@ -24,10 +24,10 @@ from typing import Any, Callable, Iterator
 
 from falcon.couture import Driver
 from falcon.noyau import (
-    Ecran, EcartIdentite, Fenetre, FenetreImprevue, Identite, IncidentBloquant,
-    ItemAbandonne, PlafondAtteint, RefusDryRun, Statut,
+    VERDICTS, Ecran, EcartIdentite, Fenetre, FenetreImprevue, Identite,
+    PlafondAtteint, RefusDryRun, Statut,
 )
-from falcon.taxonomie import Registre, Signature, Verdict
+from falcon.taxonomie import Registre, Signature, Verdict, appliquer
 
 from .contrat import Contrat, Derogation
 
@@ -51,10 +51,19 @@ class Constat:
     """
 
     garde: str
-    verdict: str                     # violation | derogee | normalise
+    verdict: str                     # l'un des `VERDICTS` du noyau
     detail: dict[str, Any] = field(default_factory=dict)
     derogation: Derogation | None = None
     taxonomie: Verdict | None = None
+
+    def __post_init__(self) -> None:
+        # Le vocabulaire est ferme et partage avec le journal. Un verdict
+        # invente ici s'ecrirait sinon dans un fichier cense faire foi, et
+        # rien ne le relirait jamais.
+        if self.verdict not in VERDICTS:
+            raise ValueError(
+                f"verdict {self.verdict!r}, attendu l'un de "
+                f"{sorted(VERDICTS)}")
 
 
 class DriverGarde(Driver):
@@ -255,18 +264,11 @@ class DriverGarde(Driver):
         self._noter(Constat(garde=garde, verdict="violation", detail=detail,
                             taxonomie=verdict))
 
-        origine = f"etape {self._contrat.nom!r} : {verdict.categorie} " \
-                  f"({verdict.entree or 'non repertorie'}) — {detail}"
-
-        if verdict.bloquant:
-            raise IncidentBloquant(origine)
-
-        if verdict.politique.item == "ko":
-            # « Connue fautive » : l'item est perdu, le lot continue. Sans
-            # cette levee, l'appel rendrait la main normalement et l'etape
-            # suivante — typiquement la sauvegarde — s'executerait sur un
-            # ecran dont on vient justement de constater qu'il est faux.
-            raise ItemAbandonne(origine)
+        # La regle est ailleurs, et partagee : le moteur classe lui aussi ce
+        # que levent la couture et les etapes Python, et doit en tirer les
+        # memes consequences. Deux copies finiraient par diverger.
+        appliquer(verdict, f"etape {self._contrat.nom!r} : {verdict.categorie} "
+                           f"({verdict.entree or 'non repertorie'}) — {detail}")
 
     # -- sauvegarde et dry-run ----------------------------------------------
 

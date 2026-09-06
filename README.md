@@ -52,6 +52,7 @@ Les modules livrés :
 | `falcon/taxonomie/` | registre des erreurs connues, classement, dump d'inconnu |
 | `falcon/donnees/` | lecture des jeux, regroupement par unité de sauvegarde, réexport des KO |
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
+| `falcon/moteur/` | la boucle itérative, la chaîne de pipelines, la reprise |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
 | `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire` — aucune n'écrit dans SAP |

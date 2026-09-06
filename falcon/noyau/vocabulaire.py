@@ -37,6 +37,33 @@ MOTIF_MINIMAL = 30
 #: Portee d'une derogation qui vaut pour toutes les etapes du contrat.
 PORTEE_TOTALE = "*"
 
+#: Ce qu'une garde peut avoir a dire. Ensemble FERME et PARTAGE.
+#:
+#: Le controleur les emet, le journal les ecrit. Les deux avaient leur propre
+#: idee de la liste : le controleur en produisait sept, le journal en
+#: documentait deux. Un verdict nouveau se serait ecrit en silence dans un
+#: fichier cense faire foi.
+#:
+#: - `violation`             la garde n'est pas satisfaite, et rien ne l'excuse
+#: - `derogee`               elle ne l'est pas, mais une derogation nommee le couvre
+#: - `normalise`             l'ecart tient a la casse ou aux espaces
+#: - `tronque`               SAP a coupe la valeur, et l'etape l'avait declare
+#: - `sauvegarde_imminente`  annonce AVANT l'acte, pour survivre a une coupure
+#: - `non_gardee`            l'etape a declare sa navigation libre
+#: - `elargie`               l'etape attend d'autres fenetres que la principale
+VERDICTS = frozenset({
+    "violation", "derogee", "normalise", "tronque", "sauvegarde_imminente",
+    "non_gardee", "elargie",
+})
+
+#: Le verdict qui annonce une sauvegarde a venir.
+#:
+#: Il est nomme a part parce qu'il ne se journalise PAS comme les autres : le
+#: repli des etats deduit l'etat « douteux » d'une etape marquee sauvegarde,
+#: pas d'une garde. Le traduire en `Garde` desarmerait la protection contre la
+#: double ecriture — sans que rien ne leve.
+SAUVEGARDE_IMMINENTE = "sauvegarde_imminente"
+
 #: Le champ de commande SAP, par lequel on saisit un code transaction.
 #:
 #: Il vit ici, et non dans le moteur ni dans le lecteur de traces, parce que
