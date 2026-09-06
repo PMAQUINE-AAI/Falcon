@@ -277,9 +277,17 @@ def _ecran(brute: Any, source: str, rang: int, nom: str
         raise _refus(source, f"`ecran` : cle(s) inconnue(s) {inconnues}",
                      rang, nom)
     # Le dynpro reste une chaine : « 0100 » n'est pas « 100 », et le catalogue
-    # doit rester diffable.
+    # doit rester diffable. Il doit surtout etre ECRIT comme une chaine :
+    # YAML lit `0100` comme de l'octal et en fait 64, ce qui corrompt le
+    # dynpro sans que rien ne leve — la garde d'identite comparerait ensuite
+    # contre un numero d'ecran qui n'existe pas.
+    if not isinstance(brute["dynpro"], str):
+        raise _refus(source,
+                     f"`ecran.dynpro` doit etre une CHAINE, entre guillemets "
+                     f"(recu {brute['dynpro']!r}). Sans eux, YAML lit "
+                     f"« 0100 » comme de l'octal et en fait 64", rang, nom)
     return (str(brute["transaction"]), str(brute["programme"]),
-            str(brute["dynpro"]))
+            brute["dynpro"])
 
 
 def _derogations(brute: Any, source: str, rang: int, nom: str

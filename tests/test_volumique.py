@@ -23,14 +23,34 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from falcon.couture.double import DriverScripte
 from falcon.donnees import JeuInvalide, lire_items
+from falcon.noyau import CHAMP_DE_COMMANDE, EcartIdentite, Identite
 from falcon.volumique import (
-    OBLIGATOIRES, PREFIXE, Delta, DeltaImpossible, Export, ExportInvalide,
-    Provenance, chemin_d_export, delta, dernier_export, ecrire_export,
-    enregistrer, exports, lire_export, rendre,
+    CHAMPS, CHEMIN_CARTE_DEFAUT, ECRANS, OBLIGATOIRES, PLAFOND_SAUVEGARDES,
+    PREFIXE, TODO, Carte, CarteIncomplete, CarteInvalide, Delta,
+    DeltaImpossible, Export, ExportInvalide, Provenance, charger_carte,
+    chemin_d_export, delta, dernier_export, ecrire_export, enregistrer,
+    exporter_table, exports, lire_export, rendre,
 )
 
 LIGNES = [{"MATNR": "A", "MAKTX": "Vis"}, {"MATNR": "B", "MAKTX": "Ecrou"}]
+
+#: Identifiants SYNTHETIQUES, ecrits pour exercer l'enchainement des gestes.
+#: Ils n'etablissent aucune fidelite a SAP, et la carte livree avec le paquet
+#: reste vide — un test l'epingle.
+SELECTION = Identite(transaction="SE16N", programme="RSE16N", dynpro="1000")
+RESULTAT = Identite(transaction="SE16N", programme="RSE16N", dynpro="0500")
+
+
+def _carte_relevee(**remplacements) -> Carte:
+    champs = dict(champ_table="wnd[0]/usr/ctxtTABLE",
+                  bouton_executer="wnd[0]/tbar[1]/btn[8]",
+                  grille="wnd[0]/usr/cntlGRID/shellcont/shell",
+                  ecran_selection=SELECTION.triplet,
+                  ecran_resultat=RESULTAT.triplet)
+    champs.update(remplacements)
+    return Carte(**champs)                # type: ignore[arg-type]
 
 
 def _provenance(**remplacements) -> Provenance:
@@ -271,6 +291,154 @@ class TestRendu(Base):
 
     def test_le_rendu_ne_porte_aucune_sequence_ansi(self):
         self.assertNotIn("\x1b", rendre(Delta()))
+
+
+class TestCarteSe16n(Base):
+    """La carte est livree VIDE, et l'export refuse tant qu'elle l'est.
+
+    Les identifiants d'ecran de SE16N ne sont ni dans ce depot ni dans la
+    trace fournie. Les ecrire de memoire produirait un module qui a l'air
+    complet et qui echoue au premier appel reel, avec une erreur que personne
+    ne saurait rattacher a une conjecture faite six mois plus tot.
+    """
+
+    def test_la_carte_livree_est_vide(self):
+        """Detecteur de derive : si quelqu'un la remplit de conjectures, ce
+        test tombe et l'oblige a dire d'ou viennent les identifiants."""
+        carte = charger_carte()
+        self.assertFalse(carte.complete)
+        self.assertEqual(set(carte.manquants), set(CHAMPS) | set(ECRANS))
+
+    def test_la_carte_livree_nomme_le_moyen_de_la_remplir(self):
+        texte = CHEMIN_CARTE_DEFAUT.read_text(encoding="utf-8")
+        self.assertIn("diagnostiquer", texte)
+
+    def test_le_refus_nomme_ce_qui_manque(self):
+        with self.assertRaises(CarteIncomplete) as capture:
+            charger_carte().verifier()
+        for champ in CHAMPS:
+            self.assertIn(champ, str(capture.exception))
+
+    def test_une_carte_partielle_est_refusee_aussi(self):
+        """Un seul marqueur restant suffit : une carte a moitie relevee
+        enverrait la moitie des gestes au hasard."""
+        carte = _carte_relevee(grille=TODO)
+        self.assertEqual(carte.manquants, ("grille",))
+        with self.assertRaises(CarteIncomplete):
+            carte.verifier()
+
+    def test_une_version_inattendue_est_refusee(self):
+        chemin = self.racine / "c.yaml"
+        chemin.write_text("version: 99\n", encoding="utf-8")
+        with self.assertRaises(CarteInvalide):
+            charger_carte(chemin)
+
+    def test_une_cle_inconnue_est_refusee(self):
+        chemin = self.racine / "c.yaml"
+        chemin.write_text("version: 1\nsurprise: 1\n", encoding="utf-8")
+        with self.assertRaises(CarteInvalide) as capture:
+            charger_carte(chemin)
+        self.assertIn("surprise", str(capture.exception))
+
+    def test_un_dynpro_non_quote_est_refuse(self):
+        """Defaut trouve en ecrivant ce test : YAML lit « 0100 » comme de
+        l'OCTAL et en fait 64. Le dynpro etait corrompu sans un mot, et la
+        garde d'identite aurait compare contre un ecran qui n'existe pas.
+        """
+        chemin = self.racine / "c.yaml"
+        chemin.write_text(
+            "version: 1\necran_resultat: {transaction: SE16N, "
+            "programme: RK, dynpro: 0100}\n", encoding="utf-8")
+        with self.assertRaises(CarteInvalide) as capture:
+            charger_carte(chemin)
+        self.assertIn("octal", str(capture.exception))
+
+    def test_un_dynpro_quote_est_conserve_tel_quel(self):
+        chemin = self.racine / "c.yaml"
+        chemin.write_text(
+            "version: 1\necran_resultat: {transaction: SE16N, "
+            "programme: RK, dynpro: \"0100\"}\n", encoding="utf-8")
+        self.assertEqual(charger_carte(chemin).ecran_resultat[2], "0100")
+
+    def test_un_critere_absent_de_la_carte_est_refuse(self):
+        """Les criteres vivent dans un table control dont la disposition n'a
+        pas ete relevee : conjecturer une position, ce serait filtrer sur
+        autre chose que ce qu'on croit."""
+        with self.assertRaises(CarteIncomplete) as capture:
+            _carte_relevee().champ_de_critere("WERKS")
+        self.assertIn("filtrer sur autre chose", str(capture.exception))
+
+
+class TestExportSe16n(Base):
+    """La mecanique, exercee contre un double. Les identifiants employes ici
+    sont SYNTHETIQUES : ils prouvent l'enchainement des gestes, jamais que SAP
+    reponde ainsi. La carte livree, elle, reste vide."""
+
+    def _driver(self) -> DriverScripte:
+        brut = DriverScripte(
+            identite=SELECTION,
+            valeurs={CHAMP_DE_COMMANDE: "", "wnd[0]/usr/ctxtTABLE": ""})
+        brut.grilles = {"wnd[0]/usr/cntlGRID/shellcont/shell": [
+            {"MATNR": "A", "MAKTX": "Vis"},
+            {"MATNR": "B", "MAKTX": "Ecrou"}]}
+
+        def avancer(driver, geste, cible):
+            if geste == "press":
+                driver.identite = RESULTAT
+        brut.apres_action = avancer
+        return brut
+
+    def test_une_carte_vide_refuse_avant_toute_navigation(self):
+        """Echouer au milieu d'une transaction laisse une session dans un etat
+        que personne n'a decrit."""
+        brut = self._driver()
+        with self.assertRaises(CarteIncomplete):
+            exporter_table(brut, "MARA", systeme="K75", mandant="210",
+                           utilisateur="x", carte=Carte())
+        self.assertEqual(brut.gestes, [], "SAP a ete touche malgre le refus")
+
+    def test_l_export_navigue_saisit_execute_et_lit(self):
+        export = exporter_table(self._driver(), "MARA", systeme="K75",
+                                mandant="210", utilisateur="pmaquine",
+                                carte=_carte_relevee(),
+                                horloge=lambda: "2026-09-06T10:00:00.000Z")
+        self.assertEqual(len(export), 2)
+        self.assertEqual(export.lignes[0]["MATNR"], "A")
+
+    def test_la_provenance_est_complete_sans_intervention(self):
+        """Un export produit par la primitive ne peut pas sortir muet."""
+        export = exporter_table(self._driver(), "MARA", systeme="K75",
+                                mandant="210", utilisateur="pmaquine",
+                                carte=_carte_relevee(),
+                                horloge=lambda: "2026-09-06T10:00:00.000Z")
+        export.provenance.verifier()            # ne doit pas lever
+        self.assertEqual(export.provenance.table, "MARA")
+
+    def test_le_code_transaction_passe_par_le_champ_de_commande(self):
+        brut = self._driver()
+        exporter_table(brut, "MARA", systeme="K75", mandant="210",
+                       utilisateur="x", carte=_carte_relevee())
+        self.assertIn(("write", CHAMP_DE_COMMANDE, "/nSE16N"), brut.gestes)
+
+    def test_un_export_ne_peut_pas_sauvegarder_deux_fois(self):
+        """Un export LIT. S'il declenchait une sauvegarde, ce serait qu'il
+        n'est pas sur l'ecran qu'on croit."""
+        self.assertEqual(PLAFOND_SAUVEGARDES, 1)
+
+    def test_le_mauvais_ecran_arrete_l_export(self):
+        """Un export fait sur le mauvais ecran rendrait des lignes qui ont
+        l'air de lignes."""
+        brut = self._driver()
+        brut.apres_action = None            # l'ecran ne change jamais
+        with self.assertRaises(EcartIdentite):
+            exporter_table(brut, "MARA", systeme="K75", mandant="210",
+                           utilisateur="x", carte=_carte_relevee())
+
+    def test_un_critere_non_releve_arrete_l_export(self):
+        with self.assertRaises(CarteIncomplete):
+            exporter_table(self._driver(), "MARA", systeme="K75",
+                           mandant="210", utilisateur="x",
+                           carte=_carte_relevee(), criteres={"WERKS": "1000"})
 
 
 if __name__ == "__main__":

@@ -9,7 +9,12 @@ La provenance d'un export est obligatoire et refusee incomplete : c'est le
 contrat minimal vis-a-vis du programme d'analyse tiers.
 """
 
+from .carte import (
+    CHAMPS, CHEMIN_CARTE_DEFAUT, ECRANS, TODO, Carte, CarteIncomplete,
+    CarteInvalide, charger_carte,
+)
 from .delta import Delta, DeltaImpossible, Modification, delta, rendre
+from .se16n import PLAFOND_SAUVEGARDES, TRANSACTION, exporter_table
 from .export import (
     OBLIGATOIRES, PREFIXE, VERSION, Export, ExportInvalide, Provenance,
     chemin_d_export, dernier_export, ecrire_export, enregistrer, exports,
@@ -22,4 +27,7 @@ __all__ = [
     "chemin_d_export", "exports", "dernier_export", "nom_de_fichier",
     "OBLIGATOIRES", "PREFIXE", "VERSION",
     "delta", "Delta", "Modification", "DeltaImpossible", "rendre",
+    "Carte", "charger_carte", "CarteIncomplete", "CarteInvalide",
+    "CHEMIN_CARTE_DEFAUT", "CHAMPS", "ECRANS", "TODO",
+    "exporter_table", "TRANSACTION", "PLAFOND_SAUVEGARDES",
 ]

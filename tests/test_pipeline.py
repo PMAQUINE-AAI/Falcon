@@ -166,6 +166,16 @@ class TestRefusSitues(Base):
         self.assertIn("genre", self._refus(
             VALIDE.replace("{colonne: site}", "{devine: site}")))
 
+    def test_un_dynpro_non_quote_est_refuse(self):
+        """Le meme defaut que dans la carte SE16N, trouve au meme moment :
+        YAML lit « 0100 » comme de l'OCTAL et en fait 64. Le dynpro etait
+        corrompu sans un mot, et la garde d'identite aurait compare contre un
+        numero d'ecran qui n'existe pas.
+        """
+        message = self._refus(VALIDE.replace('dynpro: "1000"', "dynpro: 0100"))
+        self.assertIn("octal", message)
+        self.assertIn("CHAINE", message)
+
     def test_comparaison_inconnue(self):
         self.assertIn("comparaison", self._refus(
             VALIDE.replace("        action: press",
