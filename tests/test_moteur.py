@@ -512,5 +512,101 @@ class TestChaine(Base):
                                   "journal", "ko", "duree_ms"})
 
 
+class TestBoutEnBout(Base):
+    """Un lot interrompu, repris, et son fichier de KO reinjecte.
+
+    C'est le seul test qui parcourt la chaine entiere : donnees -> pipeline ->
+    contrat -> gardes -> taxonomie -> journal -> repli -> reprise -> reexport.
+    Chacun de ces maillons a ses propres tests ; celui-ci verifie qu'ils
+    tiennent ensemble, ce qu'aucun d'eux ne dit.
+
+    Il reste execute contre un double qui n'etablit AUCUNE fidelite a SAP.
+    """
+
+    def _driver_qui_lache_au_deuxieme(self) -> DriverScripte:
+        brut = self._driver()
+        etat = {"presses": 0}
+
+        def lacher(driver, geste, cible):
+            driver.statut = Statut()
+            if geste != "press":
+                return
+            etat["presses"] += 1
+            if etat["presses"] == 2:
+                # Une modale surgit APRES la sauvegarde : l'item a ecrit, et
+                # le lot ne peut pas continuer.
+                driver.fenetres = (Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]"))
+        brut.apres_action = lacher
+        return brut
+
+    def test_interrompu_puis_repris_puis_reinjecte(self):
+        ko = self.racine / "ko.csv"
+
+        # 1. Le lot part, traite un item, et se fait interrompre au deuxieme.
+        premier = self._executer(self._driver_qui_lache_au_deuxieme(),
+                                 sortie_ko=ko)
+        self.assertEqual(premier.etat, INTERROMPU)
+        self.assertEqual(premier.compteurs[OK], 1)
+
+        # 2. Le repli classe : un termine, un douteux — il a sauve avant de
+        #    lacher — et un jamais commence.
+        etats_apres = self._etats()
+        self.assertEqual(
+            sorted(e.etat for e in etats_apres.values()), [DOUTEUX, OK])
+
+        # 3. La reprise ne rejoue NI le termine NI le douteux. Le douteux
+        #    surtout : le rejouer, c'est ecrire deux fois dans SAP.
+        seconde = self._executer(self._driver(), mode=REPRISE, sortie_ko=ko)
+        self.assertEqual(seconde.etat, TERMINE)
+        self.assertEqual(seconde.compteurs[OK], 1)      # le troisieme, seul
+        self.assertEqual(seconde.compteurs["deja_faits"], 2)
+
+        # 4. Le rapport de fin se lit sur le journal partage.
+        rapport = depuis_journal(lire(self.journal))
+        self.assertEqual(rapport.pipeline, "essai")
+        self.assertEqual(rapport.mode, REPRISE)
+
+        # 5. Le douteux ressort a l'arbitrage humain, pas au flux de reprise.
+        douteux = [i for i, e in self._etats().items() if e.etat == DOUTEUX]
+        self.assertEqual(len(douteux), 1)
+
+    def test_le_fichier_de_ko_se_recharge_sans_retouche(self):
+        """§4.7 : un rapport qu'il faut retravailler a la main avant de
+        relancer annule le benefice de l'automatisation sur les cas
+        difficiles — qui sont precisement ceux qui coutent."""
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        brut = self._driver()
+
+        def refuser(driver, geste, cible):
+            driver.statut = (Statut(type="E", id="ZZ", numero="001", texte="x")
+                             if geste == "press" else Statut())
+        brut.apres_action = refuser
+
+        ko = self.racine / "ko.csv"
+        premier = executer(self._pipeline(), self.jeu, brut,
+                           journal=self.journal,
+                           registre=Registre.charger(surcouche), sortie_ko=ko)
+        self.assertEqual(premier.compteurs[KO], 3)
+
+        # Le fichier de KO se recharge tel quel, sur un journal neuf.
+        second = executer(self._pipeline(), ko, self._driver(),
+                          journal=self.racine / "reprise.jsonl",
+                          registre=self.registre)
+        self.assertEqual(second.etat, TERMINE)
+        self.assertEqual(second.compteurs[OK], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
