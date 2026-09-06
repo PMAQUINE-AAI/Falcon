@@ -37,6 +37,22 @@ MOTIF_MINIMAL = 30
 #: Portee d'une derogation qui vaut pour toutes les etapes du contrat.
 PORTEE_TOTALE = "*"
 
+#: Le champ de commande SAP, par lequel on saisit un code transaction.
+#:
+#: Il vit ici, et non dans le moteur ni dans le lecteur de traces, parce que
+#: les deux en ont besoin et qu'une seconde definition finirait par diverger.
+#: C'est le seul identifiant d'ecran connu de FALCON en dehors du catalogue :
+#: le §3.3 impose un retour a l'ecran d'accueil entre deux pipelines d'une
+#: chaine, et ce retour passe forcement par ce champ.
+#:
+#: Le suffixe sert a RECONNAITRE le champ dans une trace, ou la fenetre peut
+#: varier ; l'identifiant complet sert a y ECRIRE.
+SUFFIXE_CHAMP_DE_COMMANDE = "/tbar[0]/okcd"
+CHAMP_DE_COMMANDE = "wnd[0]" + SUFFIXE_CHAMP_DE_COMMANDE
+
+#: Code transaction qui ramene a l'ecran d'accueil.
+RETOUR_ACCUEIL = "/n"
+
 #: Comment comparer ce qu'on a ecrit a ce qu'on relit.
 #:
 #: `casse` est le defaut et n'accepte QUE les differences de casse et

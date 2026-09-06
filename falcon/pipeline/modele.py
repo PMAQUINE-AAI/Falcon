@@ -33,7 +33,19 @@ ACTIONS = frozenset({"set", "cocher", "press", "select", "vkey", "lire",
 AVEC_CIBLE = frozenset({"set", "cocher", "press", "select", "lire"})
 
 #: Actions qui exigent une source de valeur.
-AVEC_SOURCE = frozenset({"set", "cocher"})
+#:
+#: `vkey` y figure parce que rien d'autre ne portait le NUMERO de la touche.
+#: L'action etait declarable et chargeable, et une etape `vkey` chargee etait
+#: muette sur ce qu'elle devait envoyer : le moteur ne pouvait pas l'executer.
+#: Le trou n'a ete visible qu'au moment d'ecrire le moteur, ce qui est tard.
+AVEC_SOURCE = frozenset({"set", "cocher", "vkey"})
+
+#: Actions dont la source doit etre une constante, pas une donnee du jeu.
+#:
+#: Une touche de fonction est une propriete de la PIPELINE, pas de l'item.
+#: La faire venir d'une colonne rendrait le geste different d'une ligne a
+#: l'autre — c'est-a-dire imprevisible, et hors de portee de toute relecture.
+SOURCE_CONSTANTE = frozenset({"vkey"})
 
 CLASSES = frozenset({"iterative", "volumique"})
 
@@ -44,7 +56,14 @@ GENRES_SOURCE = frozenset({"colonne", "constante", "lue"})
 
 @dataclass(frozen=True)
 class Source:
-    """D'ou vient la valeur d'une saisie."""
+    """D'ou vient la valeur d'une saisie.
+
+    Le genre `lue` designe le NOM d'une etape `lire` anterieure : une etape
+    `lire` lie sa lecture sous son propre nom, et c'est la seule lecture
+    coherente d'une source « lue ». Le chargeur verifie que l'etape designee
+    existe et precede — une reference pendante produirait sinon une saisie
+    vide, sans erreur.
+    """
 
     genre: str                      # colonne | constante | lue
     valeur: str

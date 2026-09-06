@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 
 from falcon.catalogue import ESQUISSE, ClefVariante, Variante
-from falcon.noyau import Champ, empreinte
+from falcon.noyau import SUFFIXE_CHAMP_DE_COMMANDE, Champ, empreinte
 
 from .modele import Geste, Trace
 
@@ -53,7 +53,11 @@ NAVIGATION = frozenset({
 })
 
 #: Le champ de commande : la seule source de la transaction dans une trace.
-CHAMP_DE_COMMANDE = "/tbar[0]/okcd"
+#:
+#: Defini au noyau, pas ici : le moteur en a besoin lui aussi, pour le retour
+#: a l'ecran d'accueil entre deux pipelines d'une chaine. Deux definitions
+#: finiraient par diverger.
+CHAMP_DE_COMMANDE = SUFFIXE_CHAMP_DE_COMMANDE
 
 #: `/nIH06` → `IH06`. `/n` seul ramene au menu, et ne nomme aucune transaction.
 _CODE = re.compile(r"^/n(?P<transaction>\S+)$")

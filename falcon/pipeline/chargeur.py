@@ -24,7 +24,7 @@ from falcon.noyau import COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, PORTEE_TOTALE
 
 from . import extension
 from .modele import (
-    ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE,
+    ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE, SOURCE_CONSTANTE,
     DerogationDeclaree, Etape, Pipeline, Source,
 )
 
@@ -128,12 +128,26 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
 
     etapes: list[Etape] = []
     vus: set[str] = set()
+    lues: set[str] = set()          # noms des etapes `lire` deja rencontrees
     for rang, brute in enumerate(brutes, start=1):
-        etape = _etape(brute, source, rang)
+        etape = _etape(brute, source, rang, brouillon=brouillon)
         if etape.nom in vus:
             raise _refus(source, f"nom d'etape en double : {etape.nom!r}. "
                                  f"Les derogations se designent par ce nom",
                          rang, etape.nom)
+        # Une source « lue » designe une etape `lire` ANTERIEURE. La verifier
+        # ici, dans l'ordre, refuse du meme coup la reference pendante et la
+        # reference a une etape qui n'a pas encore lu. Sans ce controle, la
+        # valeur serait vide a l'execution et la saisie passerait sans un mot.
+        if etape.source is not None and etape.source.genre == "lue":
+            if etape.source.valeur not in lues:
+                raise _refus(
+                    source,
+                    f"source « lue: {etape.source.valeur} » : aucune etape "
+                    f"`lire` de ce nom ne precede. Connues a ce rang : "
+                    f"{sorted(lues) or 'aucune'}", rang, etape.nom)
+        if etape.action == "lire":
+            lues.add(etape.nom)
         vus.add(etape.nom)
         etapes.append(etape)
 
@@ -147,7 +161,8 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
     )
 
 
-def _etape(brute: Any, source: str, rang: int) -> Etape:
+def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
+           ) -> Etape:
     if not isinstance(brute, dict):
         raise _refus(source, "une etape doit etre un dictionnaire", rang)
 
@@ -172,7 +187,13 @@ def _etape(brute: Any, source: str, rang: int) -> Etape:
         if not fonction:
             raise _refus(source, "l'action « python » exige une `fonction`",
                          rang, nom)
-        if fonction not in extension.connues():
+        # Un brouillon est inacheve par definition : le generateur y pose
+        # `fonction: TODO` la ou la trace contient un geste qu'aucune action
+        # ne sait exprimer. Un fichier livre, lui, n'a pas ce droit — et
+        # `charger()` sans `brouillon` refuse le fichier entier bien avant
+        # d'arriver ici, sur le seul marqueur.
+        toleree = brouillon and fonction == MARQUEUR_BROUILLON
+        if not toleree and fonction not in extension.connues():
             raise _refus(source,
                          f"fonction {fonction!r} non enregistree. Connues : "
                          f"{sorted(extension.connues()) or 'aucune'}", rang, nom)
@@ -180,6 +201,24 @@ def _etape(brute: Any, source: str, rang: int) -> Etape:
     source_valeur = _source(brute.get("source"), source, rang, nom)
     if action in AVEC_SOURCE and source_valeur is None:
         raise _refus(source, f"l'action {action!r} exige une `source`", rang, nom)
+
+    if action in SOURCE_CONSTANTE and source_valeur is not None:
+        if source_valeur.genre != "constante":
+            raise _refus(source,
+                         f"l'action {action!r} exige une source « constante » "
+                         f"(recu {source_valeur.genre!r}). Une touche de "
+                         f"fonction est une propriete de la pipeline, pas de "
+                         f"l'item : la faire varier d'une ligne a l'autre "
+                         f"rendrait le geste imprevisible", rang, nom)
+
+    if action == "vkey" and source_valeur is not None:
+        # Refuse ici, pas au moment ou le moteur enverrait une touche fantome.
+        try:
+            int(source_valeur.valeur)
+        except ValueError:
+            raise _refus(source,
+                         f"touche de fonction {source_valeur.valeur!r} : un "
+                         f"entier est attendu", rang, nom) from None
 
     ecran = _ecran(brute.get("ecran"), source, rang, nom)
     libre = bool(brute.get("navigation_libre", False))

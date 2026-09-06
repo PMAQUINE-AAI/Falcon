@@ -14,13 +14,14 @@ from .extension import (
     ExtensionInconnue, connues, etape_python, oublier_tout, resoudre,
 )
 from .modele import (
-    ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE,
+    ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE, SOURCE_CONSTANTE,
     DerogationDeclaree, Etape, Pipeline, Source,
 )
 
 __all__ = [
     "Pipeline", "Etape", "Source", "DerogationDeclaree",
     "ACTIONS", "AVEC_CIBLE", "AVEC_SOURCE", "CLASSES", "GENRES_SOURCE",
+    "SOURCE_CONSTANTE",
     "charger", "PipelineInvalide", "MARQUEUR_BROUILLON",
     "CLES_PIPELINE", "CLES_ETAPE",
     "etape_python", "resoudre", "connues", "oublier_tout", "ExtensionInconnue",

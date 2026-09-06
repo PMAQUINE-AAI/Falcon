@@ -17,9 +17,11 @@ from pathlib import Path
 from falcon.controleur import Contrat, contrat_pour
 from falcon.noyau import DEROGEABLES
 from falcon.pipeline import (
-    ACTIONS, ExtensionInconnue, Pipeline, PipelineInvalide, charger, connues,
+    ACTIONS, AVEC_SOURCE, MARQUEUR_BROUILLON, SOURCE_CONSTANTE,
+    ExtensionInconnue, Pipeline, PipelineInvalide, charger, connues,
     etape_python, oublier_tout, resoudre,
 )
+from falcon.pipeline.chargeur import _etape
 
 MOTIF = "l'editeur SAPscript n'est pas adressable, verifie par retelechargement"
 
@@ -42,6 +44,12 @@ VALIDE = """
         ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}
         statut_attendu: "S"
     """
+
+
+#: `VALIDE` se termine par l'indentation de sa triple-quote fermante. Y
+#: concatener une etape la decalerait de quatre espaces et casserait le YAML —
+#: sur une erreur d'indentation, pas sur ce que le test voulait verifier.
+SOCLE = VALIDE.rstrip() + "\n"
 
 
 class Base(unittest.TestCase):
@@ -330,6 +338,138 @@ class TestConversionEnContrat(Base):
         self.assertEqual([g for g, _, _ in contrat.relachements], ["identite"])
 
 
+class TestToucheDeFonction(Base):
+    """`vkey` etait declarable et chargeable, et muette sur la touche a
+    envoyer : aucun champ ne la portait. Le moteur ne pouvait pas l'executer,
+    et le trou n'est apparu qu'au moment de l'ecrire."""
+
+    ETAPE = ('      - nom: valider\n'
+             '        action: vkey\n'
+             '        source: {constante: %s}\n'
+             '        navigation_libre: true\n')
+
+    def _avec(self, valeur: str, **options) -> str:
+        return SOCLE + (self.ETAPE % valeur)
+
+    def test_une_touche_se_declare_et_se_charge(self):
+        pipeline = self._charger(self._avec("11"))
+        etape = pipeline.etapes[-1]
+        self.assertEqual(etape.action, "vkey")
+        self.assertEqual(etape.source.valeur, "11")
+
+    def test_une_touche_manquante_est_refusee(self):
+        message = self._refus(SOCLE + ('      - nom: valider\n'
+                                        '        action: vkey\n'
+                                        '        navigation_libre: true\n'))
+        self.assertIn("exige une `source`", message)
+
+    def test_une_touche_qui_n_est_pas_un_entier_est_refusee(self):
+        """Refuse au chargement, pas au moment ou le moteur enverrait une
+        touche fantome."""
+        message = self._refus(self._avec('"F11"'))
+        self.assertIn("entier est attendu", message)
+        self.assertIn("valider", message)
+
+    def test_une_touche_ne_peut_pas_venir_d_une_colonne(self):
+        """Une touche de fonction est une propriete de la pipeline, pas de
+        l'item : la faire varier d'une ligne a l'autre rend le geste
+        imprevisible, et hors de portee de toute relecture."""
+        message = self._refus(SOCLE + ('      - nom: valider\n'
+                                        '        action: vkey\n'
+                                        '        source: {colonne: touche}\n'
+                                        '        navigation_libre: true\n'))
+        self.assertIn("constante", message)
+
+
+class TestSourceLue(Base):
+    """Une source « lue » designe le nom d'une etape `lire` anterieure.
+
+    Rien ne le verifiait : une reference pendante produisait une saisie vide
+    a l'execution, sans erreur — la classe de defaut que ce projet traque.
+    """
+
+    LIRE = ('      - nom: numero_ordre\n'
+            '        action: lire\n'
+            '        cible: "wnd[0]/usr/txtAUFNR"\n'
+            '        navigation_libre: true\n')
+    ECRIRE = ('      - nom: recopier\n'
+              '        action: set\n'
+              '        cible: "wnd[0]/usr/txtCIBLE"\n'
+              '        source: {lue: %s}\n'
+              '        navigation_libre: true\n')
+
+    def test_une_lecture_puis_sa_reutilisation_se_chargent(self):
+        pipeline = self._charger(SOCLE + self.LIRE
+                                 + (self.ECRIRE % "numero_ordre"))
+        self.assertEqual(pipeline.etapes[-1].source.genre, "lue")
+
+    def test_une_reference_pendante_est_refusee(self):
+        message = self._refus(SOCLE + (self.ECRIRE % "jamais_lu"))
+        self.assertIn("aucune etape `lire` de ce nom ne precede", message)
+        self.assertIn("recopier", message)
+
+    def test_une_reference_a_une_etape_posterieure_est_refusee(self):
+        """L'ordre compte : lire apres avoir ecrit ne lie rien."""
+        message = self._refus(SOCLE + (self.ECRIRE % "numero_ordre")
+                              + self.LIRE)
+        self.assertIn("numero_ordre", message)
+
+    def test_une_reference_a_une_etape_qui_ne_lit_pas_est_refusee(self):
+        """`executer` existe, mais c'est un `press` : il ne lie rien."""
+        message = self._refus(SOCLE + (self.ECRIRE % "executer"))
+        self.assertIn("aucune etape `lire`", message)
+
+
+class TestMarqueurDeBrouillon(Base):
+    """`fonction: TODO` charge en brouillon, et seulement la.
+
+    Le generateur du lot 7b pose ce marqueur la ou une trace contient un
+    geste qu'aucune action ne sait exprimer. Sans cette tolerance, un
+    brouillon genere serait impossible a relire, meme explicitement comme
+    brouillon ; avec elle sans garde-fou, un fichier livre passerait avec des
+    etapes qui ne font rien.
+    """
+
+    ETAPE = ('      - nom: charger_variante\n'
+             '        action: python\n'
+             '        fonction: TODO\n'
+             '        navigation_libre: true\n')
+
+    def test_le_marqueur_charge_en_brouillon(self):
+        pipeline = self._charger(SOCLE + self.ETAPE, brouillon=True)
+        self.assertEqual(pipeline.etapes[-1].fonction, "TODO")
+
+    def test_le_marqueur_est_refuse_hors_brouillon(self):
+        message = self._refus(SOCLE + self.ETAPE)
+        self.assertIn("TODO", message)
+        self.assertIn("brouillon", message)
+
+    def test_une_fonction_inconnue_reste_refusee_meme_en_brouillon(self):
+        """La tolerance porte sur le marqueur, pas sur n'importe quel nom."""
+        message = self._refus(
+            SOCLE + self.ETAPE.replace("TODO", "charger_la_variante"),
+            brouillon=True)
+        self.assertIn("non enregistree", message)
+
+    def test_la_seconde_barriere_tient_toute_seule(self):
+        """Deux barrieres independantes, et il faut les tester separement.
+
+        `charger()` refuse le fichier des le premier marqueur, donc bien
+        avant d'examiner l'etape : le controle au niveau de l'etape n'est
+        jamais atteint par ce chemin. Un controle negatif ne le voyait pas
+        tomber — autrement dit, cette seconde barriere ne garantissait rien.
+        On l'exerce donc directement.
+        """
+        brute = {"nom": "charger_variante", "action": "python",
+                 "fonction": MARQUEUR_BROUILLON, "navigation_libre": True}
+        self.assertEqual(
+            _etape(brute, "p.yaml", 1, brouillon=True).fonction,
+            MARQUEUR_BROUILLON)
+        with self.assertRaises(PipelineInvalide) as capture:
+            _etape(brute, "p.yaml", 1, brouillon=False)
+        self.assertIn("non enregistree", str(capture.exception))
+
+
 class TestModele(unittest.TestCase):
 
     def test_les_actions_couvrent_la_specification(self):
@@ -338,6 +478,19 @@ class TestModele(unittest.TestCase):
             self.assertIn(action, ACTIONS)
         for action in ("cocher", "vkey", "python"):
             self.assertIn(action, ACTIONS)
+
+    def test_toute_action_a_source_constante_exige_une_source(self):
+        """Sinon la contrainte de constance porterait sur rien."""
+        self.assertLessEqual(SOURCE_CONSTANTE, AVEC_SOURCE)
+
+    def test_le_champ_de_commande_a_une_seule_definition(self):
+        """Le moteur et le lecteur de traces en ont besoin tous les deux.
+        Deux definitions finiraient par diverger."""
+        from falcon.noyau import CHAMP_DE_COMMANDE, SUFFIXE_CHAMP_DE_COMMANDE
+        from falcon.trace.esquisse import CHAMP_DE_COMMANDE as SUFFIXE_TRACE
+        self.assertEqual(SUFFIXE_TRACE, SUFFIXE_CHAMP_DE_COMMANDE)
+        self.assertTrue(CHAMP_DE_COMMANDE.endswith(SUFFIXE_CHAMP_DE_COMMANDE))
+        self.assertTrue(CHAMP_DE_COMMANDE.startswith("wnd[0]"))
 
 
 if __name__ == "__main__":

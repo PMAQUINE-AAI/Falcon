@@ -10,8 +10,9 @@ from .erreurs import (
 from .horloge import Horloge, horloge_figee, maintenant
 from .types import Champ, Ecran, Fenetre, Identite, Statut, empreinte
 from .vocabulaire import (
-    COMPARAISONS, DEROGEABLES, FENETRE, GARDES, IDENTITE, MOTIF_MINIMAL,
-    PORTEE_TOTALE, RAYON, RELECTURE, STATUT,
+    CHAMP_DE_COMMANDE, COMPARAISONS, DEROGEABLES, FENETRE, GARDES, IDENTITE,
+    MOTIF_MINIMAL, PORTEE_TOTALE, RAYON, RELECTURE, RETOUR_ACCUEIL, STATUT,
+    SUFFIXE_CHAMP_DE_COMMANDE,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "Horloge", "horloge_figee", "maintenant",
     "GARDES", "IDENTITE", "STATUT", "FENETRE", "RELECTURE", "RAYON",
     "DEROGEABLES", "MOTIF_MINIMAL", "PORTEE_TOTALE", "COMPARAISONS",
+    "CHAMP_DE_COMMANDE", "SUFFIXE_CHAMP_DE_COMMANDE", "RETOUR_ACCUEIL",
 ]
