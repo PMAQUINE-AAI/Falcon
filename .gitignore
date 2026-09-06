@@ -7,6 +7,10 @@ venv/
 build/
 dist/
 
+# Le bundle se construit, il ne se versionne pas :
+# `python outils/embarquer.py`
+falcon.pyz
+
 # Sorties de run : fichiers d'echange, rapports, journaux
 sorties/
 *.rtf

@@ -20,3 +20,9 @@ jobs:
 
       - name: Verifier que les gardes sont protegees
         run: python outils/neutraliser.py
+
+      - name: Construire le bundle
+        run: python outils/embarquer.py
+
+      - name: Le bundle tourne sans site-packages
+        run: python -S falcon.pyz inventaire tests/fixtures/traces/megatrace_2026-09.vbs

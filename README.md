@@ -57,7 +57,7 @@ Les modules livrés :
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
-| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire` — aucune n'écrit dans SAP |
+| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon` — aucune n'écrit dans SAP |
 | `falcon/console/` | menus interactifs : tests, traces, catalogue, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
@@ -115,9 +115,24 @@ elle est en lecture seule par construction, pas par discipline. Avec
 `--catalogue`, le relevé est versé en **quarantaine** ; le promouvoir reste un
 geste explicite, celui par lequel un humain dit avoir relu l'écran.
 
-Une seule dépendance d'exécution, `PyYAML`. Le reporting terminal est en
-stdlib : la livraison est un fichier unique, et chaque dépendance de plus est
-une pièce à embarquer.
+## Livraison
+
+Le dépôt est modulaire, la livraison est **un fichier unique** (§6) :
+
+```bash
+python outils/embarquer.py        # produit falcon.pyz, ~160 Kio
+python falcon.pyz inventaire trace.vbs
+```
+
+`zipapp` est dans la stdlib : construire le bundle n'ajoute aucune dépendance,
+pas même de construction. PyYAML — la seule dépendance d'exécution — voyage
+dans l'archive ; la suite le prouve en lançant le bundle avec `-S`, donc sans
+les paquets de la machine.
+
+`pywin32` n'est **pas** embarqué et ne doit pas l'être : c'est une extension
+binaire Windows liée à une version d'interpréteur. Il s'installe sur le poste,
+et `diagnostiquer` — la seule commande qui l'exige — le dit avec la ligne de
+commande à taper.
 
 Deux règles d'architecture sont vérifiées mécaniquement par
 `tests/test_frontieres.py`, parce qu'une règle que rien ne vérifie tient
