@@ -50,6 +50,7 @@ from falcon.noyau import (
     RefusDryRun, Refus, maintenant,
 )
 from falcon.pipeline import Etape, Pipeline, resoudre
+from falcon.supervision import Progres
 from falcon.taxonomie import Registre, Signature, appliquer
 
 from .adaptateur import Adaptateur
@@ -262,7 +263,7 @@ def executer(pipeline: Pipeline,
              utilisateur: str = "",
              dossier_dumps: str | Path | None = None,
              sortie_ko: str | Path | None = None,
-             observateur: Callable[[dict[str, Any]], None] | None = None,
+             observateur: Callable[[Progres], None] | None = None,
              horloge: Horloge = maintenant) -> Resultat:
     """Execute une pipeline iterative sur un jeu de donnees.
 
@@ -353,8 +354,12 @@ def executer(pipeline: Pipeline,
 
             _clore(ecrivain, run_id, item, OK, debut, garde, compteurs)
             if observateur is not None:
-                observateur({"item": item.item_id, "rang": rang,
-                             "total": len(items), **compteurs})
+                # Le moteur emet des FAITS. L'estimation et le rendu sont
+                # ailleurs : il ne sait pas s'il parle a un terminal.
+                observateur(Progres(
+                    item=item.item_id, rang=rang, total=len(items),
+                    duree_ms=int((time.monotonic() - debut) * 1000),
+                    compteurs=dict(compteurs)))
 
         ecrivain.ecrire(ExecutionFin(
             run_id=run_id, etat=etat, raison=raison, compteurs=dict(compteurs),
