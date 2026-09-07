@@ -123,6 +123,28 @@ def demander_chemin(console: Console, invite: str) -> Path | None:
     return chemin
 
 
+def demander_chemin_neuf(console: Console, invite: str) -> Path | None:
+    """Demande un chemin a ECRIRE. Refuse un fichier qui existe deja.
+
+    Le seul endroit de la console qui produise un fichier. Ecraser en silence
+    un export precedent ferait perdre un travail qu'on ne peut pas refaire :
+    le journal dont il vient est peut-etre le seul temoin de ce qui s'est
+    passe. Refuser coute une saisie ; ecraser coute la trace.
+    """
+    try:
+        saisie = console.lire(f"\n  {invite} : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not saisie:
+        return None
+    chemin = Path(saisie)
+    if chemin.exists():
+        console.ecrire(f"\n  {chemin} existe deja. Choisis un autre nom : "
+                       "rien ici n'ecrase.")
+        return None
+    return chemin
+
+
 def _traces(env: Environnement) -> list[tuple[str, str]]:
     return [(str(c), f"{c.name}  ({c.stat().st_size} o)")
             for c in sorted(env.fixtures.glob("*.vbs"))]
@@ -497,6 +519,290 @@ def ecran_pipelines(env: Environnement) -> Menu:
 
 
 # ---------------------------------------------------------------------------
+# Journaux
+# ---------------------------------------------------------------------------
+
+def ecran_journaux(env: Environnement) -> Menu:
+    """Relire un journal d'execution. **Jamais y ecrire.**
+
+    Le journal est append-only et fait foi : c'est de lui que la reprise tire
+    ce qu'elle a le droit de rejouer. Une console qui pourrait le retoucher —
+    « clore » un item resté ouvert, « passer » un douteux — deferait la seule
+    chose qui empeche une double ecriture dans SAP. Arbitrer un douteux est un
+    geste qui se fait dans SAP, pas dans un menu.
+    """
+
+    def _cles(enregistrements) -> dict[str, str]:
+        """item_id -> clef lisible.
+
+        `item_id` est une empreinte des valeurs de clef, pas le rang de la
+        ligne : un fichier de KO reinjecte n'a plus les memes rangs, et la
+        reprise doit rester juste malgre ca. Le prix, c'est qu'un item
+        s'appelle `a3f2b1...` — illisible pour qui doit aller verifier dans
+        SAP. `ItemDebut` porte la clef ; on la remet en face.
+        """
+        from falcon.journal import ItemDebut
+
+        return {e.item_id: ", ".join(f"{c}={v}" for c, v in e.cle.items())
+                for e in enregistrements
+                if isinstance(e, ItemDebut) and e.cle}
+
+    def _nommer(cles: dict[str, str], item_id: str) -> str:
+        lisible = cles.get(item_id)
+        return f"{item_id}  {lisible}" if lisible else item_id
+
+    def _replier(console: Console):
+        """(enregistrements, etats) d'un journal choisi, ou None."""
+        from falcon.journal import etats, lire
+        from falcon.noyau import JournalCorrompu
+
+        chemin = demander_chemin(console, "journal JSONL")
+        if chemin is None:
+            return None
+        try:
+            enregistrements = lire(chemin)
+        except (JournalCorrompu, OSError) as erreur:
+            console.ecrire(f"\n  Journal illisible.\n\n  {erreur}")
+            return None
+        return chemin, enregistrements, etats(enregistrements)
+
+    def rapport(console: Console) -> str:
+        from falcon.journal import depuis_journal, rendre
+
+        replie = _replier(console)
+        if replie is None:
+            return CONTINUER
+        chemin, enregistrements, _ = replie
+        console.titre("Rapport de fin")
+        console.ecrire()
+        console.ecrire(f"  {chemin}")
+        console.ecrire()
+        for ligne in rendre(depuis_journal(enregistrements)).splitlines():
+            console.ecrire(f"  {ligne}")
+        console.pause()
+        return CONTINUER
+
+    def etats_des_items(console: Console) -> str:
+        from falcon.journal import TERMINAUX
+
+        replie = _replier(console)
+        if replie is None:
+            return CONTINUER
+        _, enregistrements, etats = replie
+        cles = _cles(enregistrements)
+        console.titre("Etats des items")
+
+        par_etat: dict[str, list] = {}
+        for etat_item in etats.values():
+            par_etat.setdefault(etat_item.etat, []).append(etat_item)
+
+        console.ecrire()
+        if not etats:
+            console.ecrire("  Aucun item dans ce journal.")
+            console.pause()
+            return CONTINUER
+
+        for etat in sorted(par_etat):
+            items = sorted(par_etat[etat], key=lambda e: e.item_id)
+            console.ecrire(f"  {etat:<10} {len(items):>4}")
+            for etat_item in items[:20]:
+                sauve = (f"  {etat_item.sauvegardes} sauvegarde(s)"
+                         if etat_item.sauvegardes else "")
+                console.ecrire(
+                    f"      {_nommer(cles, etat_item.item_id)}{sauve}")
+            if len(items) > 20:
+                console.ecrire(f"      ... et {len(items) - 20} autre(s)")
+
+        ouverts = [e for e in etats.values() if e.etat not in TERMINAUX]
+        if ouverts:
+            console.ecrire()
+            console.ecrire(f"  {len(ouverts)} item(s) sans etat terminal : "
+                           "l'execution s'est interrompue.")
+        console.pause()
+        return CONTINUER
+
+    def douteux(console: Console) -> str:
+        from falcon.journal import DOUTEUX
+
+        replie = _replier(console)
+        if replie is None:
+            return CONTINUER
+        _, enregistrements, etats = replie
+        cles = _cles(enregistrements)
+        console.titre("Douteux — a arbitrer a la main")
+        console.ecrire()
+        console.ecrire("  Interrompus APRES une sauvegarde reussie. SAP a "
+                       "peut-etre enregistre ;")
+        console.ecrire("  les rejouer serait une double ecriture. La reprise "
+                       "ne les reprendra")
+        console.ecrire("  jamais, et c'est voulu.")
+
+        a_arbitrer = sorted((e for e in etats.values() if e.etat == DOUTEUX),
+                            key=lambda e: e.item_id)
+        console.ecrire()
+        if not a_arbitrer:
+            console.ecrire("  Aucun. Rien a arbitrer sur ce journal.")
+            console.pause()
+            return CONTINUER
+
+        for etat_item in a_arbitrer:
+            console.ecrire(f"    {_nommer(cles, etat_item.item_id)}   "
+                           f"{etat_item.sauvegardes} sauvegarde(s) passee(s)")
+        console.ecrire()
+        console.ecrire(f"  {len(a_arbitrer)} item(s). Va voir dans SAP ce qui "
+                       "y est reellement, puis")
+        console.ecrire("  reprends la main dessus a l'unite. Rien ici ne peut "
+                       "le faire pour toi.")
+        console.pause()
+        return CONTINUER
+
+    def reexporter(console: Console) -> str:
+        """Le fichier de KO, REPROJETE depuis le journal.
+
+        `ItemDebut.brut` porte les lignes d'entree telles qu'elles ont ete
+        lues. On ne reconstruit donc rien : ni le regroupement — qu'il
+        faudrait redeviner en redemandant les clefs de la pipeline, avec le
+        risque de n'en pas retrouver les memes items — ni les valeurs. Le
+        journal fait foi jusque-la.
+
+        Le jeu d'origine reste demande, mais pour une seule chose : son
+        DIALECTE. Encodage, BOM, delimiteur, fins de ligne et ordre des
+        colonnes ne sont pas dans le journal, et ce sont eux qui rendent le
+        fichier reinjectable sans retouche.
+
+        **Les douteux en sont exclus, nommement.** Un fichier de KO est fait
+        pour etre reinjecte tel quel ; y laisser un item qui a peut-etre deja
+        ecrit dans SAP en ferait un chemin vers la double ecriture, par le
+        canal meme qui est cense etre sur.
+
+        `falcon_sauvegardes` est rempli depuis le repli du journal. Sans lui,
+        l'humain qui relit le fichier n'a aucun moyen de savoir qu'un item a
+        deja ecrit — c'est le pendant, cote fichier, de l'etat « douteux ».
+        """
+        from falcon.donnees import Item, JeuInvalide, ecrire_items, lire
+        from falcon.journal import DOUTEUX, KO, Incident, ItemDebut, ItemFin
+
+        replie = _replier(console)
+        if replie is None:
+            return CONTINUER
+        _, enregistrements, etats = replie
+        cles = _cles(enregistrements)
+
+        console.titre("Reexport des KO")
+
+        recales = {i for i, e in etats.items() if e.etat == KO}
+        ecartes = sorted(i for i, e in etats.items() if e.etat == DOUTEUX)
+
+        console.ecrire()
+        if ecartes:
+            console.ecrire(f"  {len(ecartes)} douteux ECARTE(S) du fichier : "
+                           "ils ont peut-etre deja")
+            console.ecrire("  ecrit dans SAP. Les reinjecter ecrirait deux "
+                           "fois.")
+            for item_id in ecartes:
+                console.ecrire(f"      {_nommer(cles, item_id)}")
+            console.ecrire()
+
+        # La DERNIERE ouverture de chaque item : un item rejoue a plusieurs
+        # ouvertures, et c'est la derniere qui porte les lignes du run qu'on
+        # reexporte.
+        ouvertures: dict[str, ItemDebut] = {}
+        for enregistrement in enregistrements:
+            if isinstance(enregistrement, ItemDebut):
+                ouvertures[enregistrement.item_id] = enregistrement
+
+        a_ecrire = [
+            Item(item_id=ouverture.item_id, cle=dict(ouverture.cle),
+                 brut=tuple(ouverture.brut), index=ouverture.index)
+            for item_id, ouverture in sorted(ouvertures.items())
+            if item_id in recales and ouverture.brut
+        ]
+
+        muets = sorted(i for i in recales
+                       if i in ouvertures and not ouvertures[i].brut)
+        if muets:
+            console.ecrire(f"  {len(muets)} item(s) KO sans lignes d'entree "
+                           "dans le journal : rien a")
+            console.ecrire("  reprojeter pour eux. Ils sont nommes ici, pas "
+                           "reconstruits :")
+            for item_id in muets:
+                console.ecrire(f"      {_nommer(cles, item_id)}")
+            console.ecrire()
+
+        if not a_ecrire:
+            console.ecrire("  Aucun KO a reexporter.")
+            console.pause()
+            return CONTINUER
+
+        chemin_jeu = demander_chemin(
+            console, "jeu d'origine (pour son dialecte : encodage, "
+                     "delimiteur, colonnes)")
+        if chemin_jeu is None:
+            return CONTINUER
+        try:
+            _, dialecte = lire(chemin_jeu)
+        except JeuInvalide as erreur:
+            console.ecrire(f"\n  Dialecte illisible.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        # Les CINQ colonnes de diagnostic, toutes remplies.
+        #
+        # `falcon_categorie` et `falcon_entree` viennent de l'`Incident` — le
+        # seul enregistrement ou la taxonomie ait dit ce qu'elle a reconnu, et
+        # la seule facon de distinguer un `connue_fautive` nomme d'un
+        # `inconnue` qui n'a rien trouve. `ItemFin.incident` est un message
+        # libre : il va dans `falcon_message`, pas dans une colonne de
+        # classement. Une colonne vide dans un fichier de KO, c'est un tri que
+        # l'humain devra faire a la main.
+        classements = {e.item_id: e for e in enregistrements
+                       if isinstance(e, Incident) and e.item_id}
+        messages = {e.item_id: e.incident or ""
+                    for e in enregistrements if isinstance(e, ItemFin)}
+        diagnostics = {}
+        for item in a_ecrire:
+            classement = classements.get(item.item_id)
+            diagnostics[item.item_id] = {
+                "falcon_categorie": classement.categorie if classement else "ko",
+                "falcon_entree": (classement.entree or "") if classement else "",
+                "falcon_message": messages.get(item.item_id, ""),
+                "falcon_sauvegardes": str(etats[item.item_id].sauvegardes),
+            }
+
+        cible = demander_chemin_neuf(
+            console, f"fichier a ecrire ({len(a_ecrire)} item(s))")
+        if cible is None:
+            return CONTINUER
+
+        ecrit = ecrire_items(cible, a_ecrire, dialecte, diagnostics)
+        console.ecrire()
+        console.ecrire(f"  {ecrit}  —  {len(a_ecrire)} item(s), "
+                       f"{sum(len(i.brut) for i in a_ecrire)} ligne(s)")
+        console.ecrire()
+        console.ecrire("  Format et dialecte d'origine : reinjectable tel "
+                       "quel. Les colonnes")
+        console.ecrire("  `falcon_` sont retirees a la lecture.")
+        console.pause()
+        return CONTINUER
+
+    return Menu(
+        titre="FALCON — journaux",
+        preambule=("Lecture seule sur le journal : il est append-only et fait "
+                   "foi. Rien\nici ne le retouche, ne le clot, ni n'arbitre "
+                   "un douteux."),
+        entrees=(
+            Entree("1", "Rapport de fin", rapport,
+                   "provenance, compteurs, incidents, derogations"),
+            Entree("2", "Etats des items", etats_des_items,
+                   "ok, ko, ignore, douteux, en cours — et lesquels"),
+            Entree("3", "Les douteux a arbitrer", douteux,
+                   "interrompus apres sauvegarde ; jamais rejoues"),
+            Entree("4", "Reexporter les KO", reexporter,
+                   "au format d'entree, reinjectable, douteux exclus"),
+        ))
+
+
+# ---------------------------------------------------------------------------
 # Catalogue
 # ---------------------------------------------------------------------------
 
@@ -640,8 +946,10 @@ def racine(env: Environnement | None = None) -> Menu:
                    "couverture du parseur, ecrans conjectures, gestes"),
             Entree("3", "Pipelines et donnees", ecran_pipelines(env),
                    "charger, valider, inspecter un jeu"),
-            Entree("4", "Catalogue d'ecrans", ecran_catalogue(env),
+            Entree("4", "Journaux", ecran_journaux(env),
+                   "rapport, etats des items, douteux, reexport des KO"),
+            Entree("5", "Catalogue d'ecrans", ecran_catalogue(env),
                    "variantes curees et quarantaine"),
-            Entree("5", "Session SAP", ecran_sap(env),
+            Entree("6", "Session SAP", ecran_sap(env),
                    "diagnostic de l'ecran courant, en lecture seule"),
         ))

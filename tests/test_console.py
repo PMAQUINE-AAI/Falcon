@@ -652,3 +652,319 @@ class TestPipelinesEtDonnees(unittest.TestCase):
 
         apres = {c: c.stat().st_mtime_ns for c in self.racine.iterdir()}
         self.assertEqual(avant, apres)
+
+
+class TestJournaux(unittest.TestCase):
+    """Relire un journal. **Jamais y ecrire.**
+
+    Le journal est append-only et fait foi : c'est de lui que la reprise tire
+    ce qu'elle a le droit de rejouer. Une console qui pourrait le retoucher
+    deferait la seule chose qui empeche une double ecriture dans SAP.
+    """
+
+    def setUp(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        self.racine = Path(dossier.name)
+        self.chemin = self.racine / "journal.jsonl"
+        self.jeu = self.racine / "sites.csv"
+        self.jeu.write_bytes(
+            "site;equipement\r\nK75;100\r\nK76;200\r\nK76;201\r\n"
+            "K77;300\r\nK78;400\r\n".encode("cp1252"))
+        self.items = self._items()
+        self._ecrire_journal()
+
+    def _items(self) -> dict:
+        """Les items tels que le moteur les aurait groupes.
+
+        `item_id` est une empreinte des valeurs de clef, jamais un rang : un
+        fichier de KO reinjecte n'a plus les memes rangs. Un journal de test
+        qui poserait `item_id="K75"` testerait un format qui n'existe pas.
+        """
+        from falcon.donnees import grouper, lire
+
+        lignes, _ = lire(self.jeu)
+        return {item.cle["site"]: item for item in grouper(lignes, ["site"])}
+
+    def _ecrire_journal(self) -> None:
+        """Un journal realiste : un OK, un KO, un DOUTEUX, un EN COURS.
+
+        Le douteux n'est pas construit en posant l'etat a la main — il n'y a
+        pas d'etat « douteux » dans le journal. Il se DEDUIT : un item ouvert,
+        une etape de sauvegarde reussie, et pas d'`ItemFin`. C'est le repli qui
+        le classe, et c'est ce repli qu'on veut voir affiche. K78, ouvert sans
+        sauvegarde, reste `en_cours` : la difference entre les deux est
+        exactement celle entre « rejouable » et « a arbitrer ».
+        """
+        from falcon.journal import (
+            Ecrivain, Etape, ExecutionDebut, ExecutionFin, Incident,
+            ItemDebut, ItemFin,
+        )
+
+        def debut(site: str) -> ItemDebut:
+            item = self.items[site]
+            return ItemDebut(run_id="R1", item_id=item.item_id,
+                             index=item.index, cle=dict(item.cle),
+                             brut=[dict(l) for l in item.brut])
+
+        def sauver(site: str) -> Etape:
+            return Etape(run_id="R1", item_id=self.items[site].item_id,
+                         etape="sauver", action="press",
+                         cible="wnd[0]/tbar[0]/btn[11]", sauvegarde=True)
+
+        with Ecrivain(self.chemin) as journal:
+            journal.ecrire(ExecutionDebut(
+                run_id="R1", mode="run", classe="iterative",
+                pipeline="bcp_ia08", pipeline_empreinte="pipe1",
+                jeu="sites.csv", jeu_empreinte="jeu1",
+                systeme="K75", mandant="210"))
+            journal.ecrire(debut("K75"))
+            journal.ecrire(sauver("K75"))
+            journal.ecrire(ItemFin(run_id="R1", item_id=self.items["K75"].item_id,
+                                   etat="ok", sauvegardes=1))
+            journal.ecrire(debut("K76"))
+            journal.ecrire(Incident(
+                run_id="R1", item_id=self.items["K76"].item_id,
+                categorie="connue_fautive", entree="relecture_divergente",
+                bloquant=False,
+                signature={"message": "la valeur n'a pas pris"}))
+            journal.ecrire(ItemFin(run_id="R1", item_id=self.items["K76"].item_id,
+                                   etat="ko", incident="champ_absent"))
+            journal.ecrire(debut("K77"))
+            journal.ecrire(sauver("K77"))
+            journal.ecrire(debut("K78"))
+            journal.ecrire(ExecutionFin(run_id="R1", etat="interrompu",
+                                        raison="ecran inattendu",
+                                        duree_ms=4200))
+
+    def _session(self, libelle: str, *saisies: str) -> Journal:
+        journal = Journal(*vers(racine(), "Journaux", libelle),
+                          *saisies, "0", "0")
+        parcourir(racine(), journal.console())
+        return journal
+
+    # -- rapport -----------------------------------------------------------
+
+    def test_le_rapport_de_fin_se_rend(self):
+        journal = self._session("Rapport de fin", str(self.chemin), "")
+        self.assertIn("bcp_ia08", journal.texte)
+        self.assertIn("K75/210", journal.texte)
+        self.assertIn("DOUTEUX", journal.texte)
+
+    def test_un_journal_illisible_le_dit_sans_trace_de_pile(self):
+        casse = self.racine / "casse.jsonl"
+        casse.write_text("ceci n'est pas du JSON\n", encoding="utf-8")
+        journal = self._session("Rapport de fin", str(casse), "")
+        self.assertIn("illisible", journal.texte)
+        self.assertNotIn("Traceback", journal.texte)
+
+    # -- etats -------------------------------------------------------------
+
+    def test_les_etats_se_comptent_et_se_nomment(self):
+        journal = self._session("Etats des items", str(self.chemin), "")
+        for etat in ("ok", "ko", "douteux", "en_cours"):
+            self.assertIn(etat, journal.texte)
+
+    def test_un_item_est_nomme_par_sa_CLEF_et_pas_par_son_empreinte_seule(self):
+        """`item_id` est une empreinte : `a3f2b1...`. Illisible pour qui doit
+        aller verifier dans SAP. `ItemDebut` porte la clef ; l'ecran la remet
+        en face, sinon l'affichage est exact et inutilisable."""
+        journal = self._session("Etats des items", str(self.chemin), "")
+        self.assertIn("site=K75", journal.texte)
+        self.assertIn("site=K77", journal.texte)
+
+    def test_un_item_sans_etat_terminal_est_signale(self):
+        """K78 : ouvert, jamais referme, aucune sauvegarde. Il reste
+        `en_cours` — donc rejouable — et c'est le signe qu'une execution s'est
+        interrompue. Un compteur seul ne le dirait pas."""
+        journal = self._session("Etats des items", str(self.chemin), "")
+        self.assertIn("sans etat terminal", journal.texte)
+        self.assertIn("site=K78", journal.texte)
+
+    # -- douteux -----------------------------------------------------------
+
+    def test_le_douteux_est_deduit_du_repli_et_montre_avec_ses_sauvegardes(self):
+        """K77 n'a pas d'`ItemFin` mais une sauvegarde reussie. Le nombre de
+        sauvegardes est la seule chose qui dise a un humain ce qu'il doit
+        aller verifier dans SAP."""
+        journal = self._session("douteux", str(self.chemin), "")
+        self.assertIn("site=K77", journal.texte)
+        self.assertIn("1 sauvegarde(s) passee(s)", journal.texte)
+        self.assertIn("double ecriture", journal.texte)
+
+    def test_ni_les_termines_ni_les_en_cours_ne_sont_dans_les_douteux(self):
+        """K78 est ouvert lui aussi, mais sans sauvegarde : il est rejouable.
+        Le confondre avec un douteux ferait arbitrer a la main un item que la
+        reprise sait reprendre."""
+        journal = self._session("douteux", str(self.chemin), "")
+        arbitrer = journal.texte.split("a arbitrer")[-1]
+        for site in ("K75", "K76", "K78"):
+            self.assertNotIn(f"site={site}", arbitrer)
+
+    def test_un_journal_sans_douteux_le_dit(self):
+        from falcon.journal import Ecrivain, ItemDebut, ItemFin
+
+        propre = self.racine / "propre.jsonl"
+        with Ecrivain(propre) as ecrivain:
+            ecrivain.ecrire(ItemDebut(run_id="R2", item_id="abc"))
+            ecrivain.ecrire(ItemFin(run_id="R2", item_id="abc", etat="ok"))
+        journal = self._session("douteux", str(propre), "")
+        self.assertIn("Rien a arbitrer", journal.texte)
+
+    # -- reexport ----------------------------------------------------------
+
+    def test_le_reexport_ecrit_les_ko_au_format_d_origine(self):
+        from falcon.donnees import lire
+
+        cible = self.racine / "ko.csv"
+        journal = self._session("Reexporter", str(self.chemin),
+                                str(self.jeu), str(cible), "")
+        self.assertTrue(cible.exists(), journal.texte)
+
+        octets = cible.read_bytes()
+        self.assertIn(b";", octets)
+        self.assertIn(b"\r\n", octets)
+
+        lignes, dialecte = lire(cible)
+        self.assertEqual(dialecte.delimiteur, ";")
+        self.assertEqual([l["site"] for l in lignes], ["K76", "K76"])
+
+    def test_le_reexport_ECARTE_les_douteux_et_le_dit(self):
+        """Le point le plus important de cet ecran. Un fichier de KO est fait
+        pour etre reinjecte tel quel ; y laisser un item qui a peut-etre deja
+        ecrit dans SAP en ferait un chemin vers la double ecriture, par le
+        canal meme qui est cense etre sur."""
+        from falcon.donnees import lire
+
+        cible = self.racine / "ko.csv"
+        journal = self._session("Reexporter", str(self.chemin),
+                                str(self.jeu), str(cible), "")
+        self.assertIn("ECARTE", journal.texte)
+        self.assertIn("site=K77", journal.texte)
+
+        lignes, _ = lire(cible)
+        self.assertNotIn("K77", [l["site"] for l in lignes])
+
+    def test_le_reexport_porte_le_nombre_de_sauvegardes(self):
+        """Sans lui, l'humain qui relit le fichier n'a aucun moyen de savoir
+        qu'un item a deja ecrit dans SAP."""
+        cible = self.racine / "ko.csv"
+        self._session("Reexporter", str(self.chemin), str(self.jeu),
+                      str(cible), "")
+        self.assertIn("falcon_sauvegardes",
+                      cible.read_text(encoding="cp1252"))
+
+    def test_le_reexport_remplit_les_CINQ_colonnes_de_diagnostic(self):
+        """Une colonne vide dans un fichier de KO, c'est un tri que l'humain
+        devra refaire a la main — donc le benefice annule sur les cas
+        difficiles, qui sont precisement ceux qui coutent.
+
+        `falcon_categorie` et `falcon_entree` viennent de l'`Incident`, le
+        seul enregistrement ou la taxonomie ait dit ce qu'elle a reconnu.
+        `ItemFin.incident` est un message libre : il va dans
+        `falcon_message`, pas dans une colonne de classement.
+        """
+        from falcon.donnees import COLONNES_DIAGNOSTIC
+
+        cible = self.racine / "ko.csv"
+        self._session("Reexporter", str(self.chemin), str(self.jeu),
+                      str(cible), "")
+        texte = cible.read_text(encoding="cp1252")
+        entete, premiere = texte.splitlines()[0], texte.splitlines()[1]
+        for colonne in COLONNES_DIAGNOSTIC:
+            self.assertIn(colonne, entete)
+
+        valeurs = dict(zip(entete.split(";"), premiere.split(";")))
+        self.assertEqual(valeurs["falcon_categorie"], "connue_fautive")
+        self.assertEqual(valeurs["falcon_entree"], "relecture_divergente")
+        self.assertEqual(valeurs["falcon_message"], "champ_absent")
+        self.assertEqual(valeurs["falcon_sauvegardes"], "0")
+        self.assertTrue(valeurs["falcon_item_id"])
+
+    def test_le_reexport_reste_reinjectable_sans_retouche(self):
+        """Les colonnes `falcon_` sont retirees a la lecture : le fichier
+        produit se regroupe par les memes clefs que le jeu d'origine."""
+        from falcon.donnees import grouper, lire
+
+        cible = self.racine / "ko.csv"
+        self._session("Reexporter", str(self.chemin), str(self.jeu),
+                      str(cible), "")
+        lignes, _ = lire(cible)
+        self.assertEqual(len(grouper(lignes, ["site"])), 1)
+
+    def test_l_item_reexporte_rend_TOUTES_ses_lignes(self):
+        """K76 en a deux. Reexporter un resume au lieu du jeu d'origine
+        rendrait le fichier non reinjectable — c'est tout l'item qui doit
+        repartir, pas la ligne qui a echoue."""
+        from falcon.donnees import lire
+
+        cible = self.racine / "ko.csv"
+        self._session("Reexporter", str(self.chemin), str(self.jeu),
+                      str(cible), "")
+        lignes, _ = lire(cible)
+        self.assertEqual(sorted(l["equipement"] for l in lignes),
+                         ["200", "201"])
+
+    def test_le_reexport_n_ecrase_jamais_un_fichier_existant(self):
+        """Le journal dont il vient est peut-etre le seul temoin de ce qui
+        s'est passe. Refuser coute une saisie ; ecraser coute la trace."""
+        cible = self.racine / "deja.csv"
+        cible.write_bytes(b"ne pas ecraser\r\n")
+        journal = self._session("Reexporter", str(self.chemin),
+                                str(self.jeu), str(cible), "")
+        self.assertIn("existe deja", journal.texte)
+        self.assertEqual(cible.read_bytes(), b"ne pas ecraser\r\n")
+
+    def test_un_journal_sans_ko_ne_produit_pas_de_fichier(self):
+        from falcon.journal import Ecrivain, ItemDebut, ItemFin
+
+        propre = self.racine / "propre.jsonl"
+        with Ecrivain(propre) as ecrivain:
+            ecrivain.ecrire(ItemDebut(run_id="R2", item_id="abc"))
+            ecrivain.ecrire(ItemFin(run_id="R2", item_id="abc", etat="ok"))
+        cible = self.racine / "vide.csv"
+        journal = self._session("Reexporter", str(propre), str(cible), "")
+        self.assertIn("Aucun KO", journal.texte)
+        self.assertFalse(cible.exists())
+
+    def test_un_ko_sans_lignes_dans_le_journal_est_nomme_et_pas_invente(self):
+        """Un journal ancien peut n'avoir pas d'`ItemDebut.brut`. Reconstruire
+        les lignes a partir de la clef donnerait un fichier plausible et faux ;
+        le seul comportement juste est de nommer l'item et de s'arreter la."""
+        from falcon.journal import Ecrivain, ItemDebut, ItemFin
+
+        maigre = self.racine / "maigre.jsonl"
+        with Ecrivain(maigre) as ecrivain:
+            ecrivain.ecrire(ItemDebut(run_id="R3", item_id="abc",
+                                      cle={"site": "K99"}))
+            ecrivain.ecrire(ItemFin(run_id="R3", item_id="abc", etat="ko"))
+        journal = self._session("Reexporter", str(maigre), "")
+        self.assertIn("sans lignes d'entree", journal.texte)
+        self.assertIn("site=K99", journal.texte)
+        self.assertIn("Aucun KO", journal.texte)
+
+    # -- innocuite ---------------------------------------------------------
+
+    def test_aucun_ecran_de_cette_branche_ne_touche_au_journal(self):
+        """Le journal fait foi. Ni retouche, ni cloture, ni arbitrage : ce
+        sont des gestes qui se font dans SAP, pas dans un menu."""
+        avant = self.chemin.read_bytes()
+        horodatage = self.chemin.stat().st_mtime_ns
+
+        for libelle, saisies in (
+                ("Rapport de fin", (str(self.chemin), "")),
+                ("Etats des items", (str(self.chemin), "")),
+                ("douteux", (str(self.chemin), "")),
+                ("Reexporter", (str(self.chemin), str(self.jeu),
+                                str(self.racine / "ko.csv"), ""))):
+            self._session(libelle, *saisies)
+
+        self.assertEqual(self.chemin.read_bytes(), avant)
+        self.assertEqual(self.chemin.stat().st_mtime_ns, horodatage)
+
+    def test_aucun_ecran_de_lecture_ne_produit_de_fichier(self):
+        """Seul le reexport ecrit, et seulement la ou on le lui dit."""
+        avant = {c.name for c in self.racine.iterdir()}
+        for libelle in ("Rapport de fin", "Etats des items", "douteux"):
+            self._session(libelle, str(self.chemin), "")
+        self.assertEqual({c.name for c in self.racine.iterdir()}, avant)

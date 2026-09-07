@@ -58,7 +58,7 @@ Les modules livrés :
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
 | `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon` — aucune n'écrit dans SAP |
-| `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, catalogue, diagnostic |
+| `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, journaux, catalogue, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
@@ -85,8 +85,8 @@ Tout depuis un seul endroit :
 python -m falcon console
 ```
 
-Menus numérotés — vérification, traces, pipelines et données, catalogue,
-session SAP. Pas de
+Menus numérotés — vérification, traces, pipelines et données, journaux,
+catalogue, session SAP. Pas de
 `curses` et pas de dépendance : `curses` n'est pas fourni avec CPython sous
 Windows, or c'est la seule machine où SAP GUI existe. Le décor s'encode en
 cp1252, ce qu'écrit une console Windows française redirigée.
