@@ -803,6 +803,199 @@ def ecran_journaux(env: Environnement) -> Menu:
 
 
 # ---------------------------------------------------------------------------
+# Exports de table
+# ---------------------------------------------------------------------------
+
+def ecran_volumique(env: Environnement) -> Menu:
+    """Les exports conserves, et ce qui a bouge entre deux.
+
+    Une volumique ne porte ni journal par item, ni reprise fine : sa valeur
+    est ailleurs, dans le RAPPROCHEMENT. Un export seul dit l'etat d'une table
+    a un instant ; deux exports disent ce qui a change — et ce sont les
+    modifications, pas les ajouts, qui ne se voient pas a l'oeil.
+    """
+
+    def _conservation(console: Console):
+        """(racine, systeme, table) d'une arborescence de conservation."""
+        racine_exports = demander_chemin(console, "dossier de conservation")
+        if racine_exports is None:
+            return None
+        if not racine_exports.is_dir():
+            console.ecrire(f"\n  {racine_exports} n'est pas un dossier.")
+            return None
+        try:
+            systeme = console.lire("\n  systeme (K75, P01...) : ").strip()
+            table = console.lire("  table (MARA, EQUI...) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not systeme or not table:
+            console.ecrire("\n  Un export se range par systeme ET par table. "
+                           "Sans les deux, il n'y a")
+            console.ecrire("  rien a lister.")
+            return None
+        return racine_exports, systeme, table
+
+    def _provenance(console: Console, export) -> None:
+        provenance = export.provenance
+        console.ecrire(f"    systeme       {provenance.systeme}/"
+                       f"{provenance.mandant}")
+        console.ecrire(f"    table         {provenance.table}")
+        console.ecrire(f"    horodatage    {provenance.horodatage}")
+        console.ecrire(f"    utilisateur   {provenance.utilisateur}")
+        if provenance.criteres:
+            console.ecrire("    criteres")
+            for nom, valeur in sorted(provenance.criteres.items()):
+                console.ecrire(f"      {nom} = {valeur}")
+        else:
+            console.ecrire("    criteres      (aucun — table entiere)")
+        console.ecrire(f"    lignes        {len(export)}")
+
+    def lister(console: Console) -> str:
+        from falcon.volumique import ExportInvalide, exports, lire_export
+
+        choix = _conservation(console)
+        if choix is None:
+            return CONTINUER
+        racine_exports, systeme, table = choix
+        console.titre(f"Exports {systeme}/{table}")
+
+        connus = exports(racine_exports, systeme, table)
+        console.ecrire()
+        if not connus:
+            console.ecrire(f"  Aucun export conserve pour {systeme}/{table}.")
+            console.ecrire()
+            console.ecrire("  Le dossier est range par systeme : melanger les "
+                           "systemes rendrait le")
+            console.ecrire("  rapprochement inter-systeme dependant d'un nom "
+                           "de fichier bien lu.")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire(f"  {len(connus)} export(s), du plus ancien au plus "
+                       "recent.")
+        console.ecrire("  Tri sur le NOM : une copie ou une restauration "
+                       "change la date du")
+        console.ecrire("  fichier, pas l'horodatage qu'il porte.")
+        for chemin in connus:
+            console.ecrire()
+            console.ecrire(f"  {chemin.name}")
+            try:
+                _provenance(console, lire_export(chemin))
+            except ExportInvalide as erreur:
+                console.ecrire(f"    ILLISIBLE — {erreur}")
+        console.pause()
+        return CONTINUER
+
+    def comparer(console: Console) -> str:
+        from falcon.volumique import (
+            DeltaImpossible, ExportInvalide, delta, exports, lire_export,
+            rendre,
+        )
+
+        choix = _conservation(console)
+        if choix is None:
+            return CONTINUER
+        racine_exports, systeme, table = choix
+        connus = exports(racine_exports, systeme, table)
+        console.titre(f"Delta {systeme}/{table}")
+        console.ecrire()
+        if len(connus) < 2:
+            console.ecrire(f"  {len(connus)} export(s) conserve(s). Il en faut "
+                           "deux pour comparer.")
+            console.pause()
+            return CONTINUER
+
+        precedent, courant = connus[-2], connus[-1]
+        console.ecrire(f"  precedent   {precedent.name}")
+        console.ecrire(f"  courant     {courant.name}")
+
+        try:
+            saisie = console.lire(
+                "\n  colonnes de clef, separees par une virgule : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return CONTINUER
+        cles = [c.strip() for c in saisie.split(",") if c.strip()]
+
+        try:
+            ecart = delta(lire_export(precedent), lire_export(courant), cles)
+        except (DeltaImpossible, ExportInvalide) as erreur:
+            # Un rapprochement par rang produirait des modifications
+            # imaginaires des que l'ordre change. Le refus est le bon
+            # resultat, et il se lit.
+            console.ecrire(f"\n  Comparaison refusee.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire()
+        for ligne in rendre(ecart).splitlines():
+            console.ecrire(ligne)
+        console.pause()
+        return CONTINUER
+
+    def carte(console: Console) -> str:
+        from falcon.volumique import (
+            CHEMIN_CARTE_DEFAUT, CarteInvalide, charger_carte,
+        )
+
+        console.titre("Carte SE16N")
+        try:
+            relevee = charger_carte()
+        except CarteInvalide as erreur:
+            console.ecrire(f"\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire()
+        console.ecrire(f"  {CHEMIN_CARTE_DEFAUT}")
+        console.ecrire()
+        console.ecrire(f"    champ_table       {relevee.champ_table}")
+        console.ecrire(f"    bouton_executer   {relevee.bouton_executer}")
+        console.ecrire(f"    grille            {relevee.grille}")
+        console.ecrire("    ecran_selection   "
+                       + "/".join(relevee.ecran_selection))
+        console.ecrire("    ecran_resultat    "
+                       + "/".join(relevee.ecran_resultat))
+        console.ecrire(f"    criteres          {len(relevee.criteres)}")
+        for nom, champ in sorted(relevee.criteres.items()):
+            console.ecrire(f"      {nom} -> {champ}")
+
+        console.ecrire()
+        if relevee.complete:
+            console.ecrire("  Carte complete. L'export peut naviguer.")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire(f"  INCOMPLETE — il manque {list(relevee.manquants)}")
+        console.ecrire()
+        console.ecrire("  La carte est livree VIDE, et c'est voulu. Ces "
+                       "identifiants ne sont pas")
+        console.ecrire("  devinables : les conjecturer, c'est piloter un "
+                       "ecran qu'on n'a jamais vu.")
+        console.ecrire("  L'export refuse avant toute navigation tant qu'ils "
+                       "manquent.")
+        console.ecrire()
+        console.ecrire("  Pour la remplir, sur un poste ou SAP GUI est "
+                       "ouvert sur SE16N :")
+        console.ecrire()
+        console.ecrire("      python -m falcon diagnostiquer")
+        console.pause()
+        return CONTINUER
+
+    return Menu(
+        titre="FALCON — exports de table",
+        preambule=("Lecture seule. Rien ici ne lance d'export ni n'ecrase un "
+                   "fichier conserve."),
+        entrees=(
+            Entree("1", "Lister les exports", lister,
+                   "ce qui est conserve, du plus ancien au plus recent"),
+            Entree("2", "Comparer au precedent", comparer,
+                   "ajouts, retraits, et surtout modifications"),
+            Entree("3", "La carte SE16N", carte,
+                   "ce qu'elle contient, et ce qui lui manque"),
+        ))
+
+
+# ---------------------------------------------------------------------------
 # Catalogue
 # ---------------------------------------------------------------------------
 
@@ -950,6 +1143,8 @@ def racine(env: Environnement | None = None) -> Menu:
                    "rapport, etats des items, douteux, reexport des KO"),
             Entree("5", "Catalogue d'ecrans", ecran_catalogue(env),
                    "variantes curees et quarantaine"),
-            Entree("6", "Session SAP", ecran_sap(env),
+            Entree("6", "Exports de table", ecran_volumique(env),
+                   "conservation, delta contre le precedent, carte SE16N"),
+            Entree("7", "Session SAP", ecran_sap(env),
                    "diagnostic de l'ecran courant, en lecture seule"),
         ))

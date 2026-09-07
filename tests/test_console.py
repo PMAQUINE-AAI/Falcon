@@ -968,3 +968,177 @@ class TestJournaux(unittest.TestCase):
         for libelle in ("Rapport de fin", "Etats des items", "douteux"):
             self._session(libelle, str(self.chemin), "")
         self.assertEqual({c.name for c in self.racine.iterdir()}, avant)
+
+
+class TestExportsDeTable(unittest.TestCase):
+    """Les exports conserves, et ce qui a bouge entre deux.
+
+    Une volumique ne porte ni journal par item, ni reprise fine : sa valeur
+    est dans le RAPPROCHEMENT. Un export seul dit l'etat d'une table a un
+    instant ; deux exports disent ce qui a change — et ce sont les
+    modifications, pas les ajouts, qui ne se voient pas a l'oeil.
+    """
+
+    def setUp(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        self.racine = Path(dossier.name)
+
+    def _provenance(self, horodatage: str, **extra):
+        from falcon.volumique import Provenance
+
+        defauts = dict(systeme="K75", mandant="210", table="EQUI",
+                       horodatage=horodatage, utilisateur="DUPONT",
+                       criteres={"WERKS": "K750"})
+        return Provenance(**{**defauts, **extra})
+
+    def _poser(self, horodatage: str, lignes, **extra):
+        from falcon.volumique import enregistrer
+
+        return enregistrer(self.racine, self._provenance(horodatage, **extra),
+                           lignes)
+
+    def _session(self, libelle: str, *saisies: str) -> Journal:
+        journal = Journal(*vers(racine(), "Exports de table", libelle),
+                          *saisies, "0", "0")
+        parcourir(racine(), journal.console())
+        return journal
+
+    # -- lister ------------------------------------------------------------
+
+    def test_les_exports_se_listent_du_plus_ancien_au_plus_recent(self):
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1", "TPLNR": "A"}])
+        self._poser("2026-02-15T08-00-00", [{"EQUNR": "1", "TPLNR": "B"}])
+        journal = self._session("Lister", str(self.racine), "K75", "EQUI", "")
+        self.assertIn("2 export(s)", journal.texte)
+        self.assertLess(journal.texte.index("2026-01-15"),
+                        journal.texte.index("2026-02-15"))
+
+    def test_la_provenance_de_chaque_export_est_rendue(self):
+        """« De quoi savoir, six mois plus tard, ce qu'on est en train de
+        comparer. » Un export sans sa provenance affichee, c'est un fichier
+        dont on ne peut plus rien dire."""
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1"}])
+        journal = self._session("Lister", str(self.racine), "K75", "EQUI", "")
+        self.assertIn("K75/210", journal.texte)
+        self.assertIn("EQUI", journal.texte)
+        self.assertIn("DUPONT", journal.texte)
+        self.assertIn("WERKS = K750", journal.texte)
+        self.assertIn("1", journal.texte)
+
+    def test_un_couple_sans_export_le_dit(self):
+        journal = self._session("Lister", str(self.racine), "P01", "MARA", "")
+        self.assertIn("Aucun export conserve", journal.texte)
+
+    def test_sans_systeme_ni_table_il_n_y_a_rien_a_lister(self):
+        """Un export se range par systeme ET par table. Melanger les systemes
+        rendrait le rapprochement dependant d'un nom de fichier bien lu."""
+        journal = self._session("Lister", str(self.racine), "", "", "")
+        self.assertIn("par systeme ET par table", journal.texte)
+
+    def test_un_export_illisible_est_signale_a_sa_place(self):
+        """Et n'interrompt pas la liste : les autres restent consultables."""
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1"}])
+        (self.racine / "K75" / "EQUI_2026-02-15T08-00-00.jsonl").write_text(
+            "pas un export\n", encoding="utf-8")
+        journal = self._session("Lister", str(self.racine), "K75", "EQUI", "")
+        self.assertIn("ILLISIBLE", journal.texte)
+        self.assertIn("2026-01-15", journal.texte)
+        self.assertNotIn("Traceback", journal.texte)
+
+    # -- comparer ----------------------------------------------------------
+
+    def test_le_delta_montre_les_modifications_colonne_par_colonne(self):
+        """C'est le seul des trois genres d'ecart qui ne se voit pas a l'oeil :
+        une ligne toujours la, dont une colonne a change."""
+        self._poser("2026-01-15T08-00-00",
+                    [{"EQUNR": "1", "TPLNR": "A"},
+                     {"EQUNR": "2", "TPLNR": "B"}])
+        self._poser("2026-02-15T08-00-00",
+                    [{"EQUNR": "1", "TPLNR": "Z"},
+                     {"EQUNR": "3", "TPLNR": "C"}])
+        journal = self._session("Comparer", str(self.racine), "K75", "EQUI",
+                                "EQUNR", "")
+        self.assertIn("ajoutes    1", journal.texte)
+        self.assertIn("retires    1", journal.texte)
+        self.assertIn("modifies   1", journal.texte)
+        self.assertIn("'A' -> 'Z'", journal.texte)
+
+    def test_sans_clef_la_comparaison_est_REFUSEE(self):
+        """Rapprocher par rang produirait des modifications imaginaires des
+        que l'ordre change. Le refus est le bon resultat."""
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1"}])
+        self._poser("2026-02-15T08-00-00", [{"EQUNR": "1"}])
+        journal = self._session("Comparer", str(self.racine), "K75", "EQUI",
+                                "", "")
+        self.assertIn("Comparaison refusee", journal.texte)
+        self.assertIn("rang", journal.texte)
+        self.assertNotIn("Traceback", journal.texte)
+
+    def test_une_clef_qui_ne_resout_pas_est_refusee_situee(self):
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1"}])
+        self._poser("2026-02-15T08-00-00", [{"EQUNR": "1"}])
+        journal = self._session("Comparer", str(self.racine), "K75", "EQUI",
+                                "MATNR", "")
+        self.assertIn("Comparaison refusee", journal.texte)
+        self.assertIn("MATNR", journal.texte)
+
+    def test_un_seul_export_ne_se_compare_a_rien(self):
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1"}])
+        journal = self._session("Comparer", str(self.racine), "K75", "EQUI", "")
+        self.assertIn("Il en faut", journal.texte)
+
+    def test_deux_exports_identiques_le_disent(self):
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1", "TPLNR": "A"}])
+        self._poser("2026-02-15T08-00-00", [{"EQUNR": "1", "TPLNR": "A"}])
+        journal = self._session("Comparer", str(self.racine), "K75", "EQUI",
+                                "EQUNR", "")
+        self.assertIn("Rien n'a bouge", journal.texte)
+
+    # -- carte -------------------------------------------------------------
+
+    def test_la_carte_livree_est_annoncee_INCOMPLETE_avec_ce_qui_manque(self):
+        """Elle est livree vide, et c'est voulu : ces identifiants ne sont pas
+        devinables. Un ecran qui la presenterait comme utilisable inviterait a
+        piloter un ecran que personne n'a jamais vu."""
+        journal = self._session("carte", "")
+        self.assertIn("INCOMPLETE", journal.texte)
+        self.assertIn("champ_table", journal.texte)
+        self.assertIn("ecran_selection", journal.texte)
+
+    def test_la_carte_renvoie_a_la_commande_qui_la_remplit(self):
+        journal = self._session("carte", "")
+        self.assertIn("python -m falcon diagnostiquer", journal.texte)
+
+    def test_la_carte_dit_que_l_export_refuse_avant_de_naviguer(self):
+        """Ce n'est pas un avertissement : c'est le comportement. Le dire ici
+        evite de decouvrir le refus au moment de lancer."""
+        journal = self._session("carte", "")
+        self.assertIn("refuse avant toute navigation", journal.texte)
+
+    # -- innocuite ---------------------------------------------------------
+
+    def test_aucun_ecran_de_cette_branche_n_ecrit_ni_n_ecrase(self):
+        """Un export conserve est la seule trace d'un etat de table a une
+        date : le reecrire, c'est perdre le point de comparaison."""
+        self._poser("2026-01-15T08-00-00", [{"EQUNR": "1", "TPLNR": "A"}])
+        self._poser("2026-02-15T08-00-00", [{"EQUNR": "1", "TPLNR": "Z"}])
+        avant = {c: (c.read_bytes(), c.stat().st_mtime_ns)
+                 for c in (self.racine / "K75").iterdir()}
+
+        for libelle, saisies in (
+                ("Lister", (str(self.racine), "K75", "EQUI", "")),
+                ("Comparer", (str(self.racine), "K75", "EQUI", "EQUNR", "")),
+                ("carte", ("",))):
+            self._session(libelle, *saisies)
+
+        apres = {c: (c.read_bytes(), c.stat().st_mtime_ns)
+                 for c in (self.racine / "K75").iterdir()}
+        self.assertEqual(avant, apres)
+
+    def test_la_carte_livree_avec_le_paquet_n_est_jamais_modifiee(self):
+        from falcon.volumique import CHEMIN_CARTE_DEFAUT
+
+        avant = CHEMIN_CARTE_DEFAUT.read_bytes()
+        self._session("carte", "")
+        self.assertEqual(CHEMIN_CARTE_DEFAUT.read_bytes(), avant)
