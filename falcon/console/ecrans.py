@@ -103,6 +103,26 @@ def choisir(console: Console, titre: str,
     return None
 
 
+def demander_chemin(console: Console, invite: str) -> Path | None:
+    """Demande un chemin de fichier ou de dossier. Rend None si on renonce.
+
+    Le chemin est LU, jamais construit : la console ne fabrique pas de nom a
+    partir d'un morceau saisi. Ce qu'on en fait ensuite est toujours une
+    lecture — c'est la branche appelante qui en repond.
+    """
+    try:
+        saisie = console.lire(f"\n  {invite} : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not saisie:
+        return None
+    chemin = Path(saisie)
+    if not chemin.exists():
+        console.ecrire(f"\n  {chemin} n'existe pas.")
+        return None
+    return chemin
+
+
 def _traces(env: Environnement) -> list[tuple[str, str]]:
     return [(str(c), f"{c.name}  ({c.stat().st_size} o)")
             for c in sorted(env.fixtures.glob("*.vbs"))]
@@ -291,6 +311,192 @@ def ecran_traces(env: Environnement) -> Menu:
 
 
 # ---------------------------------------------------------------------------
+# Pipelines et donnees
+# ---------------------------------------------------------------------------
+
+def _rendre_pipeline(console: Console, pipeline) -> None:
+    """Une pipeline chargee, etape par etape.
+
+    Montre ce que les gardes verront : l'ecran attendu de chaque etape, les
+    fenetres qu'elle tolere, le statut qu'elle exige, et les derogations avec
+    leur motif. C'est la relecture qu'un humain doit pouvoir faire AVANT de
+    lancer quoi que ce soit — pas apres, dans un journal.
+    """
+    console.ecrire()
+    console.ecrire(f"  {pipeline.nom}")
+    console.ecrire(f"    classe                {pipeline.classe}")
+    console.ecrire(f"    cles                  "
+                   f"{', '.join(pipeline.cles) or '(aucune)'}")
+    console.ecrire(f"    plafond items         {pipeline.plafond_items}")
+    console.ecrire(f"    plafond sauvegardes   {pipeline.plafond_sauvegardes}")
+    console.ecrire(f"    empreinte             {pipeline.empreinte}")
+    console.ecrire(f"    etapes                {len(pipeline.etapes)}")
+
+    console.ecrire()
+    for rang, etape in enumerate(pipeline.etapes, start=1):
+        console.ecrire(f"  {rang:>3}  {etape.nom:<24} {etape.action:<8}"
+                       f"{etape.cible}")
+        details = []
+        if etape.ecran:
+            details.append("ecran " + "/".join(etape.ecran))
+        if etape.navigation_libre:
+            details.append("NAVIGATION LIBRE (garde d'identite non posee)")
+        if etape.source is not None:
+            details.append(f"source {etape.source.genre}: "
+                           f"{etape.source.valeur!r}")
+        if etape.fonction:
+            details.append(f"fonction {etape.fonction}")
+        if etape.statut_attendu:
+            details.append(f"statut attendu {etape.statut_attendu}")
+        if etape.sauvegarde:
+            details.append("SAUVEGARDE")
+        if tuple(etape.fenetres) != ("wnd[0]",):
+            details.append(f"fenetres {list(etape.fenetres)}")
+        if etape.comparaison != "casse":
+            details.append(f"comparaison {etape.comparaison}")
+        for detail in details:
+            console.ecrire(f"          {detail}")
+        for derogation in etape.derogations:
+            console.ecrire(f"          DEROGATION a « {derogation.garde} » "
+                           f"({derogation.portee})")
+            console.ecrire(f"            {derogation.motif}")
+
+    sauvent = sum(1 for e in pipeline.etapes if e.sauvegarde)
+    libres = sum(1 for e in pipeline.etapes if e.navigation_libre)
+    derogent = sum(len(e.derogations) for e in pipeline.etapes)
+    console.ecrire()
+    console.ecrire(f"  {sauvent} etape(s) declarent sauvegarder  |  "
+                   f"{libres} en navigation libre  |  "
+                   f"{derogent} derogation(s)")
+    if libres:
+        console.ecrire("  Une navigation libre ne pose PAS la garde "
+                       "d'identite. C'est declare, donc")
+        console.ecrire("  trace — mais c'est a relire.")
+
+
+def _rendre_jeu(console: Console, dialecte, lignes: list) -> None:
+    console.ecrire()
+    console.ecrire("  dialecte lu")
+    console.ecrire(f"    format          {dialecte.format}")
+    console.ecrire(f"    encodage        {dialecte.encodage}"
+                   f"{' + BOM' if dialecte.bom else ''}")
+    if dialecte.format == "csv":
+        console.ecrire(f"    delimiteur      {dialecte.delimiteur!r}")
+        console.ecrire(f"    fins de ligne   {dialecte.fin_de_ligne!r}")
+    console.ecrire(f"    colonnes        {len(dialecte.colonnes)}")
+    for colonne in dialecte.colonnes:
+        console.ecrire(f"      {colonne}")
+    console.ecrire(f"    lignes          {len(lignes)}")
+    console.ecrire()
+    console.ecrire("  Le dialecte lu est celui qui sera reecrit : un fichier "
+                   "de KO reinjecte")
+    console.ecrire("  garde l'encodage, le delimiteur et l'ordre des colonnes "
+                   "d'origine.")
+
+
+def ecran_pipelines(env: Environnement) -> Menu:
+
+    def valider(console: Console) -> str:
+        from falcon.pipeline import PipelineInvalide, charger
+
+        chemin = demander_chemin(console, "pipeline YAML")
+        if chemin is None:
+            return CONTINUER
+        console.titre("Pipeline")
+        try:
+            _rendre_pipeline(console, charger(chemin))
+        except PipelineInvalide as erreur:
+            # Le refus du chargeur est deja SITUE : fichier, rang, nom
+            # d'etape. On le rend tel quel plutot que de le reformuler.
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+        console.pause()
+        return CONTINUER
+
+    def brouillon(console: Console) -> str:
+        from falcon.pipeline import PipelineInvalide, charger
+
+        chemin = demander_chemin(console, "brouillon YAML")
+        if chemin is None:
+            return CONTINUER
+        console.titre("Brouillon de pipeline")
+        console.ecrire()
+        console.ecrire("  Charge en BROUILLON : les marqueurs sont toleres. "
+                       "Un fichier qui")
+        console.ecrire("  en porte encore n'est pas livrable — il reste a "
+                       "completer.")
+        try:
+            _rendre_pipeline(console, charger(chemin, brouillon=True))
+        except PipelineInvalide as erreur:
+            console.ecrire(f"\n  Refuse meme en brouillon.\n\n  {erreur}")
+        console.pause()
+        return CONTINUER
+
+    def jeu(console: Console) -> str:
+        from falcon.donnees import JeuInvalide, grouper, lire
+
+        chemin = demander_chemin(console, "jeu de donnees (csv ou jsonl)")
+        if chemin is None:
+            return CONTINUER
+        console.titre("Jeu de donnees")
+        try:
+            lignes, dialecte = lire(chemin)
+        except JeuInvalide as erreur:
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        _rendre_jeu(console, dialecte, lignes)
+
+        try:
+            saisie = console.lire(
+                "\n  colonnes de clef, separees par une virgule "
+                "(vide = pas de regroupement) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return CONTINUER
+        if not saisie:
+            return CONTINUER
+
+        cles = [c.strip() for c in saisie.split(",") if c.strip()]
+        try:
+            items = grouper(lignes, cles)
+        except JeuInvalide as erreur:
+            console.ecrire(f"\n  Regroupement refuse.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        console.section("Regroupement par unite de sauvegarde")
+        console.ecrire(f"    {len(lignes)} ligne(s) -> {len(items)} item(s)")
+        console.ecrire()
+        for item in items[:20]:
+            cle = ", ".join(f"{c}={v}" for c, v in item.cle.items())
+            console.ecrire(f"    {item.item_id}  {len(item.brut):>3} ligne(s)"
+                           f"  {cle}")
+        if len(items) > 20:
+            console.ecrire(f"    ... et {len(items) - 20} autre(s)")
+        console.ecrire()
+        console.ecrire("  L'unite d'iteration est l'unite de SAUVEGARDE SAP, "
+                       "pas l'unite de")
+        console.ecrire("  constat. C'est ce regroupement qui fait coincider la "
+                       "granularite de")
+        console.ecrire("  reprise avec la frontiere transactionnelle reelle.")
+        console.pause()
+        return CONTINUER
+
+    return Menu(
+        titre="FALCON — pipelines et donnees",
+        preambule="Lecture seule. Rien ici ne touche a SAP ni n'ecrit sur le "
+                  "disque.",
+        entrees=(
+            Entree("1", "Charger et valider une pipeline", valider,
+                   "ce que les gardes verront, etape par etape"),
+            Entree("2", "Relire un brouillon", brouillon,
+                   "meme chose, marqueurs toleres"),
+            Entree("3", "Inspecter un jeu de donnees", jeu,
+                   "dialecte, colonnes, et regroupement en items"),
+        ))
+
+
+# ---------------------------------------------------------------------------
 # Catalogue
 # ---------------------------------------------------------------------------
 
@@ -432,8 +638,10 @@ def racine(env: Environnement | None = None) -> Menu:
                    "les suites, et la preuve que les gardes protegent"),
             Entree("2", "Traces du recorder", ecran_traces(env),
                    "couverture du parseur, ecrans conjectures, gestes"),
-            Entree("3", "Catalogue d'ecrans", ecran_catalogue(env),
+            Entree("3", "Pipelines et donnees", ecran_pipelines(env),
+                   "charger, valider, inspecter un jeu"),
+            Entree("4", "Catalogue d'ecrans", ecran_catalogue(env),
                    "variantes curees et quarantaine"),
-            Entree("4", "Session SAP", ecran_sap(env),
+            Entree("5", "Session SAP", ecran_sap(env),
                    "diagnostic de l'ecran courant, en lecture seule"),
         ))
