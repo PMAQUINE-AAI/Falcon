@@ -145,6 +145,40 @@ binaire Windows liée à une version d'interpréteur. Il s'installe sur le poste
 et `diagnostiquer` — la seule commande qui l'exige — le dit avec la ligne de
 commande à taper.
 
+## Un automatisme nouveau, c'est un YAML — pas un commit
+
+Une pipeline sait **composer** la valeur qu'elle tape, sans qu'une ligne de
+Python soit écrite ni relue :
+
+```yaml
+- nom: saisir_variante
+  action: set
+  cible: "wnd[0]/usr/ctxtV-LOW"
+  source: {gabarit: "/BCP01_{site}"}     # le nom porte le site
+  format: [majuscules]
+
+- nom: saisir_equipement
+  action: set
+  cible: "wnd[0]/usr/ctxtEQUNR"
+  source: {colonne: equipement}
+  defaut: "0"                            # si la case est vide
+  format: [sans_espaces_autour, {zeros: 18}]   # cadrage SAP, largeur déclarée
+```
+
+`gabarit` compose depuis plusieurs colonnes ; `format` applique des
+transformations **dans l'ordre déclaré** ; `defaut` remplace une valeur vide.
+
+**Le registre des transformations est fermé** — `majuscules`, `minuscules`,
+`sans_espaces_autour`, `zeros`, `tronque` — et il n'existe aucune façon
+d'exprimer une condition, un calcul, ou une expression évaluée. Ce n'est pas
+de la timidité : une expression évaluée dans un YAML de pipeline serait du
+code arbitraire n'ayant traversé ni relecture ni garde, c'est-à-dire
+l'échappatoire que le §5.2 interdit. Ce qui ne s'exprime pas ainsi passe par
+`action: python`, qui reçoit un `Poste` gardé.
+
+La composition ne relâche aucune garde : la valeur est calculée **avant**
+l'écriture, donc la relecture compare bien ce qui a été tapé.
+
 ## Le YAML que vous écrivez
 
 Un automatisme nouveau, c'est un YAML et un CSV — jamais un commit. Le format

@@ -49,9 +49,15 @@ SOURCE_CONSTANTE = frozenset({"vkey"})
 
 CLASSES = frozenset({"iterative", "volumique"})
 
-#: Genres de source, dans l'ordre de la specification : colonne du fichier
-#: d'entree, constante, ou valeur lue par une etape `lire` precedente.
-GENRES_SOURCE = frozenset({"colonne", "constante", "lue"})
+#: Genres de source : colonne du fichier d'entree, constante, valeur lue par
+#: une etape `lire` precedente, ou GABARIT composant plusieurs colonnes.
+#:
+#: `gabarit` existe parce que le cas le plus banal d'une correction de masse
+#: SAP en a besoin — un nom de variante porte le site dedans, « /BCP01_K75 » —
+#: et que le seul chemin restant etait d'ecrire une fonction Python, de la
+#: faire entrer dans le depot, et de la faire relire. Pour concatener deux
+#: colonnes.
+GENRES_SOURCE = frozenset({"colonne", "constante", "lue", "gabarit"})
 
 
 @dataclass(frozen=True)
@@ -65,8 +71,14 @@ class Source:
     vide, sans erreur.
     """
 
-    genre: str                      # colonne | constante | lue
+    genre: str                      # colonne | constante | lue | gabarit
     valeur: str
+
+    #: Colonnes citees par un `gabarit`, resolues au chargement. Vide pour les
+    #: autres genres. Le moteur s'en sert pour son controle de pre-vol : une
+    #: colonne citee que le jeu ne porte pas doit tomber AVANT la premiere
+    #: action, pas devenir une chaine vide au milieu du lot.
+    colonnes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,15 @@ class Etape:
     fonction: str = ""                       # action « python »
 
     # Ce que l'etape declare aux gardes.
+    #: Transformations appliquees a la valeur, DANS L'ORDRE DECLARE, avant
+    #: toute ecriture. Registre ferme : voir `pipeline/composition.py`.
+    format: tuple[Any, ...] = ()
+
+    #: Valeur de repli quand la source rend une chaine vide. Distincte de
+    #: l'absence de colonne, que le pre-vol refuse : ici la colonne existe et
+    #: la case est vide, ce qui est une donnee.
+    defaut: str | None = None
+
     ecran: tuple[str, str, str] | None = None
     navigation_libre: bool = False
     fenetres: tuple[str, ...] = ("wnd[0]",)

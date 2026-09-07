@@ -28,6 +28,9 @@ from falcon.noyau.yaml_strict import lire as lire_yaml
 from falcon.noyau import COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, PORTEE_TOTALE
 
 from . import extension
+from .composition import (
+    CompositionInvalide, lire_transformation, verifier_gabarit,
+)
 from .modele import (
     ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE, SOURCE_CONSTANTE,
     DerogationDeclaree, Etape, Pipeline, Source,
@@ -46,7 +49,7 @@ CLES_PIPELINE = frozenset({
 CLES_ETAPE = frozenset({
     "nom", "action", "cible", "source", "fonction", "ecran",
     "navigation_libre", "fenetres", "statut_attendu", "sauvegarde",
-    "comparaison", "derogations",
+    "comparaison", "derogations", "format", "defaut",
 })
 
 VERSION = 1
@@ -266,13 +269,32 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
             statut = texte(statut, "statut_attendu", source=source)
         sauvegarde = booleen(brute.get("sauvegarde"), "sauvegarde",
                              source=source, defaut=False)
+        repli = brute.get("defaut")
+        if "defaut" in brute:
+            repli = texte(repli, "defaut", source=source)
         libre_verifie = booleen(brute.get("navigation_libre"),
                                 "navigation_libre", source=source, defaut=False)
     except YamlAmbigu as erreur:
         raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
 
+    brutes_format = brute.get("format") or []
+    if not isinstance(brutes_format, list):
+        raise _refus(source, "`format` doit etre une LISTE de transformations, "
+                             "appliquees dans l'ordre declare", rang, nom)
+    try:
+        formats = tuple(lire_transformation(b) for b in brutes_format)
+    except CompositionInvalide as erreur:
+        raise _refus(source, str(erreur), rang, nom) from None
+    if formats and source_valeur is None:
+        raise _refus(source, "`format` sans `source` : il n'y a rien a "
+                             "transformer", rang, nom)
+    if repli is not None and source_valeur is None:
+        raise _refus(source, "`defaut` sans `source` : il n'y a rien a "
+                             "remplacer", rang, nom)
+
     return Etape(
         nom=nom, action=action, cible=cible, source=source_valeur,
+        format=formats, defaut=repli,
         fonction=fonction, ecran=ecran, navigation_libre=libre_verifie,
         fenetres=fenetres,
         statut_attendu=statut,
@@ -314,7 +336,16 @@ def _source(brute: Any, source: str, rang: int, nom: str) -> Source | None:
                      f"« 0100 » comme de l'octal et en fait 64, « 007 » "
                      f"comme 7, « 12:30 » comme 750, « on » comme True — et "
                      f"c'est cela qui serait tape dans SAP", rang, nom)
-    return Source(genre=genre, valeur=valeur)
+    colonnes: tuple[str, ...] = ()
+    if genre == "gabarit":
+        # Valide MAINTENANT : une accolade non appariee finirait tapee telle
+        # quelle dans le champ SAP, et les colonnes citees doivent entrer dans
+        # le controle de pre-vol du moteur.
+        try:
+            colonnes = verifier_gabarit(valeur)
+        except CompositionInvalide as erreur:
+            raise _refus(source, str(erreur), rang, nom) from None
+    return Source(genre=genre, valeur=valeur, colonnes=colonnes)
 
 
 def _ecran(brute: Any, source: str, rang: int, nom: str

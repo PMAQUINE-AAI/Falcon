@@ -665,6 +665,40 @@ class TestPipelinesEtDonnees(unittest.TestCase):
         self.assertIn("1 en navigation libre", journal.texte)
         self.assertIn("1 derogation(s)", journal.texte)
 
+    def test_une_valeur_COMPOSEE_est_montree_a_la_relecture(self):
+        """Ce n'est plus la colonne qui part dans SAP, c'est le resultat. Une
+        relecture qui montrerait `colonne: equipement` sans dire « cadre a 18
+        zeros » montrerait autre chose que ce qui sera tape."""
+        chemin = self._poser("compose.yaml", """
+            version: 1
+            nom: composee
+            classe: iterative
+            cles: [site]
+            plafond_items: 50
+            plafond_sauvegardes: 50
+            etapes:
+              - nom: saisir_variante
+                action: set
+                cible: "wnd[0]/usr/ctxtV-LOW"
+                source: {gabarit: "/BCP01_{site}"}
+                format: [majuscules]
+                ecran: {transaction: IA08, programme: R, dynpro: "1000"}
+              - nom: saisir_equipement
+                action: set
+                cible: "wnd[0]/usr/ctxtEQUNR"
+                source: {colonne: equipement}
+                defaut: "0"
+                format: [sans_espaces_autour, {zeros: 18}]
+                ecran: {transaction: IA08, programme: R, dynpro: "1000"}
+            """)
+        journal = self._session("Pipelines", "Charger et valider",
+                                saisies=(str(chemin), ""))
+        self.assertIn("gabarit: '/BCP01_{site}'", journal.texte)
+        self.assertIn("colonnes lues : site", journal.texte)
+        self.assertIn("format majuscules", journal.texte)
+        self.assertIn("defaut si vide '0'", journal.texte)
+        self.assertIn("zeros: 18", journal.texte)
+
     def test_un_refus_du_chargeur_est_rendu_situe(self):
         """Le chargeur produit deja un refus situe — fichier, rang, nom
         d'etape. L'ecran le rend tel quel : le reformuler perdrait le seul
@@ -1418,6 +1452,24 @@ class TestExecution(unittest.TestCase):
         self.assertIn(charger(self.pipeline).empreinte, journal.texte)
         self.assertIn(empreinte_jeu(self.jeu), journal.texte)
         self.assertIn("items a traiter       2", journal.texte)
+
+    def test_le_recapitulatif_montre_les_valeurs_composees(self):
+        """Avant d'ecrire dans un ERP, il faut voir ce qui sera TAPE — pas la
+        colonne dont ca vient."""
+        socle = textwrap.dedent(EXECUTABLE).rstrip() + "\n"
+        # Quatre espaces, pas huit : `socle` est deja passe par `dedent`.
+        compose = socle.replace(
+            "    source: {colonne: site}",
+            '    source: {gabarit: "/BCP01_{site}"}\n'
+            "    format: [majuscules]")
+        self.assertNotEqual(compose, socle, "le remplacement n'a rien fait")
+        self.pipeline.write_text(compose, encoding="utf-8")
+        journal = self._session("Executer", *self._saisies("non"), "")
+        self.assertIn("valeurs COMPOSEES", journal.texte)
+        self.assertIn("/BCP01_{site}", journal.texte)
+        self.assertIn("majuscules", journal.texte)
+        self.assertIn("ce n'est pas la colonne qui part dans SAP".lower(),
+                      journal.texte.lower())
 
     def test_le_recapitulatif_nomme_les_etapes_qui_sauvent(self):
         journal = self._session("Executer", *self._saisies("non"), "")

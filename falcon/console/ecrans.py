@@ -408,6 +408,17 @@ def _rendre_pipeline(console: Console, pipeline) -> None:
         if etape.source is not None:
             details.append(f"source {etape.source.genre}: "
                            f"{etape.source.valeur!r}")
+            if etape.source.colonnes:
+                details.append(f"  colonnes lues : "
+                               f"{', '.join(etape.source.colonnes)}")
+        if etape.defaut is not None:
+            details.append(f"defaut si vide {etape.defaut!r}")
+        if etape.format:
+            # La valeur tapee n'est plus celle de la colonne : la relecture
+            # d'une pipeline doit montrer la transformation, sinon elle montre
+            # autre chose que ce qui partira dans SAP.
+            details.append("format " + " -> ".join(
+                str(transformation) for transformation in etape.format))
         if etape.fonction:
             details.append(f"fonction {etape.fonction}")
         if etape.statut_attendu:
@@ -483,6 +494,23 @@ def _recapituler(console: Console, pipeline, items, jeu: Path,
     libres = [e.nom for e in pipeline.etapes if e.navigation_libre]
     console.ecrire(f"    etapes qui sauvent    "
                    f"{', '.join(sauvent) or '(aucune)'}")
+
+    composees = [e for e in pipeline.etapes
+                 if e.format or e.defaut is not None
+                 or (e.source is not None and e.source.genre == "gabarit")]
+    if composees:
+        console.ecrire(f"    valeurs COMPOSEES     {len(composees)}")
+        for etape in composees:
+            morceaux = []
+            if etape.source is not None and etape.source.genre == "gabarit":
+                morceaux.append(f"gabarit {etape.source.valeur!r}")
+            if etape.defaut is not None:
+                morceaux.append(f"defaut {etape.defaut!r}")
+            if etape.format:
+                morceaux.append(" -> ".join(str(t) for t in etape.format))
+            console.ecrire(f"      {etape.nom} : {' | '.join(morceaux)}")
+        console.ecrire("      Ce n'est pas la colonne qui part dans SAP, "
+                       "c'est le resultat.")
     if libres:
         console.ecrire(f"    navigation libre      {', '.join(libres)}")
         console.ecrire("      ces etapes ne posent PAS la garde d'identite.")

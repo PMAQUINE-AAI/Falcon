@@ -7,6 +7,10 @@ garde : la separation du modele de securite est ici une contrainte d'import,
 pas une convention.
 """
 
+from .composition import (
+    NOMS as TRANSFORMATIONS, CompositionInvalide, Transformation, aide,
+    appliquer_gabarit, jetons, verifier_gabarit,
+)
 from .chargeur import (
     CLES_ETAPE, CLES_PIPELINE, MARQUEUR_BROUILLON, PipelineInvalide, charger,
 )
@@ -25,4 +29,6 @@ __all__ = [
     "charger", "PipelineInvalide", "MARQUEUR_BROUILLON",
     "CLES_PIPELINE", "CLES_ETAPE",
     "etape_python", "resoudre", "connues", "oublier_tout", "ExtensionInconnue",
+    "TRANSFORMATIONS", "Transformation", "CompositionInvalide", "aide",
+    "jetons", "verifier_gabarit", "appliquer_gabarit",
 ]

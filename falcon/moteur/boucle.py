@@ -50,6 +50,8 @@ from falcon.noyau import (
     RefusDryRun, Refus, maintenant,
 )
 from falcon.pipeline import Etape, Pipeline, resoudre
+from falcon.pipeline.composition import appliquer as appliquer_format
+from falcon.pipeline.composition import appliquer_gabarit
 from falcon.supervision import Progres
 from falcon.taxonomie import Registre, Signature, appliquer
 
@@ -114,14 +116,29 @@ class Resultat:
 # ---------------------------------------------------------------------------
 
 def _valeur(etape: Etape, item: Item, lues: dict[str, str]) -> str:
+    """La valeur a taper, composee et transformee, AVANT toute ecriture.
+
+    L'ordre est fixe et se lit dans cette fonction : la source rend un texte,
+    le defaut le remplace s'il est vide, puis les transformations s'appliquent
+    dans l'ordre declare. Le resultat est ce que la garde de relecture
+    comparera a ce que SAP rend — une composition ne relache donc aucune
+    garde, elle dit seulement quoi taper.
+    """
     source = etape.source
     assert source is not None            # garanti par le chargeur
     if source.genre == "constante":
-        return str(source.valeur)
-    if source.genre == "lue":
+        brut = source.valeur
+    elif source.genre == "lue":
         # Le chargeur a verifie qu'une etape `lire` de ce nom precede.
-        return lues[source.valeur]
-    return str(item.brut[0].get(source.valeur, ""))
+        brut = lues[source.valeur]
+    elif source.genre == "gabarit":
+        brut = appliquer_gabarit(source.valeur, item.brut[0])
+    else:
+        brut = str(item.brut[0].get(source.valeur, ""))
+
+    if not brut and etape.defaut is not None:
+        brut = etape.defaut
+    return appliquer_format(brut, etape.format)
 
 
 def _booleen(brut: str, etape: str) -> bool:
@@ -137,8 +154,21 @@ def _booleen(brut: str, etape: str) -> bool:
 
 
 def _colonnes_lues(pipeline: Pipeline) -> tuple[str, ...]:
-    return tuple(sorted({e.source.valeur for e in pipeline.etapes
-                         if e.source is not None and e.source.genre == "colonne"}))
+    """Toutes les colonnes que la pipeline lit, gabarits compris.
+
+    Un gabarit en cite plusieurs : les oublier ici rendrait le pre-vol aveugle
+    a exactement le cas qu'il existe pour attraper — une colonne absente qui
+    vaut la chaine vide.
+    """
+    noms: set[str] = set()
+    for etape in pipeline.etapes:
+        if etape.source is None:
+            continue
+        if etape.source.genre == "colonne":
+            noms.add(etape.source.valeur)
+        elif etape.source.genre == "gabarit":
+            noms.update(etape.source.colonnes)
+    return tuple(sorted(noms))
 
 
 def _verifier_coherence(pipeline: Pipeline, items: list[Item],
