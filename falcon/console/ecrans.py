@@ -261,8 +261,7 @@ def ecran_verification(env: Environnement) -> Menu:
                   "par suite,\net la construction du livrable.",
         entrees=(
             Entree("1", "Tout verifier", tout,
-                   "les deux suites, FALCON et l'archive ; dit aussi ce qui "
-                   "n'a PAS ete verifie"),
+                   "les deux suites, et ce qui n'a PAS ete verifie"),
             Entree("2", "Les gardes sont-elles protegees ?", gardes,
                    "retire chaque garde et exige que la suite tombe"),
             Entree("3", "Une suite au choix", une_suite,
@@ -824,7 +823,7 @@ def ecran_pipelines(env: Environnement) -> Menu:
     return Menu(
         titre="FALCON — pipelines et donnees",
         preambule=(
-            "1 a 3 : lecture seule, rien ne touche a SAP.\n"
+            "1 a 3 : relecture, aucun geste.\n"
             "4 : repetition a blanc, s'arrete avant toute validation.\n"
             "5 a 7 : ECRIVENT DANS SAP, apres confirmation en toutes lettres."),
         entrees=(
@@ -1457,15 +1456,18 @@ def racine(env: Environnement | None = None) -> Menu:
     return Menu(
         titre="FALCON — console",
         preambule=(
-            "Automatisation SAP Front End. Aucune commande de cette console\n"
-            "n'ecrit dans SAP."),
+            "Automatisation SAP Front End.\n"
+            "\n"
+            "Tout se lit sans rien changer, SAUF trois ecrans — « 3 > Executer »,\n"
+            "« 3 > Reprendre » et « 3 > Enchainer » — qui ECRIVENT DANS SAP,\n"
+            "apres confirmation en toutes lettres."),
         entrees=(
             Entree("1", "Verification et livraison", ecran_verification(env),
                    "les suites, la preuve que les gardes protegent, le bundle"),
             Entree("2", "Traces du recorder", ecran_traces(env),
                    "couverture du parseur, ecrans conjectures, gestes"),
             Entree("3", "Pipelines et donnees", ecran_pipelines(env),
-                   "charger, valider, inspecter un jeu"),
+                   "charger, inspecter, et EXECUTER"),
             Entree("4", "Journaux", ecran_journaux(env),
                    "rapport, etats des items, douteux, reexport des KO"),
             Entree("5", "Catalogue d'ecrans", ecran_catalogue(env),

@@ -78,6 +78,24 @@ def _menus(menu: Menu) -> list[Menu]:
     return trouves
 
 
+#: Ce qu'un ecran qui ecrit dans SAP doit annoncer dans son detail.
+MARQUE_ECRITURE = "ECRIT DANS SAP"
+
+#: Formules par lesquelles un preambule affirme qu'on ne risque rien.
+PROMESSES_D_INNOCUITE = ("n'ecrit dans SAP", "ne touche a SAP", "Lecture seule")
+
+
+def _ecrit(menu: Menu) -> bool:
+    """Ce menu mene-t-il, directement ou non, a un ecran qui ecrit ?"""
+    for entree in menu.entrees:
+        if isinstance(entree.cible, Menu):
+            if _ecrit(entree.cible):
+                return True
+        elif MARQUE_ECRITURE in entree.detail:
+            return True
+    return False
+
+
 def vers(menu: Menu, *libelles: str) -> list[str]:
     """Les clefs qui menent a ces libelles, resolues sur l'arbre reel.
 
@@ -327,6 +345,47 @@ class TestAffichage(unittest.TestCase):
             for entree in menu.entrees:
                 with self.subTest(menu=menu.titre, entree=entree.libelle):
                     self.assertTrue(entree.detail.strip())
+
+    def test_aucun_menu_qui_ecrit_ne_se_dit_inoffensif(self):
+        """La propriete la plus importante de tout ce fichier.
+
+        La racine promettait « aucune commande de cette console n'ecrit dans
+        SAP ». C'etait vrai au lot 14 ; ca a cesse de l'etre le jour ou
+        l'execution est arrivee, et la phrase est restee. C'est le pire genre
+        de defaut : un texte rassurant, a l'endroit exact ou quelqu'un decide
+        qu'il peut cliquer sans reflechir.
+
+        Le test ne verifie pas une phrase, il verifie l'ACCORD entre ce qu'un
+        menu mene a faire et ce qu'il en dit. Un ecran qui ecrit ajoute
+        quelque part sous lui, et toute promesse d'innocuite au-dessus tombe.
+        """
+        for menu in _menus(racine()):
+            if not _ecrit(menu):
+                continue
+            for promesse in PROMESSES_D_INNOCUITE:
+                with self.subTest(menu=menu.titre, promesse=promesse):
+                    self.assertNotIn(
+                        promesse, menu.preambule,
+                        f"« {menu.titre} » mene a un ecran qui ecrit dans SAP "
+                        f"et promet le contraire")
+
+    def test_un_menu_qui_ecrit_le_dit_dans_son_preambule(self):
+        """L'accord dans l'autre sens : ne pas mentir ne suffit pas, il faut
+        le dire. Un preambule muet laisse le libelle seul porter
+        l'avertissement, et un libelle se lit trop vite."""
+        for menu in _menus(racine()):
+            if _ecrit(menu):
+                with self.subTest(menu=menu.titre):
+                    self.assertIn("ECRIVENT DANS SAP", menu.preambule)
+
+    def test_aucune_ligne_de_menu_ne_deborde_de_80_colonnes(self):
+        """Le cadre fait 72 colonnes ; une ligne plus longue se replie et
+        casse l'alignement de tout le menu. Trouve a l'oeil, en parcourant les
+        sept branches — ce que les tests ne disaient pas."""
+        for menu in _menus(racine()):
+            for ligne in rendre(menu, racine=False):
+                with self.subTest(menu=menu.titre, ligne=ligne):
+                    self.assertLessEqual(len(ligne), 79)
 
     def test_chaque_menu_annonce_une_sortie(self):
         for menu in _menus(racine()):
