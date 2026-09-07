@@ -53,6 +53,16 @@ class Adaptateur:
         self.item_id: str | None = None
         self.etape: str = ""
 
+        #: Dernier classement de la taxonomie, PAR ITEM.
+        #:
+        #: Le fichier de KO porte cinq colonnes de diagnostic, dont
+        #: `falcon_categorie` et `falcon_entree`. Elles ne peuvent venir que
+        #: d'ici : c'est le seul endroit ou la taxonomie ait dit ce qu'elle a
+        #: reconnu. Sans elles, le fichier laisse a l'humain un tri qu'il
+        #: devra refaire a la main — donc annule le benefice sur les cas
+        #: difficiles, qui sont ceux qui coutent (§4.7).
+        self.classements: dict[str, tuple[str, str]] = {}
+
     def __call__(self, constat: Constat) -> None:
         """Branche sur `DriverGarde(noter=...)`."""
         if constat.verdict not in VERDICTS:
@@ -99,6 +109,9 @@ class Adaptateur:
             dump = str(ecrire_dump(self._dumps, {
                 "run_id": self._run_id, "item_id": self.item_id,
                 "garde": constat.garde, "detail": constat.detail}))
+        if self.item_id is not None:
+            self.classements[self.item_id] = (verdict.categorie,
+                                              verdict.entree or "")
         self._ecrire(Incident(
             run_id=self._run_id, categorie=verdict.categorie,
             signature=dict(constat.detail), bloquant=verdict.bloquant,

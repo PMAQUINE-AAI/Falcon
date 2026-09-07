@@ -98,6 +98,12 @@ class Resultat:
     ko: str | None = None
     duree_ms: int = 0
 
+    #: Items interrompus APRES une sauvegarde. Ils ne sont dans aucun fichier
+    #: de KO — les reinjecter ecrirait deux fois — et la reprise ne les
+    #: reprendra pas. Les nommer ici est la seule chose qui les rende
+    #: visibles a l'appelant sans relire le journal.
+    douteux: tuple[str, ...] = ()
+
     @property
     def interrompu(self) -> bool:
         return self.etat != TERMINE
@@ -135,12 +141,33 @@ def _colonnes_lues(pipeline: Pipeline) -> tuple[str, ...]:
                          if e.source is not None and e.source.genre == "colonne"}))
 
 
-def _verifier_coherence(pipeline: Pipeline, items: list[Item]) -> None:
+def _verifier_coherence(pipeline: Pipeline, items: list[Item],
+                        colonnes: tuple[str, ...] = ()) -> None:
     """Tout ce qui se verifie AVANT de toucher a SAP.
 
-    Deux controles, et les deux tombent a la preparation plutot qu'a l'item
+    Trois controles, et les trois tombent a la preparation plutot qu'a l'item
     quarante — c'est-a-dire avant qu'une seule ecriture ait eu lieu.
     """
+    # Controle 0 : la pipeline lit-elle des colonnes que le jeu porte ?
+    #
+    # Sans lui, une colonne absente valait la chaine vide, et la chaine vide
+    # ne leve nulle part : le controle de coherence ci-dessous voit {""},
+    # de cardinalite 1, donc il passe ; `cocher` trouve "" dans FAUX, donc il
+    # decoche ; `set` ecrit "" dans le champ, donc il le vide. Une faute de
+    # frappe dans un nom de colonne decochait ainsi TOUT un lot, sans un mot.
+    #
+    # C'est le defaut type de ce projet : aucune exception, un resultat
+    # plausible, et faux d'un bout a l'autre.
+    if colonnes:
+        connues = set(colonnes)
+        manquantes = [c for c in _colonnes_lues(pipeline) if c not in connues]
+        if manquantes:
+            raise PreparationImpossible(
+                f"la pipeline {pipeline.nom!r} lit {manquantes}, que le jeu "
+                f"ne porte pas. Colonnes du jeu : {sorted(connues)}. Une "
+                f"colonne absente vaudrait la chaine vide — ce qui decoche "
+                f"une case et vide un champ, sans jamais lever")
+
     for colonne in _colonnes_lues(pipeline):
         for item in items:
             # Une source `colonne` lit la PREMIERE ligne de l'item. Si les
@@ -280,7 +307,7 @@ def executer(pipeline: Pipeline,
             f"iteratives (§3.5)")
 
     items, dialecte = lire_items(jeu, pipeline.cles)
-    _verifier_coherence(pipeline, items)
+    _verifier_coherence(pipeline, items, dialecte.colonnes)
 
     run_id = uuid.uuid4().hex[:16]
     chemin_journal = Path(journal)
@@ -297,6 +324,7 @@ def executer(pipeline: Pipeline,
     compteurs = {OK: 0, KO: 0, IGNORE: 0, DOUTEUX: 0, "deja_faits": deja}
     diagnostics: dict[str, dict[str, str]] = {}
     perdus: list[Item] = []
+    douteux: list[str] = []
     etat, raison = TERMINE, ""
     depart = time.monotonic()
 
@@ -330,18 +358,27 @@ def executer(pipeline: Pipeline,
                                       index=item.index, cle=dict(item.cle),
                                       brut=[dict(l) for l in item.brut]))
             debut = time.monotonic()
+
+            # Le compteur du garde est celui du RUN. Ce qui interesse ici est
+            # celui de l'item : c'est lui qui decide s'il est rejouable ou
+            # douteux, et c'est lui que le fichier de KO doit porter.
+            avant = garde.sauvegardes
+
             try:
                 _jouer_item(pipeline, item, garde, poste,
                             registre or Registre.charger(), adapter)
             except RefusDryRun as erreur:
-                _clore(ecrivain, run_id, item, IGNORE, debut, garde, compteurs)
-                _diagnostiquer(diagnostics, perdus, item, "dry-run", erreur)
+                _clore(ecrivain, run_id, item, IGNORE, debut, garde, compteurs,
+                       sauvegardes=garde.sauvegardes - avant)
+                _diagnostiquer(diagnostics, perdus, item, "dry-run", erreur,
+                               adapter, garde.sauvegardes - avant)
                 continue
             except ItemAbandonne as erreur:
                 # Regle 1 : le lot continue.
                 _clore(ecrivain, run_id, item, KO, debut, garde, compteurs,
-                       str(erreur))
-                _diagnostiquer(diagnostics, perdus, item, "item", erreur)
+                       str(erreur), sauvegardes=garde.sauvegardes - avant)
+                _diagnostiquer(diagnostics, perdus, item, "item", erreur,
+                               adapter, garde.sauvegardes - avant)
                 continue
             except (ArretBloquant, PlafondAtteint) as erreur:
                 # Regle 3 : PAS de fin d'item. Il reste ouvert, et le repli
@@ -349,10 +386,28 @@ def executer(pipeline: Pipeline,
                 etat = PLAFOND if isinstance(erreur, PlafondAtteint) \
                     else INTERROMPU
                 raison = str(erreur)
-                _diagnostiquer(diagnostics, perdus, item, "arret", erreur)
+                passees = garde.sauvegardes - avant
+
+                if passees:
+                    # DOUTEUX. SAP a peut-etre enregistre, et le repli le
+                    # classera ainsi : la reprise ne le rejouera jamais.
+                    #
+                    # Il ne doit donc PAS entrer dans le fichier de KO, qui
+                    # est fait pour etre reinjecte tel quel. L'y laisser
+                    # ouvrirait un troisieme chemin vers la double ecriture —
+                    # par le canal meme qui est cense etre sur, et apres que
+                    # les deux autres l'ont refuse.
+                    compteurs[DOUTEUX] += 1
+                    douteux.append(item.item_id)
+                else:
+                    # Aucune sauvegarde : l'item est intact et rejouable. Il
+                    # a sa place dans le fichier de KO.
+                    _diagnostiquer(diagnostics, perdus, item, "arret", erreur,
+                                   adapter, 0)
                 break
 
-            _clore(ecrivain, run_id, item, OK, debut, garde, compteurs)
+            _clore(ecrivain, run_id, item, OK, debut, garde, compteurs,
+                   sauvegardes=garde.sauvegardes - avant)
             if observateur is not None:
                 # Le moteur emet des FAITS. L'estimation et le rendu sont
                 # ailleurs : il ne sait pas s'il parle a un terminal.
@@ -371,28 +426,51 @@ def executer(pipeline: Pipeline,
 
     return Resultat(run_id=run_id, etat=etat, compteurs=compteurs,
                     raison=raison, journal=str(chemin_journal), ko=chemin_ko,
+                    douteux=tuple(douteux),
                     duree_ms=int((time.monotonic() - depart) * 1000))
 
 
 def _clore(ecrivain: Ecrivain, run_id: str, item: Item, etat: str,
            debut: float, garde: DriverGarde, compteurs: dict[str, int],
-           incident: str | None = None) -> None:
+           incident: str | None = None, *, sauvegardes: int = 0) -> None:
+    """Ferme un item. `sauvegardes` est le compte de CET item.
+
+    Il valait `garde.sauvegardes`, qui est le cumul du run : trois items ayant
+    sauvegarde une fois chacun s'enregistraient 1, 2, 3. Le champ dit pourtant
+    « le nombre de sauvegardes deja passees pour cet item », et c'est sur lui
+    qu'un humain juge s'il peut rejouer. Le repli des etats, lui, recomptait
+    depuis les `Etape` — c'est pourquoi rien ne levait.
+    """
     ecrivain.ecrire(ItemFin(
         run_id=run_id, item_id=item.item_id, etat=etat,
         duree_ms=int((time.monotonic() - debut) * 1000),
-        sauvegardes=garde.sauvegardes, incident=incident))
+        sauvegardes=sauvegardes, incident=incident))
     compteurs[etat] = compteurs.get(etat, 0) + 1
 
 
 def _diagnostiquer(diagnostics: dict[str, dict[str, str]], perdus: list[Item],
-                   item: Item, quoi: str, erreur: Exception) -> None:
+                   item: Item, quoi: str, erreur: Exception,
+                   adapter: Adaptateur, sauvegardes: int) -> None:
     """Prepare le reexport de l'item au format d'entree (§4.7).
 
     Les colonnes portent le prefixe `falcon_`, que la lecture retire : le
     fichier est enrichi pour l'humain ET reinjectable sans retouche.
+
+    LES CINQ COLONNES SONT REMPLIES. Deux ne l'etaient pas :
+
+    `falcon_entree` nomme l'entree de registre qui a apparie — c'est la seule
+    facon de distinguer un `connue_fautive` reconnu d'un `inconnue` qui n'a
+    rien trouve, et donc de trier un fichier de mille lignes.
+
+    `falcon_sauvegardes` dit combien de fois CET item a deja ecrit dans SAP.
+    Sans lui, l'humain qui reinjecte le fait a l'aveugle. C'est le pendant,
+    cote fichier, de l'etat « douteux » cote journal.
     """
     perdus.append(item)
+    categorie, entree = adapter.classements.get(item.item_id, ("", ""))
     diagnostics[item.item_id] = {
-        "falcon_categorie": quoi,
+        "falcon_categorie": categorie or quoi,
+        "falcon_entree": entree,
         "falcon_message": str(erreur),
+        "falcon_sauvegardes": str(sauvegardes),
     }

@@ -18,6 +18,7 @@ comportement du moteur ETANT DONNE une reponse de driver.
 
 from __future__ import annotations
 
+import csv
 import tempfile
 import textwrap
 import unittest
@@ -25,7 +26,9 @@ from pathlib import Path
 
 from falcon.couture.double import DriverScripte
 from falcon.donnees import lire_items
-from falcon.journal import DOUTEUX, EN_COURS, KO, OK, depuis_journal, etats, lire
+from falcon.journal import (
+    DOUTEUX, EN_COURS, KO, OK, ItemFin, depuis_journal, etats, lire,
+)
 from falcon.moteur import (
     DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
     PreparationImpossible, enchainer, executer,
@@ -409,6 +412,233 @@ class TestReexportDesKo(Base):
         self.assertIsNone(resultat.ko)
         self.assertFalse(ko.exists())
 
+    def _registre_fautif(self) -> Registre:
+        """Un registre ou le message d'essai est connu, fautif, non bloquant."""
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        return Registre.charger(surcouche)
+
+    def _driver_refuse_tout(self) -> DriverScripte:
+        brut = self._driver()
+
+        def refuser(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            driver.statut = (Statut(type="E", id="ZZ", numero="001",
+                                    texte="non")
+                             if geste == "press" else Statut())
+        brut.apres_action = refuser
+        return brut
+
+    def test_le_fichier_de_ko_porte_les_CINQ_colonnes_remplies(self):
+        """Deux d'entre elles ne l'etaient pas, et ce sont les deux qui
+        servent a trier.
+
+        `falcon_entree` nomme l'entree de registre qui a apparie : c'est la
+        seule facon de distinguer un `connue_fautive` reconnu d'un `inconnue`
+        qui n'a rien trouve. `falcon_sauvegardes` dit combien de fois l'item a
+        deja ecrit dans SAP — sans lui, on reinjecte a l'aveugle.
+
+        Une colonne vide dans un fichier de KO, c'est un tri que l'humain
+        devra refaire a la main : le benefice de l'automatisation annule sur
+        les cas difficiles, qui sont ceux qui coutent (§4.7).
+        """
+        ko = self.racine / "ko.csv"
+        executer(self._pipeline(), self.jeu, self._driver_refuse_tout(),
+                 journal=self.journal, registre=self._registre_fautif(),
+                 sortie_ko=ko)
+
+        lignes = ko.read_text(encoding="utf-8").splitlines()
+        entete = lignes[0].split(",")
+        premiere = dict(zip(entete, next(csv.reader(lignes[1:2]))))
+        self.assertEqual(premiere["falcon_categorie"], "connue_fautive")
+        self.assertEqual(premiere["falcon_entree"], "zz_refuse")
+        self.assertTrue(premiere["falcon_message"])
+        self.assertTrue(premiere["falcon_item_id"])
+
+        # UN, et c'est tout l'interet de la colonne. L'etape refusee ETAIT la
+        # sauvegarde : l'annonce a eu lieu avant que la barre de statut ne
+        # reponde en erreur. SAP n'a probablement rien enregistre — c'est le
+        # jugement qu'un humain a inscrit au registre en posant
+        # `poursuivre: true, item: ko` — mais « probablement » n'est pas
+        # « surement », et l'humain qui reinjecte doit le voir.
+        self.assertEqual(premiere["falcon_sauvegardes"], "1")
+
+
+class TestDouteuxEtDoubleEcriture(Base):
+    """Le chemin par lequel un item deja ecrit repartait dans SAP.
+
+    Un item interrompu APRES une sauvegarde est `douteux` : le repli le dit,
+    et la reprise ne le rejoue jamais. Il partait pourtant dans le fichier de
+    KO — qui est fait pour etre reinjecte tel quel. Le canal automatique le
+    refusait, le canal papier le tendait a l'humain : troisieme chemin vers la
+    double ecriture, et le seul qui restait ouvert.
+    """
+
+    def _driver_qui_lache_apres_avoir_sauve(self) -> DriverScripte:
+        """Le troisieme press part ailleurs : c'est la sauvegarde de l'item 2,
+        et l'etape suivante du MEME item trouvera un ecran inattendu."""
+        brut = self._driver()
+        vus = {"press": 0}
+
+        def reagir(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            if geste == "press":
+                vus["press"] += 1
+                if vus["press"] == 3:
+                    driver.identite = AUTRE
+        brut.apres_action = reagir
+        return brut
+
+    def _pipeline_avec_retour(self):
+        return self._pipeline(SOCLE + etape(
+            "- nom: revenir",
+            '  action: press',
+            '  cible: "wnd[0]/tbar[0]/btn[3]"',
+            f'  {ECRAN}'))
+
+    def _lot(self):
+        ko = self.racine / "ko.csv"
+        resultat = executer(self._pipeline_avec_retour(), self.jeu,
+                            self._driver_qui_lache_apres_avoir_sauve(),
+                            journal=self.journal, registre=self.registre,
+                            sortie_ko=ko)
+        replie = etats(lire(self.journal))
+        return resultat, ko, replie
+
+    def test_l_item_douteux_n_entre_PAS_dans_le_fichier_de_ko(self):
+        resultat, ko, replie = self._lot()
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertTrue(douteux, "le scenario n'a produit aucun douteux")
+
+        if not ko.exists():
+            return                      # aucun perdu du tout : deja correct
+        ecrit = ko.read_text(encoding="utf-8")
+        for item_id in douteux:
+            self.assertNotIn(item_id, ecrit)
+
+    def test_le_douteux_est_nomme_dans_le_resultat(self):
+        """Il n'est dans aucun fichier : le nommer est la seule chose qui le
+        rende visible sans relire le journal."""
+        resultat, _, replie = self._lot()
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertEqual(set(resultat.douteux), douteux)
+
+    def test_le_compteur_douteux_s_accorde_avec_le_repli(self):
+        """`ExecutionFin` et le repli lisent le meme fichier. Ils disaient
+        deux choses differentes : le compteur restait a zero quoi qu'il
+        arrive, parce qu'il n'etait incremente qu'a la cloture d'un item — et
+        un douteux n'est jamais cloture."""
+        resultat, _, replie = self._lot()
+        attendu = sum(1 for e in replie.values() if e.etat == DOUTEUX)
+        self.assertEqual(resultat.compteurs[DOUTEUX], attendu)
+        self.assertGreater(attendu, 0)
+
+    def test_un_item_interrompu_SANS_sauvegarde_reste_reinjectable(self):
+        """L'autre moitie de la regle, et elle compte autant : un item arrete
+        avant toute sauvegarde est intact. L'ecarter du fichier de KO le
+        perdrait pour rien."""
+        brut = self._driver()
+
+        def deriver(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+                driver.identite = AUTRE      # avant le moindre press
+        brut.apres_action = deriver
+
+        ko = self.racine / "ko.csv"
+        resultat = executer(self._pipeline(), self.jeu, brut,
+                            journal=self.journal, registre=self.registre,
+                            sortie_ko=ko)
+        replie = etats(lire(self.journal))
+        self.assertEqual(resultat.compteurs[DOUTEUX], 0)
+        self.assertEqual(resultat.douteux, ())
+        self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
+        self.assertTrue(ko.exists(), "un item intact doit rester reinjectable")
+
+    def test_itemfin_porte_les_sauvegardes_DE_L_ITEM(self):
+        """Il portait le cumul du run : trois items ayant sauvegarde une fois
+        chacun s'enregistraient 1, 2, 3. Le champ dit pourtant « pour cet
+        item », et c'est sur lui qu'un humain juge s'il peut rejouer.
+
+        Le repli, lui, recompte depuis les `Etape` — c'est pour ca que rien ne
+        levait, et que la contradiction pouvait vivre.
+        """
+        self._executer()
+        fins = [e for e in lire(self.journal) if isinstance(e, ItemFin)]
+        self.assertEqual(len(fins), 3)
+        for fin in fins:
+            self.assertEqual(fin.sauvegardes, 1)
+
+    def test_itemfin_s_accorde_avec_le_repli_qui_recompte(self):
+        """Les deux sources doivent dire la meme chose sur le meme fichier."""
+        self._executer()
+        enregistrements = lire(self.journal)
+        replie = etats(enregistrements)
+        for fin in (e for e in enregistrements if isinstance(e, ItemFin)):
+            self.assertEqual(fin.sauvegardes, replie[fin.item_id].sauvegardes)
+
+
+class TestColonneAbsente(Base):
+    """Une faute de frappe dans un nom de colonne decochait tout un lot.
+
+    Une colonne absente valait la chaine vide, et la chaine vide ne leve nulle
+    part : le controle de coherence voyait {""}, de cardinalite 1, donc il
+    passait ; `cocher` trouvait "" dans FAUX, donc il decochait ; `set`
+    ecrivait "" dans le champ, donc il le vidait.
+
+    Aucune exception, un resultat plausible, et faux d'un bout a l'autre.
+    """
+
+    def test_une_colonne_absente_du_jeu_est_refusee_avant_toute_action(self):
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(PIPELINE.replace("colonne: site",
+                                                     "colonne: sitte")),
+                     self.jeu, brut, journal=self.journal,
+                     registre=self.registre)
+        message = str(capture.exception)
+        self.assertIn("sitte", message)
+        self.assertIn("site", message)          # ce que le jeu porte vraiment
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+    def test_une_colonne_presente_mais_vide_reste_permise(self):
+        """« Ne touche pas a ce champ » et « vide ce champ » sont deux
+        instructions differentes pour SAP. Une colonne vide est une valeur,
+        pas une erreur : la refuser interdirait un cas legitime."""
+        self.jeu.write_text("site,libelle\n1000,\n2000,\n", encoding="utf-8")
+        resultat = executer(
+            self._pipeline(PIPELINE.replace("colonne: site",
+                                            "colonne: libelle")),
+            self.jeu, self._driver(), journal=self.journal,
+            registre=self.registre)
+        self.assertEqual(resultat.etat, TERMINE)
+
+    def test_une_case_a_cocher_sur_colonne_absente_ne_decoche_plus_en_silence(self):
+        """Le cas le plus couteux : "" appartient a FAUX, donc chaque item
+        etait decoche, sur tout le lot, sans un mot."""
+        with self.assertRaises(PreparationImpossible):
+            executer(self._pipeline(SOCLE + etape(
+                "- nom: cocher_case",
+                "  action: cocher",
+                '  cible: "wnd[0]/usr/chkDY_LOEK"',
+                "  source: {colonne: absente}",
+                f"  {ECRAN}")),
+                self.jeu, self._driver(), journal=self.journal,
+                registre=self.registre)
+
 
 class TestEchappatoirePython(Base):
 
@@ -500,8 +730,15 @@ class TestChaine(Base):
     def test_aucune_donnee_ne_passe_d_une_pipeline_a_la_suivante(self):
         """La limite qui empeche la chaine de devenir un orchestrateur.
 
-        `Resultat` ne porte que des compteurs, des etats et des chemins — rien
-        qu'une pipeline suivante puisse consommer comme donnee metier.
+        `Resultat` ne porte que des compteurs, des etats, des chemins et des
+        identifiants d'item — rien qu'une pipeline suivante puisse consommer
+        comme donnee METIER. L'egalite est exhaustive a dessein : y ajouter un
+        champ doit etre un geste delibere, pas un effet de bord.
+
+        `douteux` porte des `item_id`, qui sont des empreintes de clef : ils
+        disent CE QUI s'est passe, pas ce qu'il y avait dans les colonnes. Et
+        `enchainer` ne les transmet a aucun maillon suivant — un test voisin
+        l'epingle. La limite tient.
         """
         import dataclasses
 
@@ -509,7 +746,7 @@ class TestChaine(Base):
 
         champs = {c.name for c in dataclasses.fields(Resultat)}
         self.assertEqual(champs, {"run_id", "etat", "compteurs", "raison",
-                                  "journal", "ko", "duree_ms"})
+                                  "journal", "ko", "duree_ms", "douteux"})
 
 
 class TestBoutEnBout(Base):
