@@ -59,7 +59,7 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 12b | `[~]` | Navigation `SE16N` (§3.6) | 12a, **carte d'écran relevée** | 15 tests ; mécanique livrée et exercée contre le double ; la carte est livrée **vide** et l'export refuse avant toute navigation. **Reste** : relever la carte sur un poste réel |
 | 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction**. Bundle livré : `python outils/embarquer.py` produit un `falcon.pyz` de 164 Kio qui tourne **sans `site-packages`**. **Reste** : la validation sur un poste réel |
 | 14 | `[x]` | Console interactive : tests, traces, catalogue, diagnostic | 6, 9, 13 | 28 tests ; une session complète se rejoue sans terminal ; le décor s'encode en cp1252 ; aucun écran n'atteint une méthode mutante (vérifié sur l'AST) |
-| 15 | `[~]` | La console pilote tout FALCON | 8, 10, 12a, 14 | 62 tests. « Pipelines et données » : une pipeline se relit étape par étape avec ses plafonds, ses navigations libres et ses dérogations motivées **avant** tout lancement. « Journaux » : rapport, états, douteux nommés par leur clef, et un réexport des KO **reprojeté depuis le journal**, douteux exclus, cinq colonnes de diagnostic remplies. « Exports de table » : conservation avec provenance, delta contre le précédent, et la carte SE16N qui dit ce qui lui manque. **Reste** : exécution, bundle |
+| 15 | `[~]` | La console pilote tout FALCON | 8, 10, 12a, 14 | 62 tests. « Pipelines et données » : une pipeline se relit étape par étape avec ses plafonds, ses navigations libres et ses dérogations motivées **avant** tout lancement. « Journaux » : rapport, états, douteux nommés par leur clef, et un réexport des KO **reprojeté depuis le journal**, douteux exclus, cinq colonnes de diagnostic remplies. « Exports de table » : conservation avec provenance, delta contre le précédent, et la carte SE16N qui dit ce qui lui manque. « Exécuter » : répétition à blanc, run, reprise et chaîne, chacune précédée d'un récapitulatif complet et d'une **confirmation en toutes lettres** — le nom de la pipeline, jamais un `o/n` ; le `Rapporteur` du lot 11 est enfin branché. **Reste** : le bundle depuis le menu |
 
 ## Ce qui bloque, et sur quoi
 
@@ -105,8 +105,8 @@ python -m falcon console
 Menus numérotés : vérification (les deux suites, le neutraliseur, une suite au
 choix), traces du recorder (couverture, écrans conjecturés, gestes
 significatifs), pipelines et données (charger et valider, relire un brouillon,
-inspecter un jeu), journaux (rapport de fin, états des items, douteux à
-arbitrer, réexport des KO), catalogue (curé et quarantaine), exports de table
+inspecter un jeu, **puis exécuter**), journaux (rapport de fin, états des
+items, douteux à arbitrer, réexport des KO), catalogue (curé et quarantaine), exports de table
 (conservation, delta, carte SE16N), session SAP (diagnostic en lecture seule).
 Aucun écran n'écrit dans SAP.
 

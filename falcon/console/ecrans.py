@@ -46,6 +46,12 @@ def _lancer(arguments: list[str]) -> tuple[int, str]:
     return fini.returncode, (fini.stdout or "") + (fini.stderr or "")
 
 
+def _rapporteur() -> Any:
+    """L'observateur de progression du lot 11. Muet hors terminal."""
+    from falcon.supervision import Rapporteur
+    return Rapporteur()
+
+
 def _connecter() -> Any:
     """Ouvre une session SAP. Importe pywin32 seulement ici."""
     from falcon.couture.sapgui import connecter
@@ -63,6 +69,10 @@ class Environnement:
     lancer: Callable[[list[str]], tuple[int, str]] = _lancer
     connecter: Callable[[], Any] = _connecter
     fixtures: Path = field(default=FIXTURES)
+    #: Fabrique l'observateur de progression branche sur le moteur. La barre
+    #: et l'ETA glissant existent depuis le lot 11 et n'avaient jamais rien
+    #: affiche : personne ne les appelait.
+    rapporteur: Callable[[], Any] = _rapporteur
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +113,17 @@ def choisir(console: Console, titre: str,
     return None
 
 
-def demander_chemin(console: Console, invite: str) -> Path | None:
+def demander_chemin(console: Console, invite: str, *,
+                    existant: bool = True) -> Path | None:
     """Demande un chemin de fichier ou de dossier. Rend None si on renonce.
 
     Le chemin est LU, jamais construit : la console ne fabrique pas de nom a
     partir d'un morceau saisi. Ce qu'on en fait ensuite est toujours une
     lecture — c'est la branche appelante qui en repond.
+
+    `existant=False` pour un journal : il est append-only et partage entre
+    executions, donc il peut aussi bien exister deja que naitre ici. Exiger
+    l'un ou l'autre serait faux dans la moitie des cas.
     """
     try:
         saisie = console.lire(f"\n  {invite} : ").strip()
@@ -117,7 +132,7 @@ def demander_chemin(console: Console, invite: str) -> Path | None:
     if not saisie:
         return None
     chemin = Path(saisie)
-    if not chemin.exists():
+    if existant and not chemin.exists():
         console.ecrire(f"\n  {chemin} n'existe pas.")
         return None
     return chemin
@@ -416,6 +431,93 @@ def _rendre_jeu(console: Console, dialecte, lignes: list) -> None:
                    "d'origine.")
 
 
+def _recapituler(console: Console, pipeline, items, jeu: Path,
+                 jeu_empreinte: str, mode: str) -> None:
+    """Ce qui va se passer, AVANT que ca se passe.
+
+    Tout ce qui borne les degats est ici : les deux plafonds, le nombre
+    d'items, et chaque derogation avec son motif. Un recapitulatif qui
+    omettrait l'un des deux plafonds laisserait croire que l'autre n'existe
+    pas — or c'est celui des sauvegardes qui borne ce qui part dans SAP.
+    """
+    console.section("Ce qui va se passer")
+    console.ecrire(f"    mode                  {mode}")
+    console.ecrire(f"    pipeline              {pipeline.nom}")
+    console.ecrire(f"    empreinte pipeline    {pipeline.empreinte}")
+    console.ecrire(f"    jeu                   {jeu}")
+    console.ecrire(f"    empreinte jeu         {jeu_empreinte}")
+    console.ecrire(f"    cles                  "
+                   f"{', '.join(pipeline.cles) or '(aucune)'}")
+    console.ecrire(f"    items a traiter       {len(items)}")
+    console.ecrire(f"    PLAFOND items         {pipeline.plafond_items}")
+    console.ecrire(f"    PLAFOND sauvegardes   {pipeline.plafond_sauvegardes}")
+
+    sauvent = [e.nom for e in pipeline.etapes if e.sauvegarde]
+    libres = [e.nom for e in pipeline.etapes if e.navigation_libre]
+    console.ecrire(f"    etapes qui sauvent    "
+                   f"{', '.join(sauvent) or '(aucune)'}")
+    if libres:
+        console.ecrire(f"    navigation libre      {', '.join(libres)}")
+        console.ecrire("      ces etapes ne posent PAS la garde d'identite.")
+
+    derogations = [(e.nom, d) for e in pipeline.etapes
+                   for d in e.derogations]
+    if derogations:
+        console.ecrire(f"    DEROGATIONS           {len(derogations)}")
+        for nom, derogation in derogations:
+            console.ecrire(f"      {nom} : garde « {derogation.garde} » "
+                           f"({derogation.portee})")
+            console.ecrire(f"        {derogation.motif}")
+    else:
+        console.ecrire("    derogations           aucune")
+
+
+def confirmer(console: Console, attendu: str) -> bool:
+    """Confirmation en TOUTES LETTRES. Rend True seulement sur le mot exact.
+
+    Pas un `o/n`. Un `o/n` se tape sans lire — c'est un reflexe, et un reflexe
+    n'est pas un consentement. Le mot attendu est le nom de la pipeline : on
+    ne peut pas le taper sans avoir lu le recapitulatif qui le nomme, donc
+    sans avoir vu au passage les plafonds, le nombre d'items et les
+    derogations.
+
+    Toute autre saisie renonce — y compris une saisie vide, une fin de flux ou
+    un Ctrl-C. Le defaut est de NE PAS ecrire dans un ERP.
+    """
+    console.ecrire()
+    console.ecrire("  Ceci va ECRIRE dans SAP. Pour confirmer, tape le nom de "
+                   "la pipeline")
+    console.ecrire("  en toutes lettres. Toute autre reponse annule.")
+    try:
+        saisie = console.lire(f"\n  nom attendu « {attendu} » : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        saisie = ""
+    if saisie == attendu:
+        return True
+    console.ecrire("\n  Annule. Rien n'a ete ecrit.")
+    return False
+
+
+def _rendre_resultat(console: Console, resultat) -> None:
+    console.ecrire()
+    console.ecrire(f"  etat        {resultat.etat}")
+    console.ecrire(f"  duree       {resultat.duree_ms / 1000:.1f} s")
+    console.ecrire("  compteurs   " + ", ".join(
+        f"{nom} {valeur}" for nom, valeur in sorted(resultat.compteurs.items())))
+    console.ecrire(f"  journal     {resultat.journal}")
+    if resultat.ko:
+        console.ecrire(f"  KO          {resultat.ko}")
+    if resultat.raison:
+        console.ecrire(f"  raison      {resultat.raison}")
+    if resultat.interrompu:
+        console.ecrire()
+        console.ecrire("  INTERROMPU. Un item ouvert APRES une sauvegarde est "
+                       "douteux : la reprise")
+        console.ecrire("  ne le rejouera pas. Va le voir dans « Journaux > "
+                       "Les douteux a arbitrer »")
+        console.ecrire("  avant de relancer quoi que ce soit.")
+
+
 def ecran_pipelines(env: Environnement) -> Menu:
 
     def valider(console: Console) -> str:
@@ -504,10 +606,199 @@ def ecran_pipelines(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    # -- execution ---------------------------------------------------------
+    #
+    # A partir d'ici, ca ecrit dans un ERP. L'ordre des entrees n'est pas
+    # cosmetique : la repetition a blanc est proposee AVANT l'execution, et
+    # l'execution avant la reprise.
+
+    def _preparer(console: Console, mode: str):
+        """(pipeline, jeu, items, empreinte, journal) ou None.
+
+        Tout ce qui peut etre refuse l'est ICI, avant la moindre connexion :
+        pipeline illisible, jeu illisible, regroupement impossible. Tomber a
+        la preparation coute une saisie ; tomber a l'item quarante coute
+        trente-neuf ecritures a demeler.
+        """
+        from falcon.donnees import JeuInvalide, empreinte_jeu, lire_items
+        from falcon.pipeline import PipelineInvalide, charger
+
+        chemin = demander_chemin(console, "pipeline YAML")
+        if chemin is None:
+            return None
+        try:
+            pipeline = charger(chemin)
+        except PipelineInvalide as erreur:
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+            console.pause()
+            return None
+
+        if not pipeline.iterative:
+            console.ecrire(f"\n  {pipeline.nom!r} est une pipeline "
+                           f"{pipeline.classe!r}. La machinerie par item —")
+            console.ecrire("  journal, reprise, ETA — ne sert qu'aux "
+                           "iteratives (§3.5).")
+            console.pause()
+            return None
+
+        jeu = demander_chemin(console, "jeu de donnees")
+        if jeu is None:
+            return None
+        try:
+            items, _ = lire_items(jeu, pipeline.cles)
+            empreinte = empreinte_jeu(jeu)
+        except JeuInvalide as erreur:
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+            console.pause()
+            return None
+
+        journal = demander_chemin(console, "journal JSONL (existant ou neuf)",
+                                  existant=False)
+        if journal is None:
+            return None
+        return pipeline, jeu, items, empreinte, journal
+
+    def _executer(console: Console, mode: str, titre: str) -> str:
+        from falcon.moteur import executer
+        from falcon.noyau import ErreurFalcon
+
+        prepare = _preparer(console, mode)
+        if prepare is None:
+            return CONTINUER
+        pipeline, jeu, items, empreinte, journal = prepare
+
+        console.titre(titre)
+        _recapituler(console, pipeline, items, jeu, empreinte, mode)
+
+        # La repetition a blanc s'arrete avant toute validation : elle ne
+        # demande pas de confirmation, parce qu'il n'y a rien a confirmer.
+        if mode != "dry-run" and not confirmer(console, pipeline.nom):
+            console.pause()
+            return CONTINUER
+
+        try:
+            driver = env.connecter()
+        except ErreurFalcon as erreur:
+            console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+            console.pause()
+            return CONTINUER
+
+        observateur = env.rapporteur()
+        try:
+            resultat = executer(
+                pipeline, jeu, driver, journal=journal, mode=mode,
+                sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                observateur=observateur)
+        except ErreurFalcon as erreur:
+            # Le moteur a refuse AVANT d'agir, ou s'est arrete sur un
+            # inconnu. Dans les deux cas le journal dit ce qui a ete fait ;
+            # la console n'a pas a le resumer de memoire.
+            console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+            console.ecrire(f"\n  Le journal fait foi : {journal}")
+            console.pause()
+            return CONTINUER
+        finally:
+            clore = getattr(observateur, "clore", None)
+            if callable(clore):
+                clore()
+
+        _rendre_resultat(console, resultat)
+        console.pause()
+        return CONTINUER
+
+    def a_blanc(console: Console) -> str:
+        return _executer(console, "dry-run", "Repetition a blanc")
+
+    def lancer(console: Console) -> str:
+        return _executer(console, "run", "Execution")
+
+    def reprendre(console: Console) -> str:
+        return _executer(console, "resume", "Reprise")
+
+    def enchainer_les(console: Console) -> str:
+        """Une chaine de pipelines : declenchements successifs, rien de plus.
+
+        Aucune donnee ne passe d'un maillon au suivant, et c'est la limite qui
+        empeche la chaine de devenir un orchestrateur (§3.3). Un maillon
+        interrompu arrete la chaine : un arret bloquant dit que le modele du
+        monde est faux, et passer au suivant serait ecrire n'importe ou avec
+        entrain.
+        """
+        from falcon.moteur import Maillon, enchainer
+        from falcon.noyau import ErreurFalcon
+
+        console.titre("Chaine de pipelines")
+        console.ecrire()
+        console.ecrire("  Declenchements successifs. AUCUNE donnee ne passe "
+                       "d'un maillon au")
+        console.ecrire("  suivant, et un maillon interrompu arrete la chaine.")
+
+        maillons: list = []
+        recaps: list = []
+        while True:
+            console.ecrire()
+            console.ecrire(f"  Maillon {len(maillons) + 1} — laisser vide "
+                           "pour lancer la chaine.")
+            prepare = _preparer(console, "run")
+            if prepare is None:
+                break
+            pipeline, jeu, items, empreinte, journal = prepare
+            maillons.append(Maillon(
+                pipeline=pipeline, jeu=jeu, journal=journal,
+                sortie_ko=str(Path(journal).with_suffix(".ko.csv"))))
+            recaps.append((pipeline, items, jeu, empreinte))
+            console.ecrire(f"\n  + {pipeline.nom}  ({len(items)} item(s))")
+
+        if not maillons:
+            console.ecrire("\n  Chaine vide. Rien a lancer.")
+            console.pause()
+            return CONTINUER
+
+        console.titre(f"Chaine — {len(maillons)} maillon(s)")
+        for pipeline, items, jeu, empreinte in recaps:
+            _recapituler(console, pipeline, items, jeu, empreinte, "run")
+
+        # Le nom attendu est celui du PREMIER maillon : c'est lui qui part en
+        # premier, et c'est le seul dont on soit sur qu'il s'executera.
+        if not confirmer(console, maillons[0].pipeline.nom):
+            console.pause()
+            return CONTINUER
+
+        try:
+            driver = env.connecter()
+        except ErreurFalcon as erreur:
+            console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+            console.pause()
+            return CONTINUER
+
+        observateur = env.rapporteur()
+        try:
+            resultats = enchainer(maillons, driver, observateur=observateur)
+        except ErreurFalcon as erreur:
+            console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+            console.pause()
+            return CONTINUER
+        finally:
+            clore = getattr(observateur, "clore", None)
+            if callable(clore):
+                clore()
+
+        for maillon, resultat in zip(maillons, resultats):
+            console.section(maillon.pipeline.nom)
+            _rendre_resultat(console, resultat)
+        if len(resultats) < len(maillons):
+            console.ecrire()
+            console.ecrire(f"  Chaine ARRETEE apres {len(resultats)} "
+                           f"maillon(s) sur {len(maillons)}.")
+        console.pause()
+        return CONTINUER
+
     return Menu(
         titre="FALCON — pipelines et donnees",
-        preambule="Lecture seule. Rien ici ne touche a SAP ni n'ecrit sur le "
-                  "disque.",
+        preambule=(
+            "1 a 3 : lecture seule, rien ne touche a SAP.\n"
+            "4 : repetition a blanc, s'arrete avant toute validation.\n"
+            "5 a 7 : ECRIVENT DANS SAP, apres confirmation en toutes lettres."),
         entrees=(
             Entree("1", "Charger et valider une pipeline", valider,
                    "ce que les gardes verront, etape par etape"),
@@ -515,6 +806,14 @@ def ecran_pipelines(env: Environnement) -> Menu:
                    "meme chose, marqueurs toleres"),
             Entree("3", "Inspecter un jeu de donnees", jeu,
                    "dialecte, colonnes, et regroupement en items"),
+            Entree("4", "Repetition a blanc", a_blanc,
+                   "tout sauf la validation — aucune ecriture dans SAP"),
+            Entree("5", "Executer", lancer,
+                   "ECRIT DANS SAP. Confirmation en toutes lettres"),
+            Entree("6", "Reprendre une execution", reprendre,
+                   "ECRIT DANS SAP. Les douteux ne sont jamais rejoues"),
+            Entree("7", "Enchainer des pipelines", enchainer_les,
+                   "ECRIT DANS SAP. Un maillon interrompu arrete la chaine"),
         ))
 
 

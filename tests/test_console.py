@@ -1142,3 +1142,311 @@ class TestExportsDeTable(unittest.TestCase):
         avant = CHEMIN_CARTE_DEFAUT.read_bytes()
         self._session("carte", "")
         self.assertEqual(CHEMIN_CARTE_DEFAUT.read_bytes(), avant)
+
+
+EXECUTABLE = """
+    version: 1
+    nom: bcp_ia08_variantes
+    classe: iterative
+    cles: [site]
+    plafond_items: 50
+    plafond_sauvegardes: 50
+    etapes:
+      - nom: saisir
+        action: set
+        cible: "wnd[0]/usr/ctxtWERKS-LOW"
+        source: {colonne: site}
+        ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}
+      - nom: sauver
+        action: press
+        cible: "wnd[0]/tbar[0]/btn[11]"
+        sauvegarde: true
+        ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}
+    """
+
+
+class TestExecution(unittest.TestCase):
+    """Executer depuis la console. **C'est ici que ca ecrit dans un ERP.**
+
+    Les tests de cette classe ne verifient pas que le moteur marche — le lot
+    10 s'en charge, contre le meme double. Ils verifient ce que la console
+    ajoute au-dessus : ce qui est montre avant, ce qui est exige pour partir,
+    et ce qui ne part pas quand on ne l'exige pas.
+    """
+
+    def setUp(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        self.racine = Path(dossier.name)
+        self.pipeline = self.racine / "p.yaml"
+        self.pipeline.write_text(textwrap.dedent(EXECUTABLE), encoding="utf-8")
+        self.jeu = self.racine / "jeu.csv"
+        self.jeu.write_text("site,libelle\n1000,Paris\n2000,Lyon\n",
+                            encoding="utf-8")
+        self.journal = self.racine / "journal.jsonl"
+        self.progres = []
+        self.driver = self._driver()
+
+    def _driver(self) -> DriverScripte:
+        driver = DriverScripte(identite=IA08,
+                               valeurs={"wnd[0]/usr/ctxtWERKS-LOW": ""})
+
+        def relire(pilote, geste, cible):
+            if geste == "write":
+                pilote.valeurs[cible] = pilote.valeurs.get(cible, "")
+
+        driver.apres_action = relire
+        return driver
+
+    def _env(self, **extra) -> Environnement:
+        return Environnement(
+            connecter=lambda: self.driver,
+            rapporteur=lambda: self.progres.append,
+            **extra)
+
+    def _session(self, libelle: str, *saisies: str, env=None) -> Journal:
+        env = env if env is not None else self._env()
+        arbre = racine(env)
+        journal = Journal(*vers(arbre, "Pipelines", libelle), *saisies,
+                          "0", "0")
+        parcourir(arbre, journal.console())
+        return journal
+
+    def _saisies(self, mot: str | None = "bcp_ia08_variantes"):
+        """pipeline, jeu, journal, puis la confirmation si on en attend une."""
+        base = [str(self.pipeline), str(self.jeu), str(self.journal)]
+        return base if mot is None else base + [mot]
+
+    # -- l'ordre des entrees -----------------------------------------------
+
+    def test_la_repetition_a_blanc_est_proposee_AVANT_l_execution(self):
+        """L'ordre n'est pas cosmetique : c'est la seule chose qui suggere,
+        a qui parcourt le menu de haut en bas, d'essayer sans ecrire d'abord.
+        """
+        entrees = [e.libelle for e in
+                   racine().entrees[2].cible.entrees]
+        blanc = next(i for i, l in enumerate(entrees) if "blanc" in l)
+        executer_ = next(i for i, l in enumerate(entrees) if l == "Executer")
+        reprendre = next(i for i, l in enumerate(entrees) if "Reprendre" in l)
+        self.assertLess(blanc, executer_)
+        self.assertLess(executer_, reprendre)
+
+    def test_les_ecrans_qui_ecrivent_le_disent_dans_leur_libelle(self):
+        """Un menu ou « Executer » ressemble a « Inspecter » est un piege."""
+        entrees = racine().entrees[2].cible.entrees
+        for entree in entrees:
+            if entree.libelle in ("Executer", "Reprendre une execution",
+                                  "Enchainer des pipelines"):
+                self.assertIn("ECRIT DANS SAP", entree.detail)
+
+    # -- la confirmation ---------------------------------------------------
+
+    def test_une_execution_reelle_exige_le_nom_de_la_pipeline(self):
+        journal = self._session("Executer", *self._saisies(), "")
+        self.assertIn("Ceci va ECRIRE dans SAP", journal.texte)
+        self.assertTrue(self.journal.exists(), journal.texte)
+        self.assertTrue(self.driver.gestes)
+
+    def test_un_mot_faux_ANNULE_et_rien_n_est_ecrit(self):
+        """Le defaut est de ne pas ecrire dans un ERP."""
+        journal = self._session("Executer", *self._saisies("oui"), "")
+        self.assertIn("Annule", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+        self.assertFalse(self.journal.exists())
+
+    def test_une_confirmation_VIDE_annule(self):
+        journal = self._session("Executer", *self._saisies(""), "")
+        self.assertIn("Annule", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_une_fin_de_flux_a_la_confirmation_annule(self):
+        """Ni « o », ni un flux epuise, ni un Ctrl-C ne valent un accord. La
+        seule chose qui vaille accord, c'est le mot exact."""
+        journal = Journal(*vers(racine(), "Pipelines", "Executer"),
+                          *self._saisies(None))
+        parcourir(racine(self._env()), journal.console())
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_o_ne_confirme_pas(self):
+        """Un `o/n` se tape sans lire. C'est un reflexe, pas un consentement."""
+        self._session("Executer", *self._saisies("o"), "")
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_la_confirmation_n_est_demandee_qu_APRES_le_recapitulatif(self):
+        journal = self._session("Executer", *self._saisies(), "")
+        self.assertLess(journal.texte.index("PLAFOND sauvegardes"),
+                        journal.texte.index("Ceci va ECRIRE"))
+
+    # -- le recapitulatif --------------------------------------------------
+
+    def test_le_recapitulatif_montre_LES_DEUX_plafonds(self):
+        """Omettre l'un laisserait croire que l'autre n'existe pas — or c'est
+        celui des sauvegardes qui borne ce qui part dans SAP."""
+        journal = self._session("Executer", *self._saisies("non"), "")
+        self.assertIn("PLAFOND items         50", journal.texte)
+        self.assertIn("PLAFOND sauvegardes   50", journal.texte)
+
+    def test_le_recapitulatif_montre_les_empreintes_et_le_nombre_d_items(self):
+        from falcon.donnees import empreinte_jeu
+        from falcon.pipeline import charger
+
+        journal = self._session("Executer", *self._saisies("non"), "")
+        self.assertIn(charger(self.pipeline).empreinte, journal.texte)
+        self.assertIn(empreinte_jeu(self.jeu), journal.texte)
+        self.assertIn("items a traiter       2", journal.texte)
+
+    def test_le_recapitulatif_nomme_les_etapes_qui_sauvent(self):
+        journal = self._session("Executer", *self._saisies("non"), "")
+        self.assertIn("etapes qui sauvent    sauver", journal.texte)
+
+    def test_les_derogations_sortent_avec_leur_motif(self):
+        """Une derogation sans son motif est une case cochee, que personne ne
+        peut contester au moment ou il faudrait."""
+        # `EXECUTABLE` se termine par l'indentation de sa triple-quote
+        # fermante : y concatener un bloc le decalerait, et le test tomberait
+        # sur une erreur d'indentation plutot que sur ce qu'il verifie.
+        socle = textwrap.dedent(EXECUTABLE).rstrip() + "\n"
+        derogation = (
+            '    derogations:\n'
+            '      - garde: statut\n'
+            '        portee: "etape:sauver"\n'
+            '        motif: "IA08 ne rend aucun message sur cette validation"\n')
+        self.pipeline.write_text(socle + derogation, encoding="utf-8")
+        journal = self._session("Executer", *self._saisies("non"), "")
+        self.assertIn("DEROGATIONS", journal.texte)
+        self.assertIn("IA08 ne rend aucun message", journal.texte)
+
+    # -- la repetition a blanc ---------------------------------------------
+
+    def test_la_repetition_a_blanc_ne_demande_AUCUNE_confirmation(self):
+        """Il n'y a rien a confirmer : elle s'arrete avant toute validation."""
+        journal = self._session("blanc", *self._saisies(None), "")
+        self.assertNotIn("Ceci va ECRIRE dans SAP", journal.texte)
+        self.assertIn("mode                  dry-run", journal.texte)
+
+    def test_la_repetition_a_blanc_n_appuie_sur_rien(self):
+        """La preuve par le double : le moteur a joue, et aucun `press` n'a
+        atteint le driver."""
+        self._session("blanc", *self._saisies(None), "")
+        self.assertTrue(self.journal.exists())
+        self.assertNotIn("press", [geste for geste, _, _ in self.driver.gestes])
+
+    # -- la reprise --------------------------------------------------------
+
+    def test_la_reprise_exige_aussi_la_confirmation(self):
+        self._session("Executer", *self._saisies(), "")
+        gestes = len(self.driver.gestes)
+        self._session("Reprendre", *self._saisies("non"), "")
+        self.assertEqual(len(self.driver.gestes), gestes)
+
+    def test_une_reprise_sans_journal_le_dit_sans_trace_de_pile(self):
+        journal = self._session("Reprendre", *self._saisies(), "")
+        self.assertNotIn("Traceback", journal.texte)
+
+    # -- la progression ----------------------------------------------------
+
+    def test_le_rapporteur_est_branche_sur_le_moteur(self):
+        """La barre et l'ETA glissant existent depuis le lot 11 et n'avaient
+        jamais rien affiche : personne ne les appelait."""
+        self._session("Executer", *self._saisies(), "")
+        self.assertEqual(len(self.progres), 2)
+        self.assertEqual([p.item for p in self.progres],
+                         [p.item for p in self.progres])
+        self.assertEqual(self.progres[-1].total, 2)
+
+    def test_le_rapporteur_par_defaut_est_celui_du_lot_11(self):
+        from falcon.supervision import Rapporteur
+
+        self.assertIsInstance(Environnement().rapporteur(), Rapporteur)
+
+    # -- les refus ---------------------------------------------------------
+
+    def test_une_pipeline_volumique_est_refusee_avant_toute_connexion(self):
+        """La machinerie par item ne sert qu'aux iteratives (§3.5)."""
+        self.pipeline.write_text(textwrap.dedent("""
+            version: 1
+            nom: export_equi
+            classe: volumique
+            plafond_items: 50
+            plafond_sauvegardes: 50
+            etapes:
+              - nom: saisir
+                action: set
+                cible: "wnd[0]/usr/ctxtTAB"
+                source: {constante: EQUI}
+                ecran: {transaction: SE16N, programme: X, dynpro: "0100"}
+            """), encoding="utf-8")
+        journal = self._session("Executer", str(self.pipeline), "")
+        self.assertIn("volumique", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_un_jeu_illisible_est_refuse_avant_toute_connexion(self):
+        """Tomber a la preparation coute une saisie ; tomber a l'item quarante
+        coute trente-neuf ecritures a demeler."""
+        casse = self.racine / "casse.csv"
+        casse.write_text("libelle\nParis\n", encoding="utf-8")
+        journal = self._session("Executer", str(self.pipeline), str(casse), "")
+        self.assertIn("Refuse", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_une_session_indisponible_se_dit_APRES_la_confirmation(self):
+        def refuser():
+            raise SapIndisponible("pywin32 n'est pas installe")
+
+        journal = self._session("Executer", *self._saisies(), "",
+                                env=Environnement(connecter=refuser))
+        self.assertIn("SapIndisponible", journal.texte)
+        self.assertNotIn("Traceback", journal.texte)
+
+    # -- la chaine ---------------------------------------------------------
+
+    def test_une_chaine_se_construit_maillon_par_maillon(self):
+        second = self.racine / "j2.jsonl"
+        journal = self._session(
+            "Enchainer",
+            str(self.pipeline), str(self.jeu), str(self.journal),
+            str(self.pipeline), str(self.jeu), str(second),
+            "", "bcp_ia08_variantes", "")
+        self.assertIn("2 maillon(s)", journal.texte)
+        self.assertTrue(self.journal.exists(), journal.texte)
+        self.assertTrue(second.exists(), journal.texte)
+
+    def test_une_chaine_vide_ne_lance_rien(self):
+        journal = self._session("Enchainer", "", "")
+        self.assertIn("Chaine vide", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+
+    def test_une_chaine_non_confirmee_ne_lance_rien(self):
+        journal = self._session(
+            "Enchainer", str(self.pipeline), str(self.jeu),
+            str(self.journal), "", "non", "")
+        self.assertIn("Annule", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
+        self.assertFalse(self.journal.exists())
+
+    def test_la_chaine_annonce_qu_aucune_donnee_ne_circule(self):
+        """C'est la limite qui l'empeche de devenir un orchestrateur (§3.3),
+        et elle doit se lire la ou quelqu'un pourrait compter dessus."""
+        journal = self._session("Enchainer", "", "")
+        self.assertIn("AUCUNE donnee ne passe", journal.texte)
+
+    # -- innocuite ---------------------------------------------------------
+
+    def test_la_console_ne_manipule_jamais_un_driver_nu(self):
+        """La propriete du lot 14, adaptee : la console appelle desormais le
+        moteur, qui appelle des methodes mutantes. Ce qui reste vrai — et ce
+        que ce test epingle — c'est que rien dans `falcon/console/` ne touche
+        un `Driver` autrement qu'en le passant au moteur, qui l'enveloppe
+        aussitot dans un `DriverGarde`.
+        """
+        for module, arbre in _arbres():
+            for noeud in ast.walk(arbre):
+                if not isinstance(noeud, ast.Call):
+                    continue
+                if not isinstance(noeud.func, ast.Attribute):
+                    continue
+                with self.subTest(module=module, ligne=noeud.lineno):
+                    self.assertNotIn(
+                        noeud.func.attr, MUTATIONS,
+                        f"{module}:{noeud.lineno} appelle {noeud.func.attr!r} "
+                        f"— une methode mutante de la couture")
