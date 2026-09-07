@@ -229,10 +229,36 @@ def ecran_verification(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def bundle(console: Console) -> str:
+        """Construit `falcon.pyz` — la livraison en un seul fichier (§6).
+
+        Le depot est modulaire, la livraison est un fichier unique. La
+        contrainte d'autonomie au deploiement se traite A LA CONSTRUCTION, pas
+        dans l'organisation du code source.
+
+        Le sous-processus passe par le meme lanceur injecte que les suites :
+        liste d'arguments, jamais le shell.
+        """
+        console.titre("Construire le bundle")
+        console.ecrire()
+        console.ecrire("  PyYAML voyage dans l'archive — c'est du Python pur. "
+                       "pywin32 NON :")
+        console.ecrire("  une extension binaire liee a une version "
+                       "d'interpreteur et a une")
+        console.ecrire("  plateforme, figee dans un zip, serait fausse la "
+                       "moitie du temps.")
+        _rendre_sortie(console, *env.lancer(["outils/embarquer.py"]))
+        console.ecrire()
+        console.ecrire("  `diagnostiquer` est la seule commande qui exige "
+                       "pywin32, et elle le dit")
+        console.ecrire("  avec la ligne a taper :  pip install pywin32")
+        console.pause()
+        return CONTINUER
+
     return Menu(
-        titre="FALCON — verification",
-        preambule="Les deux commandes du protocole de travail, plus le detail "
-                  "suite par suite.",
+        titre="FALCON — verification et livraison",
+        preambule="Les deux commandes du protocole de travail, le detail suite "
+                  "par suite,\net la construction du livrable.",
         entrees=(
             Entree("1", "Tout verifier", tout,
                    "les deux suites, FALCON et l'archive ; dit aussi ce qui "
@@ -241,6 +267,8 @@ def ecran_verification(env: Environnement) -> Menu:
                    "retire chaque garde et exige que la suite tombe"),
             Entree("3", "Une suite au choix", une_suite,
                    "detail test par test"),
+            Entree("4", "Construire le bundle", bundle,
+                   "falcon.pyz — un fichier unique executable (§6)"),
         ))
 
 
@@ -1432,8 +1460,8 @@ def racine(env: Environnement | None = None) -> Menu:
             "Automatisation SAP Front End. Aucune commande de cette console\n"
             "n'ecrit dans SAP."),
         entrees=(
-            Entree("1", "Verification", ecran_verification(env),
-                   "les suites, et la preuve que les gardes protegent"),
+            Entree("1", "Verification et livraison", ecran_verification(env),
+                   "les suites, la preuve que les gardes protegent, le bundle"),
             Entree("2", "Traces du recorder", ecran_traces(env),
                    "couverture du parseur, ecrans conjectures, gestes"),
             Entree("3", "Pipelines et donnees", ecran_pipelines(env),

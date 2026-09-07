@@ -26,8 +26,8 @@ from pathlib import Path
 
 from falcon.catalogue import ESQUISSE, Depot, variante_de
 from falcon.console import (
-    CONTINUER, ENCODAGE_MINIMAL, QUITTER, RETOUR, Console, Entree, Menu,
-    parcourir, racine, rendre,
+    CONTINUER, ENCODAGE_MINIMAL, QUITTER, RETOUR, VERDICTS, Console, Entree,
+    Menu, parcourir, racine, rendre,
 )
 from falcon.console import ecrans
 from falcon.console.ecrans import Environnement
@@ -282,6 +282,52 @@ class TestAffichage(unittest.TestCase):
                     with self.subTest(module=module, ligne=noeud.lineno):
                         self.assertNotIn("\x1b", noeud.value)
 
+    def test_la_racine_couvre_les_sept_domaines(self):
+        """La console a ete ecrite au lot 14, AVANT le moteur : les lots 10 a
+        13c y etaient inatteignables. Ce test epingle la couverture, pas
+        l'ordre — il tombera le jour ou un domaine disparaitra du menu."""
+        libelles = [e.libelle for e in racine().entrees]
+        for attendu in ("Verification et livraison", "Traces du recorder",
+                        "Pipelines et donnees", "Journaux",
+                        "Catalogue d'ecrans", "Exports de table",
+                        "Session SAP"):
+            self.assertIn(attendu, libelles)
+
+    def test_chaque_ecran_survit_a_un_flux_vide(self):
+        """Un ecran qui leve sur une fin de flux tue la console entiere. Le
+        cas arrive pour de vrai : un Ctrl-C sur la premiere invite.
+
+        C'est un test de fumee sur TOUT l'arbre : il ne dit pas qu'un ecran
+        fait ce qu'il faut, il dit qu'aucun ne meurt avant de le faire. Un
+        ecran neuf y entre sans qu'on ait a y penser.
+
+        L'environnement est INJECTE, et pas par confort : sans ca, l'ecran
+        « Tout verifier » relance `outils/verifier.py` en sous-processus —
+        donc cette suite, depuis cette suite. La premiere version de ce test
+        a tourne jusqu'a expiration du delai.
+        """
+        def refuser():
+            raise SapIndisponible("pas de session dans un test")
+
+        env = Environnement(lancer=lambda arguments: (0, "OK"),
+                            connecter=refuser)
+        for menu in _menus(racine(env)):
+            for entree in menu.entrees:
+                if isinstance(entree.cible, Menu):
+                    continue
+                with self.subTest(menu=menu.titre, ecran=entree.libelle):
+                    journal = Journal()
+                    verdict = entree.cible(journal.console())
+                    self.assertIn(verdict, VERDICTS)
+
+    def test_chaque_entree_porte_un_detail(self):
+        """Un libelle seul se lit trop vite. Le detail est la ou se dit ce
+        qu'une entree engage — « ECRIT DANS SAP », notamment."""
+        for menu in _menus(racine()):
+            for entree in menu.entrees:
+                with self.subTest(menu=menu.titre, entree=entree.libelle):
+                    self.assertTrue(entree.detail.strip())
+
     def test_chaque_menu_annonce_une_sortie(self):
         for menu in _menus(racine()):
             with self.subTest(menu=menu.titre):
@@ -321,6 +367,25 @@ class TestVerification(unittest.TestCase):
         parcourir(racine(self.env), journal.console())
         self.assertEqual(len(self.appels), 1)
         self.assertEqual(self.appels[0][:2], ["-m", "unittest"])
+
+    def test_le_bundle_se_construit_depuis_le_menu(self):
+        """Le depot est modulaire, la livraison est un fichier unique (§6).
+        L'outil existait depuis le lot 13 et n'etait atteignable qu'en ligne
+        de commande."""
+        journal = Journal(*vers(racine(), "Verification", "bundle"),
+                          "", "0", "0")
+        parcourir(racine(self.env), journal.console())
+        self.assertEqual(self.appels, [["outils/embarquer.py"]])
+
+    def test_le_bundle_rappelle_ce_qui_ne_s_embarque_pas(self):
+        """pywin32 est une extension binaire liee a une version
+        d'interpreteur : figee dans un zip, elle serait fausse la moitie du
+        temps. Le dire ici evite de livrer une archive qu'on croit complete."""
+        journal = Journal(*vers(racine(), "Verification", "bundle"),
+                          "", "0", "0")
+        parcourir(racine(self.env), journal.console())
+        self.assertIn("pywin32", journal.texte)
+        self.assertIn("pip install pywin32", journal.texte)
 
     def test_un_echec_est_annonce_comme_tel(self):
         env = Environnement(lancer=lambda a: (1, "FAILED (failures=1)"))

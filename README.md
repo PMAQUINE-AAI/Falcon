@@ -85,8 +85,8 @@ Tout depuis un seul endroit :
 python -m falcon console
 ```
 
-Menus numérotés — vérification, traces, pipelines et données, journaux,
-catalogue, exports de table, session SAP. Pas de
+Sept branches : vérification et livraison, traces du recorder, pipelines et
+données, journaux, catalogue d'écrans, exports de table, session SAP. Pas de
 `curses` et pas de dépendance : `curses` n'est pas fourni avec CPython sous
 Windows, or c'est la seule machine où SAP GUI existe. Le décor s'encode en
 cp1252, ce qu'écrit une console Windows française redirigée.
@@ -132,6 +132,8 @@ Le dépôt est modulaire, la livraison est **un fichier unique** (§6) :
 python outils/embarquer.py        # produit falcon.pyz, ~160 Kio
 python falcon.pyz inventaire trace.vbs
 ```
+
+La console le construit aussi, depuis `1 Vérification et livraison`.
 
 `zipapp` est dans la stdlib : construire le bundle n'ajoute aucune dépendance,
 pas même de construction. PyYAML — la seule dépendance d'exécution — voyage
