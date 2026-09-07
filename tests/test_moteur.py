@@ -569,6 +569,54 @@ class TestDouteuxEtDoubleEcriture(Base):
         self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
         self.assertTrue(ko.exists(), "un item intact doit rester reinjectable")
 
+    def test_relancer_en_mode_run_sur_un_douteux_est_REFUSE(self):
+        """Le geste le plus naturel du monde, et le plus couteux.
+
+        Le mode `run` ne consultait pas le journal — c'est ce qui le distingue
+        de `resume`. Mais relancer un lot interrompu est ce que tout le monde
+        fait, et la console met « Executer » juste au-dessus de « Reprendre ».
+        L'item douteux repartait dans SAP, et le repli le reclassait `ok` :
+        apres coup, plus rien ne disait que la double ecriture avait eu lieu.
+        """
+        self._lot()                                   # laisse un douteux
+        replie = etats(lire(self.journal))
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertTrue(douteux)
+
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline_avec_retour(), self.jeu, brut,
+                     journal=self.journal, registre=self.registre)
+        message = str(capture.exception)
+        self.assertIn("DOUTEUX", message)
+        for item_id in douteux:
+            self.assertIn(item_id, message)
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+        # Et le journal n'a pas bouge : le refus precede toute ecriture.
+        self.assertEqual(
+            {i: e.etat for i, e in etats(lire(self.journal)).items()},
+            {i: e.etat for i, e in replie.items()})
+
+    def test_un_item_EN_COURS_ne_bloque_pas_un_run(self):
+        """L'autre moitie de la regle. Un item ouvert sans avoir sauvegarde
+        est intact : le refuser interdirait de relancer un lot que rien
+        n'empeche de relancer."""
+        brut = self._driver()
+
+        def deriver(pilote, geste, cible):
+            if geste == "write":
+                pilote.valeurs[cible] = pilote.valeurs.get(cible, "")
+                pilote.identite = AUTRE          # avant le moindre press
+        brut.apres_action = deriver
+        executer(self._pipeline(), self.jeu, brut, journal=self.journal,
+                 registre=self.registre)
+        replie = etats(lire(self.journal))
+        self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
+
+        resultat = self._executer()               # doit passer
+        self.assertEqual(resultat.etat, TERMINE)
+
     def test_itemfin_porte_les_sauvegardes_DE_L_ITEM(self):
         """Il portait le cumul du run : trois items ayant sauvegarde une fois
         chacun s'enregistraient 1, 2, 3. Le champ dit pourtant « pour cet

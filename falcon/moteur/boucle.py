@@ -43,7 +43,7 @@ from falcon.donnees import (
 )
 from falcon.journal import (
     DOUTEUX, IGNORE, KO, OK, Ecrivain, ExecutionDebut, ExecutionFin, ItemDebut,
-    ItemFin, preparer,
+    ItemFin, etats, lire, preparer,
 )
 from falcon.noyau import (
     ArretBloquant, Echec, ErreurFalcon, Horloge, ItemAbandonne, PlafondAtteint,
@@ -313,6 +313,9 @@ def executer(pipeline: Pipeline,
     chemin_journal = Path(journal)
     deja = 0
 
+    if mode in (RUN, DRY_RUN):
+        _refuser_les_douteux_du_journal(chemin_journal, items, mode)
+
     if mode == REPRISE:
         reprise = preparer(chemin_journal, [i.item_id for i in items],
                            pipeline_empreinte=pipeline.empreinte,
@@ -428,6 +431,39 @@ def executer(pipeline: Pipeline,
                     raison=raison, journal=str(chemin_journal), ko=chemin_ko,
                     douteux=tuple(douteux),
                     duree_ms=int((time.monotonic() - depart) * 1000))
+
+
+def _refuser_les_douteux_du_journal(chemin: Path, items: list[Item],
+                                    mode: str) -> None:
+    """Un `run` ne doit pas rejouer ce qu'une reprise refuse de rejouer.
+
+    Le mode `run` ne consultait pas le journal — c'est meme ce qui le
+    distingue de `resume`. Mais relancer un lot interrompu est le geste le
+    plus naturel du monde, et la console met « Executer » juste au-dessus de
+    « Reprendre ». Un item DOUTEUX y repartait donc dans SAP, et le repli le
+    reclassait `ok` : apres coup, plus rien ne disait que la double ecriture
+    avait eu lieu.
+
+    Le refus ne porte que sur les douteux. Un item `en_cours` — ouvert sans
+    avoir sauvegarde — est intact et rejouable ; un item termine peut
+    legitimement etre rejoue si quelqu'un le decide. Le douteux est le seul
+    dont on ne SAIT PAS ce que SAP en a fait.
+    """
+    if not chemin.exists():
+        return
+    connus = etats(lire(chemin))
+    concernes = sorted(item.item_id for item in items
+                       if connus.get(item.item_id) is not None
+                       and connus[item.item_id].etat == DOUTEUX)
+    if not concernes:
+        return
+    raise PreparationImpossible(
+        f"{chemin} porte {len(concernes)} item(s) DOUTEUX du jeu courant : "
+        f"{concernes}. Ils ont ete interrompus APRES une sauvegarde — SAP a "
+        f"peut-etre enregistre — et la reprise refuse deja de les rejouer. "
+        f"Les rejouer en mode {mode!r} ecrirait une seconde fois. Va voir "
+        f"dans SAP ce qui y est reellement, retire ces lignes du jeu, puis "
+        f"relance")
 
 
 def _clore(ecrivain: Ecrivain, run_id: str, item: Item, etat: str,

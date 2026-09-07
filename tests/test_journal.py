@@ -235,10 +235,29 @@ class TestReprise(unittest.TestCase):
         with self.assertRaises(TypeError):
             preparer(self.chemin, ["a1"])           # type: ignore[call-arg]
 
-    def test_journal_absent_tout_est_a_traiter(self):
-        reprise = preparer(self.chemin, ["a1", "a2"],
-                           pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
-        self.assertEqual(reprise.a_traiter, ("a1", "a2"))
+    def test_un_journal_ABSENT_ne_fonde_aucune_reprise(self):
+        """La version precedente de ce test s'appelait « journal absent, tout
+        est a traiter » et epinglait ce comportement-la.
+
+        C'etait le defaut, pas l'intention. Un journal absent ne dit pas
+        « tout est a faire » : il dit qu'on ne sait pas ce qui a ete fait. La
+        reprise se degradait donc en execution complete, sans un mot — et un
+        chemin mal tape lancait un lot entier la ou l'utilisateur croyait n'en
+        reprendre que la fin. La console offre « Reprendre » comme une entree
+        a part, ou le chemin se saisit a la main.
+        """
+        with self.assertRaises(RepriseIncoherente) as capture:
+            preparer(self.chemin, ["a1", "a2"],
+                     pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
+        message = str(capture.exception)
+        self.assertIn("rien a reprendre", message)
+        self.assertIn("run", message)
+
+    def test_un_journal_vide_non_plus(self):
+        self.chemin.write_text("", encoding="utf-8")
+        with self.assertRaises(RepriseIncoherente):
+            preparer(self.chemin, ["a1"],
+                     pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
 
     def test_les_items_termines_ne_sont_pas_repris(self):
         self._journal(_ouverture(),

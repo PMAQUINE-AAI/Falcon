@@ -148,8 +148,22 @@ def preparer(chemin: str | Path,
     if forcer and not motif.strip():
         raise ValueError("forcer une reprise exige un motif")
 
+    # Un journal absent ou muet ne fonde AUCUNE reprise.
+    #
+    # `lire` rend une liste vide pour un fichier qui n'existe pas. La suite
+    # concluait alors « rien n'a ete fait, tout est a traiter » — et la
+    # reprise se degradait en execution complete, sans un mot. Un chemin mal
+    # tape lancait donc un lot entier la ou l'utilisateur croyait n'en
+    # reprendre que la fin.
+    ouvertures = [e for e in enregistrements if isinstance(e, ExecutionDebut)]
+    if not ouvertures:
+        raise RepriseIncoherente(
+            f"{chemin} ne porte aucune execution : il n'y a rien a reprendre. "
+            f"Un journal absent ou vide ne dit pas « tout est a faire », il "
+            f"dit qu'on ne sait pas ce qui a ete fait. Pour lancer un lot "
+            f"neuf, c'est le mode `run`")
+
     if not forcer:
-        ouvertures = [e for e in enregistrements if isinstance(e, ExecutionDebut)]
         if ouvertures:
             origine = ouvertures[0]
             ecarts = []
