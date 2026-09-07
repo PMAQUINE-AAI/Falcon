@@ -148,7 +148,7 @@ def _etape(geste: Geste, visite: Visite) -> tuple[dict, list[str]]:
     if geste.verbe in SUBSTITUTIONS:
         action, valeur = SUBSTITUTIONS[geste.verbe]
         etape["action"] = action
-        etape["source"] = {"constante": valeur}
+        etape["source"] = {"constante": str(valeur)}
         commentaires.append(
             f"substitution : la trace fait « {geste.verbe} », que le modele "
             f"n'exprime pas.")
@@ -158,11 +158,15 @@ def _etape(geste: Geste, visite: Visite) -> tuple[dict, list[str]]:
     elif geste.verbe in ACTIONS:
         etape["action"] = ACTIONS[geste.verbe]
         if geste.verbe == "sendVKey":
-            etape["source"] = {"constante": geste.valeur}
+            # `str` et pas la valeur brute : le chargeur exige une CHAINE, et
+            # `safe_dump` la ressort entre guillemets. Sans ca le brouillon
+            # emettait `constante: 11`, que YAML relit comme un entier — et le
+            # generateur produisait un fichier que le chargeur refuse.
+            etape["source"] = {"constante": str(geste.valeur)}
         else:
             etape["cible"] = geste.cible
             if geste.verbe in ("text", "selected"):
-                etape["source"] = {"constante": geste.valeur}
+                etape["source"] = {"constante": str(geste.valeur)}
                 commentaires.append(
                     "valeur constante relevee sur la trace ; a remplacer par "
                     "« colonne: ... » si elle varie d'un item a l'autre.")

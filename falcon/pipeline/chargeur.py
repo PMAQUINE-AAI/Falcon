@@ -258,7 +258,29 @@ def _source(brute: Any, source: str, rang: int, nom: str) -> Source | None:
     if genre not in GENRES_SOURCE:
         raise _refus(source, f"genre de source {genre!r}, attendu "
                              f"{sorted(GENRES_SOURCE)}", rang, nom)
-    return Source(genre=genre, valeur=str(valeur))
+
+    # Une source doit etre ECRITE comme une chaine. Meme raison que pour
+    # `ecran.dynpro` (decision n°20), mais la consequence est pire : ce n'est
+    # pas une comparaison qui devient fausse, c'est une valeur qui est TAPEE
+    # DANS SAP.
+    #
+    # YAML n'est pas du texte. `0100` est de l'octal et vaut 64. `007` vaut 7,
+    # et les codes SAP sont remplis de zeros. `12:30` est du sexagesimal et
+    # vaut 750. `1.50` est un flottant et se reecrit « 1.5 ». `on` est un
+    # booleen et se reecrit « True ». `2026-09-07` est une date, et son
+    # str() depend de la bibliotheque.
+    #
+    # Cinq de ces six formes s'ecrivaient dans un champ SAP sans que rien ne
+    # leve. Refuser ici coute deux guillemets ; deviner coute une correction
+    # de masse fausse.
+    if not isinstance(valeur, str):
+        raise _refus(source,
+                     f"`source.{genre}` doit etre une CHAINE, entre "
+                     f"guillemets (recu {valeur!r}). Sans eux, YAML lit "
+                     f"« 0100 » comme de l'octal et en fait 64, « 007 » "
+                     f"comme 7, « 12:30 » comme 750, « on » comme True — et "
+                     f"c'est cela qui serait tape dans SAP", rang, nom)
+    return Source(genre=genre, valeur=valeur)
 
 
 def _ecran(brute: Any, source: str, rang: int, nom: str

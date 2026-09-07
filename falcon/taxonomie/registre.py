@@ -29,6 +29,7 @@ systeme reel revele.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -52,6 +53,24 @@ CANAUX = frozenset({"statut", "com", "garde", "python"})
 
 RACINE = Path(__file__).resolve().parent
 CHEMIN_REGISTRE_DEFAUT = RACINE / "registre.yaml"
+
+
+def _ressource(paquet: str, nom: str) -> str:
+    """Lit un YAML LIVRE AVEC LE PAQUET, depuis les sources ou depuis le zip.
+
+    `Path(__file__).parent / "x.yaml"` marche depuis un depot et pas depuis
+    `falcon.pyz` : dans un zipapp, `__file__` n'est pas un chemin de systeme
+    de fichiers. Le fichier n'existait donc pas, et comme `Registre.charger()`
+    est appele a CHAQUE execution de pipeline, le bundle — qui est la forme de
+    livraison arretee au §6 — ne pouvait executer aucune pipeline.
+
+    Rien ne levait a la construction, et la suite du bundle n'exercait que des
+    commandes qui ne chargent pas le registre : le defaut ne se serait vu
+    qu'au premier lot reel, sur le poste de quelqu'un.
+
+    `importlib.resources` lit les deux, et c'est sa raison d'etre.
+    """
+    return files(paquet).joinpath(nom).read_text(encoding="utf-8")
 
 
 class RegistreInvalide(Exception):
@@ -315,9 +334,14 @@ class Registre:
         Une surcouche de projet peut enrichir le registre commun ; elle ne
         peut pas en retirer une entree, ni en assouplir une.
         """
-        sources = chemins or (CHEMIN_REGISTRE_DEFAUT,)
         entrees: list[Entree] = []
-        for chemin in sources:
+        if not chemins:
+            # Le registre livre avec le paquet, lu par `importlib.resources` :
+            # depuis un depot ET depuis `falcon.pyz`. Voir `_ressource`.
+            entrees.extend(_lire_texte(_ressource(__package__, "registre.yaml"),
+                                       Path(CHEMIN_REGISTRE_DEFAUT)))
+            return cls(entrees)
+        for chemin in chemins:
             nouvelles = _lire_fichier(Path(chemin))
             _verifier_absence_d_assouplissement(entrees, nouvelles, Path(chemin))
             entrees.extend(nouvelles)
@@ -394,8 +418,12 @@ _JOKERS = {"*", "?", ".*"}
 def _lire_fichier(chemin: Path) -> list[Entree]:
     if not chemin.exists():
         raise RegistreInvalide(f"registre introuvable : {chemin}")
+    return _lire_texte(chemin.read_text(encoding="utf-8"), chemin)
 
-    contenu = yaml.safe_load(chemin.read_text(encoding="utf-8")) or {}
+
+def _lire_texte(brut: str, chemin: Path) -> list[Entree]:
+    """Le contenu, d'ou qu'il vienne. `chemin` ne sert qu'aux messages."""
+    contenu = yaml.safe_load(brut) or {}
     if not isinstance(contenu, dict):
         raise RegistreInvalide(f"{chemin} : un dictionnaire est attendu")
 

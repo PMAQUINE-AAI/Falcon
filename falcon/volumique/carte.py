@@ -19,6 +19,7 @@ d'exception parce qu'un lot serait plus commode a finir.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -102,10 +103,19 @@ class Carte:
 def charger_carte(chemin: str | Path | None = None) -> Carte:
     """Lit une carte. La carte livree est vide, et c'est voulu."""
     cible = Path(chemin) if chemin is not None else CHEMIN_CARTE_DEFAUT
-    if not cible.exists():
-        raise CarteInvalide(f"carte introuvable : {cible}")
+    if chemin is None:
+        # La carte livree avec le paquet. `Path(__file__).parent` ne la trouve
+        # pas depuis `falcon.pyz` : dans un zipapp, `__file__` n'est pas un
+        # chemin de systeme de fichiers, et le fichier « n'existe pas ».
+        # `importlib.resources` lit les deux.
+        brut = files(__package__).joinpath("carte_se16n.yaml").read_text(
+            encoding="utf-8")
+    else:
+        if not cible.exists():
+            raise CarteInvalide(f"carte introuvable : {cible}")
+        brut = cible.read_text(encoding="utf-8")
 
-    contenu = yaml.safe_load(cible.read_text(encoding="utf-8")) or {}
+    contenu = yaml.safe_load(brut) or {}
     if not isinstance(contenu, dict):
         raise CarteInvalide(f"{cible} : un dictionnaire est attendu")
     if contenu.get("version") != VERSION:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 import zipfile
 from pathlib import Path
@@ -127,6 +128,105 @@ class TestExecution(Base):
         fini = self._lancer("console")
         self.assertEqual(fini.returncode, 2)
         self.assertIn("terminal interactif", fini.stderr)
+
+    #: Sonde lancee AVEC LE BUNDLE POUR SEULE SOURCE de `falcon`.
+    #:
+    #: Chaque sonde verifie d'abord d'ou vient le paquet. Sans cette
+    #: assertion, un `sys.path` mal isole laisse le depot repondre a la place
+    #: de l'archive — et le test passe en ne prouvant rien. C'est exactement
+    #: ce qui est arrive en ecrivant ces tests.
+    SONDE_REGISTRE = textwrap.dedent("""
+        import sys
+        from falcon.taxonomie import Registre
+        assert ".pyz" in sys.modules["falcon"].__file__, \\
+            sys.modules["falcon"].__file__
+        print("entrees", len(Registre.charger().entrees))
+        """)
+
+    SONDE_CARTE = textwrap.dedent("""
+        import sys
+        from falcon.volumique import charger_carte
+        assert ".pyz" in sys.modules["falcon"].__file__, \\
+            sys.modules["falcon"].__file__
+        print("manquants", len(charger_carte().manquants))
+        """)
+
+    SONDE_EXECUTION = textwrap.dedent("""
+        import sys, tempfile, pathlib
+        from falcon.couture.double import DriverScripte
+        from falcon.moteur import executer
+        from falcon.noyau import Identite
+        from falcon.pipeline import charger
+        assert ".pyz" in sys.modules["falcon"].__file__, \\
+            sys.modules["falcon"].__file__
+
+        d = pathlib.Path(tempfile.mkdtemp())
+        (d / "p.yaml").write_text(
+            'version: 1\\n'
+            'nom: essai\\n'
+            'classe: iterative\\n'
+            'cles: [site]\\n'
+            'plafond_items: 9\\n'
+            'plafond_sauvegardes: 9\\n'
+            'etapes:\\n'
+            '  - nom: sauver\\n'
+            '    action: press\\n'
+            '    cible: "wnd[0]/tbar[0]/btn[11]"\\n'
+            '    sauvegarde: true\\n'
+            '    ecran: {transaction: IA08, programme: R, dynpro: "1000"}\\n',
+            encoding="utf-8")
+        (d / "jeu.csv").write_text("site\\nK75\\n", encoding="utf-8")
+
+        brut = DriverScripte(identite=Identite(
+            transaction="IA08", programme="R", dynpro="1000"))
+        resultat = executer(charger(d / "p.yaml"), d / "jeu.csv", brut,
+                            journal=d / "j.jsonl")
+        print("etat", resultat.etat, "ok", resultat.compteurs["ok"])
+        """)
+
+    def _sonder(self, code: str):
+        """Lance `code` avec le bundle pour seule source de `falcon`.
+
+        `cwd` est ailleurs que le depot et `-S` retire site-packages : si
+        quelque chose s'importe, ca vient de l'archive.
+        """
+        return subprocess.run(
+            [sys.executable, "-S", "-c", code],
+            cwd=tempfile.gettempdir(), capture_output=True, text=True,
+            env={"PYTHONPATH": str(self.bundle), "PATH": "/usr/bin:/bin"})
+
+    def test_le_registre_de_taxonomie_se_lit_DEPUIS_l_archive(self):
+        """Le defaut le plus couteux du bundle, et le plus silencieux.
+
+        `Registre.charger()` lisait `Path(__file__).parent / "registre.yaml"`.
+        Dans un zipapp, `__file__` n'est pas un chemin de systeme de fichiers :
+        le fichier « n'existait pas ». Or le registre est charge a CHAQUE
+        execution de pipeline — donc `falcon.pyz`, qui est la forme de
+        livraison arretee au §6, ne pouvait executer aucune pipeline.
+
+        Rien ne levait a la construction, et cette suite n'exercait que des
+        commandes qui ne chargent pas le registre. Le defaut ne se serait vu
+        qu'au premier lot reel, sur le poste de quelqu'un.
+        """
+        fini = self._sonder(self.SONDE_REGISTRE)
+        self.assertEqual(fini.returncode, 0, fini.stderr)
+        self.assertIn("entrees", fini.stdout)
+
+    def test_la_carte_se16n_se_lit_DEPUIS_l_archive(self):
+        fini = self._sonder(self.SONDE_CARTE)
+        self.assertEqual(fini.returncode, 0, fini.stderr)
+        self.assertIn("manquants", fini.stdout)
+
+    def test_une_pipeline_s_EXECUTE_depuis_l_archive(self):
+        """Le bout du bout : c'est ce que le bundle est cense faire.
+
+        Contre le double de test, donc sans SAP — mais en traversant le
+        chargeur, le moteur, le controleur, la taxonomie et le journal, tous
+        depuis l'archive.
+        """
+        fini = self._sonder(self.SONDE_EXECUTION)
+        self.assertEqual(fini.returncode, 0, fini.stderr)
+        self.assertIn("etat termine ok 1", fini.stdout)
 
     def test_diagnostiquer_dit_ce_qui_manque_sur_le_poste(self):
         """pywin32 n'est pas embarque — une extension binaire Windows liee a

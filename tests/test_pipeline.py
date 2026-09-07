@@ -176,6 +176,43 @@ class TestRefusSitues(Base):
         self.assertIn("octal", message)
         self.assertIn("CHAINE", message)
 
+    def test_une_source_non_quotee_est_refusee(self):
+        """Meme defaut que le dynpro, consequence pire : ce n'est pas une
+        comparaison qui devient fausse, c'est une valeur TAPEE DANS SAP.
+
+        YAML n'est pas du texte. Cinq de ces six formes s'ecrivaient dans un
+        champ SAP sans que rien ne leve — et « 007 » vaut 7, alors que les
+        codes SAP sont remplis de zeros.
+        """
+        pieges = {
+            "0100": "64",        # octal
+            "007": "7",          # zeros de tete perdus
+            "12:30": "750",      # sexagesimal
+            "1.50": "1.5",       # flottant
+            "on": "True",        # booleen
+            "2026-09-07": "",    # date
+        }
+        for brut in pieges:
+            with self.subTest(yaml=brut):
+                message = self._refus(
+                    VALIDE.replace("{colonne: site}", f"{{constante: {brut}}}"))
+                self.assertIn("CHAINE", message)
+
+    def test_une_source_quotee_traverse_intacte(self):
+        """L'autre moitie : ce que l'utilisateur a ecrit doit arriver tel quel
+        jusqu'au champ SAP, zeros de tete compris."""
+        for valeur in ("0100", "007", "12:30", "1.50", "on"):
+            with self.subTest(valeur=valeur):
+                pipeline = self._charger(VALIDE.replace(
+                    "{colonne: site}", f'{{constante: "{valeur}"}}'))
+                self.assertEqual(pipeline.etapes[0].source.valeur, valeur)
+
+    def test_le_refus_dit_ou_est_l_etape(self):
+        message = self._refus(
+            VALIDE.replace("{colonne: site}", "{constante: 0100}"))
+        self.assertIn("etape 1", message)
+        self.assertIn("saisir_division", message)
+
     def test_comparaison_inconnue(self):
         self.assertIn("comparaison", self._refus(
             VALIDE.replace("        action: press",
@@ -353,9 +390,11 @@ class TestToucheDeFonction(Base):
     envoyer : aucun champ ne la portait. Le moteur ne pouvait pas l'executer,
     et le trou n'est apparu qu'au moment de l'ecrire."""
 
+    #: La touche est CITEE. Le chargeur exige une chaine pour toute source :
+    #: YAML lit « 0100 » comme de l'octal, et c'est la valeur ecrite dans SAP.
     ETAPE = ('      - nom: valider\n'
              '        action: vkey\n'
-             '        source: {constante: %s}\n'
+             '        source: {constante: "%s"}\n'
              '        navigation_libre: true\n')
 
     def _avec(self, valeur: str, **options) -> str:
@@ -376,7 +415,7 @@ class TestToucheDeFonction(Base):
     def test_une_touche_qui_n_est_pas_un_entier_est_refusee(self):
         """Refuse au chargement, pas au moment ou le moteur enverrait une
         touche fantome."""
-        message = self._refus(self._avec('"F11"'))
+        message = self._refus(self._avec("F11"))   # `ETAPE` pose les guillemets
         self.assertIn("entier est attendu", message)
         self.assertIn("valider", message)
 
