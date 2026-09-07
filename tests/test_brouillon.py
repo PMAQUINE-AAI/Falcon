@@ -141,6 +141,33 @@ class TestTraduction(unittest.TestCase):
         self.assertEqual(etape.action, "vkey")
         self.assertEqual(etape.source.valeur, "11")
 
+    def test_une_touche_porte_LA_FENETRE_qu_elle_vise(self):
+        """`sendVKey` s'adresse a une fenetre, et laquelle n'est pas un
+        detail : le flux de variantes fait la moitie de son travail dans une
+        modale.
+
+        Le brouillon emettait ces etapes SANS cible. Le moteur retombe alors
+        sur `wnd[0]` : la touche partait dans la fenetre principale au lieu de
+        la boite de dialogue. Aucune exception — un rejeu qui agit ailleurs
+        que la ou il a ete enregistre.
+        """
+        brouillon = _brouillon('session.findById("wnd[1]").sendVKey 0')
+        etape = _charge(brouillon, brouillon=True).etapes[0]
+        self.assertEqual(etape.action, "vkey")
+        self.assertEqual(etape.cible, "wnd[1]")
+
+    def test_sur_la_trace_reelle_les_touches_de_modale_gardent_leur_fenetre(self):
+        """Cinq etapes de la trace de reference visent `wnd[1]`. Sans cible,
+        les cinq seraient rejouees dans la fenetre principale."""
+        pipeline = _charge(brouillon_de(lire(MEGATRACE)), brouillon=True)
+        vkeys = [e for e in pipeline.etapes if e.action == "vkey"]
+        self.assertTrue(vkeys)
+        for etape in vkeys:
+            with self.subTest(etape=etape.nom):
+                self.assertRegex(etape.cible, r"^wnd\[\d+\]$")
+        modales = [e for e in vkeys if e.cible != "wnd[0]"]
+        self.assertEqual(len(modales), 5)
+
     def test_les_gestes_de_confort_sont_ecartes(self):
         """Ils sont conserves dans la TRACE pour qu'elle reste rejouable a
         l'identique. Une pipeline n'est pas un rejeu."""

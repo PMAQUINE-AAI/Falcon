@@ -19,6 +19,7 @@ comportement du moteur ETANT DONNE une reponse de driver.
 from __future__ import annotations
 
 import csv
+import inspect
 import tempfile
 import textwrap
 import unittest
@@ -33,7 +34,7 @@ from falcon.moteur import (
     DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
     PreparationImpossible, enchainer, executer,
 )
-from falcon.noyau import Fenetre, Identite, Statut
+from falcon.noyau import CHAMP_DE_COMMANDE, Fenetre, Identite, Statut
 from falcon.pipeline import charger, etape_python, oublier_tout
 from falcon.taxonomie import Registre
 
@@ -714,6 +715,38 @@ class TestChaine(Base):
         retour_accueil(brut, self.registre)
         self.assertIn(("write", CHAMP_DE_COMMANDE, RETOUR_ACCUEIL),
                       brut.gestes)
+
+    def test_le_retour_a_l_accueil_ne_peut_sauvegarder_AUCUNE_fois(self):
+        """Taper un code transaction dans le champ de commande ne sauvegarde
+        rien. Si SAP annonce une sauvegarde ici, c'est qu'on n'est pas ou l'on
+        croit — et c'est exactement ce qu'il faut arreter.
+
+        Le plafond etait a 1, sous un commentaire qui disait deja « ce geste
+        ne doit jamais sauvegarder quoi que ce soit ». La garde de rayon
+        refuse a partir de la N-ieme : un plafond a 1 en autorisait une.
+        """
+        from falcon.controleur import Contrat, DriverGarde, Poste
+        from falcon.moteur.chaine import retour_accueil
+        from falcon.noyau import PlafondAtteint
+
+        # Le geste lui-meme, tel que `retour_accueil` le pose.
+        brut = self._driver()
+        brut.valeurs[CHAMP_DE_COMMANDE] = ""
+        retour_accueil(brut, self.registre)          # ne doit pas lever
+
+        # Et la borne : sous le meme contrat, la PREMIERE sauvegarde est
+        # refusee. C'est le comportement, pas la valeur de la constante.
+        source = inspect.getsource(retour_accueil)
+        self.assertIn("plafond_sauvegardes=0", source)
+
+        garde = DriverGarde(self._driver(), self.registre,
+                            plafond_sauvegardes=0)
+        poste = Poste(garde)
+        with garde.sous_contrat(Contrat(nom="(retour accueil)",
+                                        navigation_libre=True,
+                                        sauvegarde=True)):
+            with self.assertRaises(PlafondAtteint):
+                poste.press("wnd[0]/tbar[0]/btn[11]")
 
     def test_un_arret_bloquant_interrompt_la_chaine(self):
         brut = self._driver()

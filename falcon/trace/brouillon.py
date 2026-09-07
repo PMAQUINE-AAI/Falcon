@@ -163,6 +163,15 @@ def _etape(geste: Geste, visite: Visite) -> tuple[dict, list[str]]:
             # emettait `constante: 11`, que YAML relit comme un entier — et le
             # generateur produisait un fichier que le chargeur refuse.
             etape["source"] = {"constante": str(geste.valeur)}
+            # LA FENETRE VISEE, et pas seulement la touche.
+            #
+            # `sendVKey` s'adresse a une fenetre : la trace de reference en
+            # porte quatre sur `wnd[1]`, c'est-a-dire sur une modale. Le
+            # brouillon les emettait sans `cible`, et le moteur retombe alors
+            # sur `wnd[0]` : quatre touches partaient dans la fenetre
+            # principale au lieu de la boite de dialogue. Aucune exception —
+            # juste un rejeu qui agit ailleurs que la ou il a ete enregistre.
+            etape["cible"] = geste.fenetre or "wnd[0]"
         else:
             etape["cible"] = geste.cible
             if geste.verbe in ("text", "selected"):
@@ -189,7 +198,7 @@ def _etape(geste: Geste, visite: Visite) -> tuple[dict, list[str]]:
                 "ligne par son")
             commentaires.append("contenu.")
 
-    if geste.verbe != "sendVKey" and "cible" not in etape:
+    if "cible" not in etape:
         etape["cible"] = geste.cible
     etape["ecran"] = _ecran(visite)
     commentaires.insert(0, f"trace ligne {geste.ligne} : {geste.texte_source}")

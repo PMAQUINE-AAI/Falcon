@@ -51,10 +51,16 @@ def retour_accueil(brut: "Driver", registre: Registre) -> None:
 
     Passe par un `DriverGarde` en navigation libre : on ne sait pas d'ou l'on
     part — c'est justement le probleme que ce geste resout — mais les gardes
-    de fenetre et de statut, elles, s'appliquent. Le plafond est a 1 : ce
-    geste ne doit jamais sauvegarder quoi que ce soit.
+    de fenetre et de statut, elles, s'appliquent.
+
+    LE PLAFOND EST A ZERO. Il etait a 1, et le commentaire disait deja « ce
+    geste ne doit jamais sauvegarder quoi que ce soit » : la garde de rayon
+    refuse a partir de la N-ieme, donc un plafond a 1 en autorisait une. Taper
+    un code transaction dans le champ de commande ne sauvegarde rien ; si SAP
+    annonce une sauvegarde ici, c'est qu'on n'est pas ou l'on croit, et c'est
+    exactement ce qu'il faut arreter.
     """
-    garde = DriverGarde(brut, registre, plafond_sauvegardes=1)
+    garde = DriverGarde(brut, registre, plafond_sauvegardes=0)
     poste = Poste(garde)
     with garde.sous_contrat(Contrat(nom="(retour accueil)",
                                     navigation_libre=True)):

@@ -39,8 +39,14 @@ TRANSACTION = "SE16N"
 #: Plafond de sauvegardes d'un export : ZERO tolere.
 #:
 #: Un export LIT. S'il declenchait une sauvegarde, ce serait qu'il n'est pas
-#: sur l'ecran qu'on croit — et le plafond a 1 le laisserait en faire une.
-PLAFOND_SAUVEGARDES = 1
+#: sur l'ecran qu'on croit.
+#:
+#: La valeur etait 1, et le commentaire qui l'accompagnait disait deja « le
+#: plafond a 1 le laisserait en faire une ». Il disait vrai : la garde de
+#: rayon refuse a partir de la N-ieme sauvegarde, donc un plafond a N en
+#: autorise N. Le defaut etait ecrit noir sur blanc a cote de la ligne qui le
+#: commettait — un commentaire n'est pas un test.
+PLAFOND_SAUVEGARDES = 0
 
 
 def _naviguer(poste: Poste, garde: DriverGarde, carte: Carte,

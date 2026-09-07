@@ -23,9 +23,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from falcon.controleur import Contrat, DriverGarde, Poste
 from falcon.couture.double import DriverScripte
 from falcon.donnees import JeuInvalide, lire_items
-from falcon.noyau import CHAMP_DE_COMMANDE, EcartIdentite, Identite
+from falcon.noyau import (
+    CHAMP_DE_COMMANDE, EcartIdentite, Identite, PlafondAtteint,
+)
+from falcon.taxonomie import Registre
 from falcon.volumique import (
     CHAMPS, CHEMIN_CARTE_DEFAUT, ECRANS, OBLIGATOIRES, PLAFOND_SAUVEGARDES,
     PREFIXE, TODO, Carte, CarteIncomplete, CarteInvalide, Delta,
@@ -420,10 +424,29 @@ class TestExportSe16n(Base):
                        utilisateur="x", carte=_carte_relevee())
         self.assertIn(("write", CHAMP_DE_COMMANDE, "/nSE16N"), brut.gestes)
 
-    def test_un_export_ne_peut_pas_sauvegarder_deux_fois(self):
+    def test_un_export_ne_peut_sauvegarder_AUCUNE_fois(self):
         """Un export LIT. S'il declenchait une sauvegarde, ce serait qu'il
-        n'est pas sur l'ecran qu'on croit."""
-        self.assertEqual(PLAFOND_SAUVEGARDES, 1)
+        n'est pas sur l'ecran qu'on croit — et la premiere doit deja etre
+        refusee.
+
+        La version precedente de ce test affirmait `PLAFOND_SAUVEGARDES == 1`,
+        sous cette meme docstring. Elle epinglait donc la valeur qui autorise
+        une sauvegarde, en disant qu'aucune n'est toleree : le test decrivait
+        le code, pas l'intention. Le commentaire a cote de la constante
+        annoncait meme le defaut — « le plafond a 1 le laisserait en faire
+        une ». Un commentaire n'est pas un test.
+
+        Celui-ci porte sur le COMPORTEMENT : le premier geste de sauvegarde
+        est refuse.
+        """
+        garde = DriverGarde(self._driver(), Registre.charger(),
+                            plafond_sauvegardes=PLAFOND_SAUVEGARDES)
+        poste = Poste(garde)
+        with garde.sous_contrat(Contrat(nom="(export)", navigation_libre=True,
+                                        sauvegarde=True)):
+            with self.assertRaises(PlafondAtteint):
+                poste.press("wnd[0]/tbar[0]/btn[11]")
+        self.assertEqual(garde.sauvegardes, 0)
 
     def test_le_mauvais_ecran_arrete_l_export(self):
         """Un export fait sur le mauvais ecran rendrait des lignes qui ont
