@@ -25,6 +25,9 @@ from typing import Any
 
 import yaml
 
+from falcon.noyau.yaml_strict import YamlAmbigu, texte
+from falcon.noyau.yaml_strict import lire as lire_yaml
+
 #: Marqueur laisse dans la carte livree. Le meme que celui du brouillon de
 #: pipeline, et pour la meme raison : il rend le fichier inutilisable tel quel.
 TODO = "TODO"
@@ -115,7 +118,10 @@ def charger_carte(chemin: str | Path | None = None) -> Carte:
             raise CarteInvalide(f"carte introuvable : {cible}")
         brut = cible.read_text(encoding="utf-8")
 
-    contenu = yaml.safe_load(brut) or {}
+    try:
+        contenu = lire_yaml(brut, str(cible)) or {}
+    except YamlAmbigu as erreur:
+        raise CarteInvalide(str(erreur)) from None
     if not isinstance(contenu, dict):
         raise CarteInvalide(f"{cible} : un dictionnaire est attendu")
     if contenu.get("version") != VERSION:
@@ -126,11 +132,35 @@ def charger_carte(chemin: str | Path | None = None) -> Carte:
     if inconnues:
         raise CarteInvalide(f"{cible} : cle(s) inconnue(s) {inconnues}")
 
+    # `str(contenu.get(c, TODO))` rendait « None » pour une cle PRESENTE et
+    # vide — un identifiant de controle qui n'a pas l'air d'un marqueur. La
+    # carte se declarait alors COMPLETE, `verifier()` passait, et l'export
+    # naviguait vers un controle nomme « None ».
+    #
+    # C'est le contraire exact de ce que cette carte est : elle est livree
+    # vide et doit REFUSER tant qu'un humain n'a pas releve les identifiants
+    # sur un ecran reel. Une carte a moitie remplie qui se dit prete est pire
+    # qu'une carte vide.
+    champs = {}
+    for champ in CHAMPS:
+        valeur = contenu.get(champ, TODO)
+        try:
+            champs[champ] = texte(valeur, champ, source=str(cible))
+        except YamlAmbigu as erreur:
+            raise CarteInvalide(str(erreur)) from None
+
+    criteres = {}
+    for critere, valeur in (contenu.get("criteres") or {}).items():
+        try:
+            criteres[texte(critere, "criteres", source=str(cible))] = texte(
+                valeur, f"criteres.{critere}", source=str(cible))
+        except YamlAmbigu as erreur:
+            raise CarteInvalide(str(erreur)) from None
+
     return Carte(
         source=str(cible),
-        criteres={str(c): str(v)
-                  for c, v in (contenu.get("criteres") or {}).items()},
-        **{c: str(contenu.get(c, TODO)) for c in CHAMPS},
+        criteres=criteres,
+        **champs,
         **{e: _triplet(contenu.get(e), e, cible) for e in ECRANS},
     )
 

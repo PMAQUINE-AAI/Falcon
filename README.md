@@ -45,7 +45,7 @@ Les modules livrés :
 
 | Module | Rôle |
 |---|---|
-| `falcon/noyau/` | types de la couture, hiérarchie d'erreurs, vocabulaire des gardes |
+| `falcon/noyau/` | types de la couture, hiérarchie d'erreurs, vocabulaire des gardes, **dialecte YAML strict** |
 | `falcon/couture/` | l'interface étroite par laquelle tout FALCON parle à SAP |
 | `falcon/controleur/` | les cinq gardes, les contrats d'étape, les dérogations |
 | `falcon/journal/` | JSONL append-only, repli des états, reprise, rapport |
@@ -144,6 +144,21 @@ les paquets de la machine.
 binaire Windows liée à une version d'interpréteur. Il s'installe sur le poste,
 et `diagnostiquer` — la seule commande qui l'exige — le dit avec la ligne de
 commande à taper.
+
+## Le YAML que vous écrivez
+
+Un automatisme nouveau, c'est un YAML et un CSV — jamais un commit. Le format
+doit donc être **inflexible plutôt que serviable** : ce qui est ambigu est
+refusé, jamais deviné.
+
+YAML 1.1 lit `0100` comme de l'octal (64), `007` comme 7, `12:30` en base 60
+(750), `on` et `N` comme des booléens, une clé vide comme `None`. Ces valeurs
+sont tapées dans un ERP de production. `falcon/noyau/yaml_strict.py` pose deux
+barrières : le lecteur refuse à l'analyse les formes qui deviennent
+indistinguables une fois lues, et les accesseurs exigent le type au lieu de le
+forcer — `str(None)` donne `"None"`, `bool("non")` donne vrai.
+
+Chaque refus nomme le fichier, et la ligne ou l'étape.
 
 Deux règles d'architecture sont vérifiées mécaniquement par
 `tests/test_frontieres.py`, parce qu'une règle que rien ne vérifie tient

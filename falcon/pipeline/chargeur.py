@@ -20,6 +20,11 @@ from typing import Any
 
 import yaml
 
+from falcon.noyau.yaml_strict import (
+    YamlAmbigu, booleen, liste_de_texte, texte,
+)
+from falcon.noyau.yaml_strict import lire as lire_yaml
+
 from falcon.noyau import COMPARAISONS, DEROGEABLES, MOTIF_MINIMAL, PORTEE_TOTALE
 
 from . import extension
@@ -81,7 +86,9 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
                      f"explicitement comme brouillon")
 
     try:
-        contenu = yaml.safe_load(brut)
+        contenu = lire_yaml(brut, source)
+    except YamlAmbigu as erreur:
+        raise PipelineInvalide(str(erreur)) from None
     except yaml.YAMLError as erreur:
         raise _refus(source, f"YAML illisible ({erreur})") from erreur
 
@@ -105,7 +112,14 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
     if classe not in CLASSES:
         raise _refus(source, f"classe {classe!r}, attendu {sorted(CLASSES)}")
 
-    cles = tuple(contenu.get("cles") or ())
+    # `tuple("site")` rend ('s','i','t','e') : quatre colonnes de clef nommees
+    # s, i, t et e. L'erreur ressortait bien plus loin, au moment de lire le
+    # jeu — et accusait le fichier de donnees plutot que la pipeline.
+    try:
+        cles = liste_de_texte(contenu.get("cles"), "cles", source=source,
+                              defaut=())
+    except YamlAmbigu as erreur:
+        raise PipelineInvalide(str(erreur)) from None
     if classe == "iterative" and not cles:
         raise _refus(source,
                      "une pipeline iterative doit declarer `cles`. Sans "
@@ -237,12 +251,32 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         raise _refus(source, f"comparaison {comparaison!r}, attendu "
                              f"{sorted(COMPARAISONS)}", rang, nom)
 
+    try:
+        # Meme piege que `cles` : « wnd[0] » en scalaire donnait six fenetres
+        # attendues nommees w, n, d, [, 0 et ]. La fenetre principale n'etait
+        # alors plus attendue, et la garde 3 la traitait en intruse.
+        fenetres = liste_de_texte(brute.get("fenetres"), "fenetres",
+                                  source=source, defaut=("wnd[0]",))
+        # Declarer la cle et ne rien mettre derriere donnait None, c'est-a-dire
+        # exactement le meme resultat que ne pas la declarer : la garde 2
+        # n'etait pas posee. C'est le relachement par omission que le §5
+        # refuse partout ailleurs.
+        statut = brute.get("statut_attendu")
+        if "statut_attendu" in brute:
+            statut = texte(statut, "statut_attendu", source=source)
+        sauvegarde = booleen(brute.get("sauvegarde"), "sauvegarde",
+                             source=source, defaut=False)
+        libre_verifie = booleen(brute.get("navigation_libre"),
+                                "navigation_libre", source=source, defaut=False)
+    except YamlAmbigu as erreur:
+        raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
+
     return Etape(
         nom=nom, action=action, cible=cible, source=source_valeur,
-        fonction=fonction, ecran=ecran, navigation_libre=libre,
-        fenetres=tuple(brute.get("fenetres") or ("wnd[0]",)),
-        statut_attendu=brute.get("statut_attendu"),
-        sauvegarde=bool(brute.get("sauvegarde", False)),
+        fonction=fonction, ecran=ecran, navigation_libre=libre_verifie,
+        fenetres=fenetres,
+        statut_attendu=statut,
+        sauvegarde=sauvegarde,
         comparaison=comparaison,
         derogations=_derogations(brute.get("derogations"), source, rang, nom),
     )

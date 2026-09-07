@@ -35,6 +35,11 @@ from typing import Any, Iterable, Sequence
 
 import yaml
 
+from falcon.noyau.yaml_strict import (
+    YamlAmbigu, booleen, texte,
+)
+from falcon.noyau.yaml_strict import lire as lire_yaml
+
 from falcon.noyau.types import meme_numero
 
 # --- categories ------------------------------------------------------
@@ -423,12 +428,29 @@ def _lire_fichier(chemin: Path) -> list[Entree]:
 
 def _lire_texte(brut: str, chemin: Path) -> list[Entree]:
     """Le contenu, d'ou qu'il vienne. `chemin` ne sert qu'aux messages."""
-    contenu = yaml.safe_load(brut) or {}
+    try:
+        contenu = lire_yaml(brut, str(chemin)) or {}
+    except YamlAmbigu as erreur:
+        raise RegistreInvalide(str(erreur)) from None
     if not isinstance(contenu, dict):
         raise RegistreInvalide(f"{chemin} : un dictionnaire est attendu")
 
     brutes = contenu.get("entrees") or []
     return [_construire(brute, chemin) for brute in brutes]
+
+
+def _exiger_texte(valeur: Any, quoi: str, chemin: Path, nom: str) -> str:
+    try:
+        return texte(valeur, quoi, source=f"{chemin} : {nom!r}")
+    except YamlAmbigu as erreur:
+        raise RegistreInvalide(str(erreur)) from None
+
+
+def _exiger_booleen(valeur: Any, quoi: str, chemin: Path, nom: str) -> bool:
+    try:
+        return booleen(valeur, quoi, source=f"{chemin} : {nom!r}", defaut=False)
+    except YamlAmbigu as erreur:
+        raise RegistreInvalide(str(erreur)) from None
 
 
 def _construire(brute: dict[str, Any], chemin: Path) -> Entree:
@@ -468,12 +490,45 @@ def _construire(brute: dict[str, Any], chemin: Path) -> Entree:
                 f"{chemin} : {nom!r} utilise un joker sur {cle!r}. "
                 f"Une entree attrape-tout ferait passer l'inconnu pour du "
                 f"connu, ce que le modele de securite interdit")
+        # Chaque critere est du TEXTE, y compris dans le contexte. `numero: 010`
+        # etait lu comme l'entier 8 : l'entree ne blanchissait pas le message
+        # 010, et blanchissait le 008 a sa place. Les deux sens sont faux, et
+        # aucun ne levait — l'appariement compare 8 a « 010 » et n'apparie
+        # rien, donc l'incident ressort `inconnue` et arrete le lot.
+        #
+        # `contexte` est le triplet d'ecran : un dictionnaire dont les valeurs
+        # sont, elles, du texte. Un dynpro `0100` y tomberait dans le meme
+        # piege que partout ailleurs.
+        if cle == "contexte":
+            if not isinstance(valeur, dict):
+                raise RegistreInvalide(
+                    f"{chemin} : {nom!r}, `correspondance.contexte` doit etre "
+                    f"un dictionnaire (recu {valeur!r})")
+            for partie, brute_partie in valeur.items():
+                _exiger_texte(brute_partie, f"correspondance.contexte.{partie}",
+                              chemin, nom)
+        elif isinstance(valeur, list):
+            # Un critere peut enumerer plusieurs valeurs acceptees :
+            # `type: [S, W]`. Chacune reste du texte.
+            for rang, element in enumerate(valeur):
+                _exiger_texte(element, f"correspondance.{cle}[{rang}]",
+                              chemin, nom)
+        else:
+            _exiger_texte(valeur, f"correspondance.{cle}", chemin, nom)
 
     politique_brute = brute.get("politique") or {}
+    if not isinstance(politique_brute, dict):
+        raise RegistreInvalide(f"{chemin} : {nom!r}, politique invalide")
+    # `bool()` sur ce que YAML a rendu, c'etait le pire defaut du registre :
+    # « non » n'est pas un booleen YAML, c'est la chaine « non », et toute
+    # chaine non vide vaut vrai. Une entree qui disait « arrete le lot »
+    # laissait donc le lot continuer a ecrire dans SAP.
     politique = Politique(
-        poursuivre=bool(politique_brute.get("poursuivre", False)),
+        poursuivre=_exiger_booleen(politique_brute.get("poursuivre"),
+                                   "politique.poursuivre", chemin, nom),
         item=politique_brute.get("item"),
-        arreter_chaine=bool(politique_brute.get("arreter_chaine", False)),
+        arreter_chaine=_exiger_booleen(politique_brute.get("arreter_chaine"),
+                                       "politique.arreter_chaine", chemin, nom),
     )
 
     return Entree(nom=nom, categorie=categorie, canal=canal,

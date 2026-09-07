@@ -174,7 +174,9 @@ class TestRefusSitues(Base):
         """
         message = self._refus(VALIDE.replace('dynpro: "1000"', "dynpro: 0100"))
         self.assertIn("octal", message)
-        self.assertIn("CHAINE", message)
+        self.assertIn("guillemets", message)
+        self.assertIn("p.yaml", message)
+        self.assertIn("ligne", message)      # a defaut de l'etape : la ligne
 
     def test_une_source_non_quotee_est_refusee(self):
         """Meme defaut que le dynpro, consequence pire : ce n'est pas une
@@ -196,7 +198,12 @@ class TestRefusSitues(Base):
             with self.subTest(yaml=brut):
                 message = self._refus(
                     VALIDE.replace("{colonne: site}", f"{{constante: {brut}}}"))
-                self.assertIn("CHAINE", message)
+                # Deux barrieres, deux messages, et les deux disent quoi faire.
+                # Le lecteur strict attrape l'octal et le sexagesimal des
+                # l'analyse — donc plus tot, et en nommant la ligne ; les
+                # autres formes tombent sur l'accesseur, qui exige le type.
+                self.assertIn("guillemets", message)
+                self.assertIn("p.yaml", message)
 
     def test_une_source_quotee_traverse_intacte(self):
         """L'autre moitie : ce que l'utilisateur a ecrit doit arriver tel quel
@@ -207,9 +214,12 @@ class TestRefusSitues(Base):
                     "{colonne: site}", f'{{constante: "{valeur}"}}'))
                 self.assertEqual(pipeline.etapes[0].source.valeur, valeur)
 
-    def test_le_refus_dit_ou_est_l_etape(self):
+    def test_un_refus_d_accesseur_dit_ou_est_l_etape(self):
+        """Ce que l'accesseur refuse, il le situe a l'etape. Ce que le lecteur
+        refuse a l'analyse ne le peut pas — les etapes n'existent pas encore —
+        et nomme la ligne a la place."""
         message = self._refus(
-            VALIDE.replace("{colonne: site}", "{constante: 0100}"))
+            VALIDE.replace("{colonne: site}", "{constante: 1.50}"))
         self.assertIn("etape 1", message)
         self.assertIn("saisir_division", message)
 
