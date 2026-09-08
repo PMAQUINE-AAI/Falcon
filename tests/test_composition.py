@@ -27,6 +27,14 @@ from pathlib import Path
 
 from falcon.couture.double import DriverScripte
 from falcon.moteur import PreparationImpossible, executer
+
+#: Ces tests portent sur la COMPOSITION des valeurs, pas sur la garde de
+#: repetition a blanc (§5.5) que `run` exige desormais. Le forcage est
+#: explicite et motive, comme il l'est pour un utilisateur.
+SANS_REPETITION = {
+    "forcer_sans_repetition": True,
+    "motif_forcage": "Test cible sur la composition des valeurs.",
+}
 from falcon.noyau import Identite
 from falcon.pipeline import PipelineInvalide, charger
 from falcon.pipeline.composition import (
@@ -83,7 +91,7 @@ class Base(unittest.TestCase):
         brut.apres_action = relire
 
         executer(self._charger(bloc), self.jeu, brut,
-                 journal=self.racine / "j.jsonl")
+                 journal=self.racine / "j.jsonl", **SANS_REPETITION)
         ecrits = [valeur for geste, _, valeur in brut.gestes if geste == "write"]
         return ecrits[0]
 
@@ -256,7 +264,8 @@ class TestLeRaccordementAuPreVol(Base):
         with self.assertRaises(PreparationImpossible) as capture:
             executer(self._charger(
                 '        source: {gabarit: "{prefixe}_{introuvable}"}'),
-                self.jeu, brut, journal=self.racine / "j.jsonl")
+                self.jeu, brut, journal=self.racine / "j.jsonl",
+                **SANS_REPETITION)
         self.assertIn("introuvable", str(capture.exception))
         self.assertEqual(brut.gestes, [])
 
@@ -376,7 +385,7 @@ class TestZerosSurVide(unittest.TestCase):
         driver = DriverScripte(Identite("IA08", "RIPLKO10", "1000"))
         with self.assertRaises(PreparationImpossible) as capture:
             executer(charger(chemin), jeu, driver,
-                     journal=racine / "j.jsonl")
+                     journal=racine / "j.jsonl", **SANS_REPETITION)
         self.assertIn("zeros", str(capture.exception))
         self.assertEqual(driver.gestes, [], "refuse AVANT la premiere action")
 

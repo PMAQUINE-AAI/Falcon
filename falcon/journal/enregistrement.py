@@ -119,6 +119,15 @@ class ExecutionDebut(Enregistrement):
     derogations: list[dict[str, Any]] = field(default_factory=list)
     falcon_version: str = ""
 
+    #: Motif du contournement de la garde de repetition a blanc, s'il y en a eu.
+    #:
+    #: Un contournement qui ne laisse pas de trace n'est pas un contournement,
+    #: c'est un trou. Il vit dans l'ouverture, a cote des derogations, parce
+    #: que c'est la que le journal dit sous quelles conditions le lot est
+    #: parti — et que ces conditions sont ce qu'on relit quand une correction
+    #: de masse est contestee.
+    repetition_forcee: str = ""
+
 
 @_enregistre
 @dataclass(frozen=True, kw_only=True)

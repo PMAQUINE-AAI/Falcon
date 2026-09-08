@@ -32,7 +32,8 @@ if str(RACINE) not in sys.path:
     sys.path.insert(0, str(RACINE))
 
 from falcon.controleur import gardes                          # noqa: E402
-from falcon.journal import lecteur                            # noqa: E402
+from falcon.journal import lecteur
+from falcon.moteur import boucle                            # noqa: E402
 from falcon.pipeline import modele                            # noqa: E402
 
 #: Garde -> (porteur, attribut, suite qui doit s'en apercevoir).
@@ -58,6 +59,11 @@ CIBLES = {
     "5 rayon": (gardes.DriverGarde, "_garde_rayon", "tests.test_gardes"),
     "6 reprise": (lecteur, "garde_du_monde", "tests.test_journal"),
     "7 empreinte": (modele.Pipeline, "__post_init__", "tests.test_pipeline"),
+    # La seconde moitie de la garde 5 : « `dry-run` obligatoire avant tout
+    # premier passage en production » (§5.5). Elle n'etait qu'un ordre
+    # d'affichage dans la console, donc rien ne l'appliquait et rien ne
+    # pouvait la verifier.
+    "8 repetition": (boucle, "garde_de_la_repetition", "tests.test_moteur"),
 }
 
 

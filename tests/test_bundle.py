@@ -177,11 +177,19 @@ class TestExecution(Base):
             encoding="utf-8")
         (d / "jeu.csv").write_text("site\\nK75\\n", encoding="utf-8")
 
-        brut = DriverScripte(identite=Identite(
-            transaction="IA08", programme="R", dynpro="1000"))
-        resultat = executer(charger(d / "p.yaml"), d / "jeu.csv", brut,
+        def brut():
+            return DriverScripte(identite=Identite(
+                transaction="IA08", programme="R", dynpro="1000"))
+
+        # Repetition a blanc PUIS run : la garde 5.5 l'exige, et le parcours
+        # doit valoir depuis l'archive comme depuis le depot.
+        pipeline = charger(d / "p.yaml")
+        blanc = executer(pipeline, d / "jeu.csv", brut(),
+                         journal=d / "j.jsonl", mode="dry-run")
+        resultat = executer(pipeline, d / "jeu.csv", brut(),
                             journal=d / "j.jsonl")
-        print("etat", resultat.etat, "ok", resultat.compteurs["ok"])
+        print("blanc", blanc.etat, "etat", resultat.etat,
+              "ok", resultat.compteurs["ok"])
         """)
 
     def _sonder(self, code: str):
@@ -226,7 +234,7 @@ class TestExecution(Base):
         """
         fini = self._sonder(self.SONDE_EXECUTION)
         self.assertEqual(fini.returncode, 0, fini.stderr)
-        self.assertIn("etat termine ok 1", fini.stdout)
+        self.assertIn("blanc termine etat termine ok 1", fini.stdout)
 
     def test_diagnostiquer_dit_ce_qui_manque_sur_le_poste(self):
         """pywin32 n'est pas embarque — une extension binaire Windows liee a

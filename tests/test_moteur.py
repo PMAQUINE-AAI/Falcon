@@ -28,11 +28,12 @@ from pathlib import Path
 from falcon.couture.double import DriverScripte
 from falcon.donnees import lire_items
 from falcon.journal import (
-    DOUTEUX, EN_COURS, KO, OK, ItemFin, depuis_journal, etats, lire,
+    DOUTEUX, EN_COURS, KO, OK, ExecutionDebut, ItemFin, depuis_journal, etats,
+    lire,
 )
 from falcon.moteur import (
     DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
-    PreparationImpossible, enchainer, executer,
+    PreparationImpossible, RepetitionManquante, enchainer, executer,
 )
 from falcon.noyau import CHAMP_DE_COMMANDE, Fenetre, Identite, Statut
 from falcon.pipeline import charger, etape_python, oublier_tout
@@ -75,6 +76,22 @@ def etape(*lignes: str) -> str:
     return "".join(f"      {ligne}\n" for ligne in lignes)
 
 
+#: Ce que passe un test qui n'est PAS celui de la garde de repetition.
+#:
+#: `run` exige desormais qu'une repetition a blanc ait abouti sur ces
+#: empreintes (§5.5). Les tests ci-dessous portent sur autre chose — la
+#: boucle, les plafonds, le journal — et faire preceder chacun d'un dry-run
+#: polluerait le journal et les gestes qu'ils inspectent justement.
+#:
+#: Le forcage est donc EXPLICITE et motive, exactement comme il l'est pour un
+#: utilisateur. La garde a ses propres tests, et le neutraliseur la verifie.
+SANS_REPETITION = {
+    "forcer_sans_repetition": True,
+    "motif_forcage": "Test cible sur un autre comportement que la garde de "
+                     "repetition a blanc.",
+}
+
+
 class Base(unittest.TestCase):
 
     def setUp(self):
@@ -106,7 +123,7 @@ class Base(unittest.TestCase):
     def _executer(self, brut=None, **options):
         return executer(self._pipeline(), self.jeu, brut or self._driver(),
                         journal=self.journal, registre=self.registre,
-                        **options)
+                        **{**SANS_REPETITION, **options})
 
     def _etats(self):
         return etats(lire(self.journal))
@@ -147,7 +164,8 @@ class TestBoucle(Base):
         volumique = PIPELINE.replace("classe: iterative", "classe: volumique")
         with self.assertRaises(PreparationImpossible) as capture:
             executer(self._pipeline(volumique), self.jeu, self._driver(),
-                     journal=self.journal, registre=self.registre)
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertIn("volumique", str(capture.exception))
 
 
@@ -199,7 +217,8 @@ class TestUnKoNInterromptPasLeLot(Base):
         registre = Registre.charger(surcouche)
         resultat = executer(self._pipeline(), self.jeu,
                             self._driver_fautif_au_deuxieme(),
-                            journal=self.journal, registre=registre)
+                            journal=self.journal, registre=registre,
+                            **SANS_REPETITION)
         self.assertEqual(resultat.etat, TERMINE)
         self.assertEqual(resultat.compteurs[OK], 2)
         self.assertEqual(resultat.compteurs[KO], 1)
@@ -235,7 +254,8 @@ class TestUnArretBloquantArreteTout(Base):
     def test_le_plafond_d_items_arrete_le_lot(self):
         court = PIPELINE.replace("plafond_items: 50", "plafond_items: 2")
         resultat = executer(self._pipeline(court), self.jeu, self._driver(),
-                            journal=self.journal, registre=self.registre)
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(resultat.etat, PLAFOND)
         self.assertEqual(resultat.compteurs[OK], 2)
 
@@ -244,7 +264,8 @@ class TestUnArretBloquantArreteTout(Base):
         court = PIPELINE.replace("plafond_sauvegardes: 50",
                                  "plafond_sauvegardes: 2")
         resultat = executer(self._pipeline(court), self.jeu, self._driver(),
-                            journal=self.journal, registre=self.registre)
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(resultat.etat, PLAFOND)
 
 
@@ -343,7 +364,8 @@ class TestCoherenceDuJeu(Base):
             executer(self._pipeline(
                 PIPELINE.replace("{colonne: site}", "{colonne: libelle}")),
                 self.jeu, self._driver(), journal=self.journal,
-                registre=self.registre)
+                registre=self.registre,
+                     **SANS_REPETITION)
         self.assertIn("ne s'accordent pas", str(capture.exception))
 
     def test_le_controle_tombe_avant_la_premiere_action(self):
@@ -353,7 +375,8 @@ class TestCoherenceDuJeu(Base):
         with self.assertRaises(PreparationImpossible):
             executer(self._pipeline(
                 PIPELINE.replace("{colonne: site}", "{colonne: libelle}")),
-                self.jeu, brut, journal=self.journal, registre=self.registre)
+                self.jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(brut.gestes, [], "SAP a ete touche malgre le refus")
 
     def test_une_valeur_de_case_ambigue_est_refusee(self):
@@ -367,7 +390,8 @@ class TestCoherenceDuJeu(Base):
         self.jeu.write_text("site,libelle\n1000,peut-etre\n", encoding="utf-8")
         with self.assertRaises(PreparationImpossible) as capture:
             executer(self._pipeline(avec_case), self.jeu, self._driver(),
-                     journal=self.journal, registre=self.registre)
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertIn("ni vrai ni faux", str(capture.exception))
 
 
@@ -399,7 +423,7 @@ class TestReexportDesKo(Base):
         resultat = executer(self._pipeline(), self.jeu, brut,
                             journal=self.journal,
                             registre=Registre.charger(surcouche),
-                            sortie_ko=ko)
+                            sortie_ko=ko, **SANS_REPETITION)
         self.assertEqual(resultat.ko, str(ko))
 
         # Reinjectable : la lecture retire les colonnes de diagnostic.
@@ -409,7 +433,7 @@ class TestReexportDesKo(Base):
 
     def test_sans_ko_aucun_fichier_n_est_ecrit(self):
         ko = self.racine / "ko.csv"
-        resultat = self._executer(sortie_ko=ko)
+        resultat = self._executer(sortie_ko=ko, **SANS_REPETITION)
         self.assertIsNone(resultat.ko)
         self.assertFalse(ko.exists())
 
@@ -458,7 +482,7 @@ class TestReexportDesKo(Base):
         ko = self.racine / "ko.csv"
         executer(self._pipeline(), self.jeu, self._driver_refuse_tout(),
                  journal=self.journal, registre=self._registre_fautif(),
-                 sortie_ko=ko)
+                 sortie_ko=ko, **SANS_REPETITION)
 
         lignes = ko.read_text(encoding="utf-8").splitlines()
         entete = lignes[0].split(",")
@@ -515,7 +539,7 @@ class TestDouteuxEtDoubleEcriture(Base):
         resultat = executer(self._pipeline_avec_retour(), self.jeu,
                             self._driver_qui_lache_apres_avoir_sauve(),
                             journal=self.journal, registre=self.registre,
-                            sortie_ko=ko)
+                            sortie_ko=ko, **SANS_REPETITION)
         replie = etats(lire(self.journal))
         return resultat, ko, replie
 
@@ -562,7 +586,7 @@ class TestDouteuxEtDoubleEcriture(Base):
         ko = self.racine / "ko.csv"
         resultat = executer(self._pipeline(), self.jeu, brut,
                             journal=self.journal, registre=self.registre,
-                            sortie_ko=ko)
+                            sortie_ko=ko, **SANS_REPETITION)
         replie = etats(lire(self.journal))
         self.assertEqual(resultat.compteurs[DOUTEUX], 0)
         self.assertEqual(resultat.douteux, ())
@@ -586,7 +610,8 @@ class TestDouteuxEtDoubleEcriture(Base):
         brut = self._driver()
         with self.assertRaises(PreparationImpossible) as capture:
             executer(self._pipeline_avec_retour(), self.jeu, brut,
-                     journal=self.journal, registre=self.registre)
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         message = str(capture.exception)
         self.assertIn("DOUTEUX", message)
         for item_id in douteux:
@@ -610,7 +635,8 @@ class TestDouteuxEtDoubleEcriture(Base):
                 pilote.identite = AUTRE          # avant le moindre press
         brut.apres_action = deriver
         executer(self._pipeline(), self.jeu, brut, journal=self.journal,
-                 registre=self.registre)
+                 registre=self.registre,
+                     **SANS_REPETITION)
         replie = etats(lire(self.journal))
         self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
 
@@ -657,7 +683,8 @@ class TestColonneAbsente(Base):
             executer(self._pipeline(PIPELINE.replace("colonne: site",
                                                      "colonne: sitte")),
                      self.jeu, brut, journal=self.journal,
-                     registre=self.registre)
+                     registre=self.registre,
+                     **SANS_REPETITION)
         message = str(capture.exception)
         self.assertIn("sitte", message)
         self.assertIn("site", message)          # ce que le jeu porte vraiment
@@ -672,7 +699,8 @@ class TestColonneAbsente(Base):
             self._pipeline(PIPELINE.replace("colonne: site",
                                             "colonne: libelle")),
             self.jeu, self._driver(), journal=self.journal,
-            registre=self.registre)
+            registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(resultat.etat, TERMINE)
 
     def test_une_colonne_absente_de_CETTE_LIGNE_seulement_est_refusee(self):
@@ -697,7 +725,8 @@ class TestColonneAbsente(Base):
         with self.assertRaises(PreparationImpossible) as capture:
             executer(self._pipeline(PIPELINE.replace("colonne: site",
                                                      "colonne: libelle")),
-                     jeu, brut, journal=self.journal, registre=self.registre)
+                     jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertIn("libelle", str(capture.exception))
         self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
 
@@ -723,7 +752,8 @@ class TestColonneAbsente(Base):
                      '  defaut: "K75"',
                      "  format: [sans_espaces_autour]",
                      f"  {ECRAN}")),
-                 self.jeu, brut, journal=self.journal, registre=self.registre)
+                 self.jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         ecrits = [g for g in brut.gestes if g[0] == "write"]
         self.assertTrue(ecrits, "aucune saisie")
         self.assertEqual(ecrits[-1][-1], "K75",
@@ -740,7 +770,8 @@ class TestColonneAbsente(Base):
                 "  source: {colonne: absente}",
                 f"  {ECRAN}")),
                 self.jeu, self._driver(), journal=self.journal,
-                registre=self.registre)
+                registre=self.registre,
+                     **SANS_REPETITION)
 
 
 class TestEchappatoirePython(Base):
@@ -759,7 +790,8 @@ class TestEchappatoirePython(Base):
         avec = SOCLE + etape("- nom: appeler", "  action: python",
                              "  fonction: noter", f"  {ECRAN}")
         executer(self._pipeline(avec), self.jeu, self._driver(),
-                 journal=self.journal, registre=self.registre)
+                 journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(len(vus), 3)
         self.assertEqual(vus[0][0], "Poste")
 
@@ -773,7 +805,8 @@ class TestEchappatoirePython(Base):
         avec = SOCLE + etape("- nom: casser_ici", "  action: python",
                              "  fonction: casser", f"  {ECRAN}")
         resultat = executer(self._pipeline(avec), self.jeu, self._driver(),
-                            journal=self.journal, registre=self.registre)
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(resultat.etat, INTERROMPU)
         incidents = [e for e in lire(self.journal) if e.TYPE == "incident"]
         self.assertTrue(incidents)
@@ -791,6 +824,7 @@ class TestChaine(Base):
     def test_chaque_pipeline_a_son_journal(self):
         """Fusionner rendrait la reprise fine impossible."""
         resultats = enchainer(self._maillons(), self._driver(),
+                              **SANS_REPETITION,
                               registre=self.registre)
         self.assertEqual(len(resultats), 2)
         self.assertNotEqual(resultats[0].journal, resultats[1].journal)
@@ -804,6 +838,7 @@ class TestChaine(Base):
             vus.append("accueil")
 
         enchainer(self._maillons(3), self._driver(), registre=self.registre,
+                  **SANS_REPETITION,
                   accueil=accueil)
         self.assertEqual(len(vus), 2, "un retour entre chaque, pas avant la "
                                       "premiere")
@@ -858,7 +893,8 @@ class TestChaine(Base):
                 driver.identite = AUTRE
         brut.apres_action = deriver
 
-        resultats = enchainer(self._maillons(3), brut, registre=self.registre)
+        resultats = enchainer(self._maillons(3), brut, registre=self.registre,
+                              **SANS_REPETITION)
         self.assertEqual(len(resultats), 1)
         self.assertTrue(resultats[0].interrompu)
 
@@ -916,7 +952,7 @@ class TestBoutEnBout(Base):
 
         # 1. Le lot part, traite un item, et se fait interrompre au deuxieme.
         premier = self._executer(self._driver_qui_lache_au_deuxieme(),
-                                 sortie_ko=ko)
+                                 sortie_ko=ko, **SANS_REPETITION)
         self.assertEqual(premier.etat, INTERROMPU)
         self.assertEqual(premier.compteurs[OK], 1)
 
@@ -928,7 +964,7 @@ class TestBoutEnBout(Base):
 
         # 3. La reprise ne rejoue NI le termine NI le douteux. Le douteux
         #    surtout : le rejouer, c'est ecrire deux fois dans SAP.
-        seconde = self._executer(self._driver(), mode=REPRISE, sortie_ko=ko)
+        seconde = self._executer(self._driver(), mode=REPRISE, sortie_ko=ko, **SANS_REPETITION)
         self.assertEqual(seconde.etat, TERMINE)
         self.assertEqual(seconde.compteurs[OK], 1)      # le troisieme, seul
         self.assertEqual(seconde.compteurs["deja_faits"], 2)
@@ -969,16 +1005,134 @@ class TestBoutEnBout(Base):
         ko = self.racine / "ko.csv"
         premier = executer(self._pipeline(), self.jeu, brut,
                            journal=self.journal,
-                           registre=Registre.charger(surcouche), sortie_ko=ko)
+                           registre=Registre.charger(surcouche), sortie_ko=ko, **SANS_REPETITION)
         self.assertEqual(premier.compteurs[KO], 3)
 
         # Le fichier de KO se recharge tel quel, sur un journal neuf.
         second = executer(self._pipeline(), ko, self._driver(),
                           journal=self.racine / "reprise.jsonl",
-                          registre=self.registre)
+                          registre=self.registre,
+                     **SANS_REPETITION)
         self.assertEqual(second.etat, TERMINE)
         self.assertEqual(second.compteurs[OK], 3)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGardeDeLaRepetition(Base):
+    """Garde 5, seconde moitie : « `dry-run` obligatoire avant tout premier
+    passage en production » (§5.5).
+
+    La specification en fait une GARDE ; le code n'en faisait qu'un ordre
+    d'affichage — la console proposait « Repetition a blanc » au-dessus de
+    « Executer », et c'etait tout. Un ordre de menu n'arrete personne.
+    """
+
+    def _run(self, **options):
+        """Un `run` NON force : c'est ce que la garde doit examiner."""
+        return executer(self._pipeline(), self.jeu, self._driver(),
+                        journal=self.journal, registre=self.registre,
+                        **options)
+
+    def _blanc(self, **options):
+        return executer(self._pipeline(), self.jeu, self._driver(),
+                        journal=self.journal, registre=self.registre,
+                        mode=DRY_RUN, **options)
+
+    def test_un_run_SANS_repetition_prealable_est_refuse(self):
+        brut = self._driver()
+        with self.assertRaises(RepetitionManquante) as capture:
+            executer(self._pipeline(), self.jeu, brut, journal=self.journal,
+                     registre=self.registre)
+        self.assertIn("repetition a blanc", str(capture.exception))
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+    def test_un_run_APRES_une_repetition_qui_a_abouti_passe(self):
+        self._blanc()
+        self.assertEqual(self._run().etat, TERMINE)
+
+    def test_la_repetition_doit_porter_sur_les_MEMES_empreintes(self):
+        """L'empreinte porte sur le TEXTE. Corriger une virgule en exige une
+        nouvelle — c'est le prix d'une garde qui porte sur ce qui sera
+        REELLEMENT execute, et non sur un fichier qui portait le meme nom
+        hier."""
+        self._blanc()
+        modifiee = self._pipeline(PIPELINE.replace("plafond_items: 50",
+                                                   "plafond_items: 40"))
+        with self.assertRaises(RepetitionManquante):
+            executer(modifiee, self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre)
+
+    def test_une_repetition_sur_un_AUTRE_jeu_ne_compte_pas(self):
+        autre = self.racine / "autre.csv"
+        autre.write_text("site,libelle\n9000,Nice\n", encoding="utf-8")
+        executer(self._pipeline(), autre, self._driver(),
+                 journal=self.journal, registre=self.registre, mode=DRY_RUN)
+        with self.assertRaises(RepetitionManquante):
+            self._run()
+
+    def test_une_repetition_INTERROMPUE_ne_compte_pas(self):
+        """Elle prouve justement que quelque chose n'allait pas."""
+        fautif = self._driver()
+
+        def refuser(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            # Sur l'ECRITURE, pas sur la validation : en repetition a blanc
+            # la sauvegarde n'a pas lieu, donc un message pose sur `press`
+            # ne serait jamais vu. Un `E` que le registre ne connait pas est
+            # INCONNU, donc bloquant.
+            if geste == "write":
+                driver.statut = Statut(type="E", id="ZZ", numero="001",
+                                       texte="jamais vu")
+
+        fautif.apres_action = refuser
+        blanc = executer(self._pipeline(), self.jeu, fautif,
+                         journal=self.journal, registre=self.registre,
+                         mode=DRY_RUN)
+        self.assertEqual(blanc.etat, INTERROMPU, "la repetition a abouti")
+        with self.assertRaises(RepetitionManquante):
+            self._run()
+
+    def test_une_repetition_arretee_au_PLAFOND_compte(self):
+        """C'est le comportement normal quand le jeu est plus grand que le
+        plafond. Refuser la rendrait la garde impossible a satisfaire dans le
+        cas meme ou les plafonds servent."""
+        court = PIPELINE.replace("plafond_items: 50", "plafond_items: 1")
+        pipeline = self._pipeline(court)
+        blanc = executer(pipeline, self.jeu, self._driver(),
+                         journal=self.journal, registre=self.registre,
+                         mode=DRY_RUN)
+        self.assertEqual(blanc.etat, PLAFOND)
+        self.assertEqual(
+            executer(pipeline, self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre).etat,
+            PLAFOND)
+
+    def test_forcer_EXIGE_un_motif(self):
+        with self.assertRaises(PreparationImpossible) as capture:
+            self._run(forcer_sans_repetition=True)
+        self.assertIn("motif", str(capture.exception))
+
+    def test_le_motif_du_forcage_est_TRACE_dans_le_journal(self):
+        """Un contournement qui ne laisse pas de trace n'est pas un
+        contournement, c'est un trou."""
+        motif = "Correction urgente validee par le responsable du perimetre."
+        self._run(forcer_sans_repetition=True, motif_forcage=motif)
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].repetition_forcee, motif)
+
+    def test_un_run_NON_force_ne_laisse_aucune_trace_de_forcage(self):
+        self._blanc()
+        self._run()
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].repetition_forcee, "")
+
+    def test_la_repetition_a_blanc_elle_meme_n_en_exige_pas(self):
+        """Sinon aucune ne pourrait jamais avoir lieu."""
+        self.assertEqual(self._blanc().etat, TERMINE)
+

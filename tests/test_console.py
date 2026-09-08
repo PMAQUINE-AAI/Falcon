@@ -1470,9 +1470,19 @@ class TestExecution(unittest.TestCase):
         parcourir(arbre, journal.console())
         return journal
 
+    #: Le motif que ces tests donnent a la garde de repetition a blanc.
+    #:
+    #: `run` exige desormais qu'une repetition ait abouti sur ces empreintes
+    #: (§5.5). Ces tests portent sur autre chose — la confirmation, le
+    #: rapporteur, la chaine — et les faire preceder d'une vraie repetition
+    #: changerait ce qu'ils inspectent. Ils passent donc par le contournement
+    #: TRACE, exactement comme un utilisateur : la console refuse d'abord,
+    #: puis demande pourquoi.
+    MOTIF = "Test cible sur autre chose que la garde de repetition."
+
     def _saisies(self, mot: str | None = "bcp_ia08_variantes", *,
-                 surcouche: str = ""):
-        """pipeline, jeu, journal, surcouche, puis la confirmation.
+                 surcouche: str = "", motif: str | None = None):
+        """pipeline, jeu, journal, surcouche, confirmation, puis le motif.
 
         La surcouche de registre est FACULTATIVE et vide par defaut : c'est le
         cas courant, et c'est ce que la console propose en premier. Elle a sa
@@ -1481,7 +1491,11 @@ class TestExecution(unittest.TestCase):
         """
         base = [str(self.pipeline), str(self.jeu), str(self.journal),
                 surcouche]
-        return base if mot is None else base + [mot]
+        if mot is None:
+            return base
+        # Le motif vient APRES la confirmation : la garde ne parle qu'une fois
+        # le lot lance, donc une fois le nom tape.
+        return base + [mot, self.MOTIF if motif is None else motif]
 
     # -- l'ordre des entrees -----------------------------------------------
 
@@ -1692,7 +1706,9 @@ class TestExecution(unittest.TestCase):
             str(self.pipeline), str(self.jeu), str(second),
             "",                          # plus de maillon
             "",                          # surcouche de registre : aucune
-            "bcp_ia08_variantes", "")
+            "bcp_ia08_variantes",
+            self.MOTIF,                  # la garde de repetition a blanc
+            "")
         self.assertIn("2 maillon(s)", journal.texte)
         self.assertTrue(self.journal.exists(), journal.texte)
         self.assertTrue(second.exists(), journal.texte)

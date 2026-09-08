@@ -9,12 +9,12 @@ pipeline ne peut donc pas contourner une garde en passant par lui.
 from .adaptateur import Adaptateur
 from .boucle import (
     DRY_RUN, INTERROMPU, MODES, PLAFOND, REPRISE, RUN, TERMINE,
-    PreparationImpossible, Resultat, executer,
+    PreparationImpossible, RepetitionManquante, Resultat, executer,
 )
 from .chaine import Maillon, enchainer, retour_accueil
 
 __all__ = [
-    "executer", "Resultat", "PreparationImpossible",
+    "executer", "Resultat", "PreparationImpossible", "RepetitionManquante",
     "RUN", "DRY_RUN", "REPRISE", "MODES",
     "TERMINE", "INTERROMPU", "PLAFOND",
     "enchainer", "Maillon", "retour_accueil", "Adaptateur",

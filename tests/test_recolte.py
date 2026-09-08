@@ -274,16 +274,18 @@ class TestParcoursComplet(unittest.TestCase):
         pilote.apres_action = apres
         return pilote
 
-    def _executer(self, journal: str, registre=None):
+    def _executer(self, journal: str, registre=None, mode: str = "run"):
         return executer(charger(self.racine / "p.yaml"),
                         self.racine / "jeu.csv", self._driver(),
-                        journal=self.racine / journal, registre=registre)
+                        journal=self.racine / journal, registre=registre,
+                        mode=mode)
 
     def test_le_parcours_entier(self):
-        # 1. Sur un systeme neuf, le premier message d'erreur metier arrete
-        #    le lot. C'est le comportement VOULU : le lot s'interrompt, il ne
-        #    leve pas — le journal fait foi, et le resultat le dit.
-        premier = self._executer("j1.jsonl")
+        # 1. La REPETITION A BLANC est le premier geste, et c'est elle qui
+        #    decouvre l'inconnu — avant d'avoir touche a la production. C'est
+        #    tout l'objet de la garde 5.5 : « on ne decouvre pas en production
+        #    qu'une cible a change de nom ».
+        premier = self._executer("j1.jsonl", mode="dry-run")
         self.assertEqual(premier.etat, "interrompu")
         self.assertEqual(premier.compteurs["ok"], 0)
 
@@ -331,8 +333,15 @@ entrees:
       perimetre : l'item part en KO et le lot continue.
 """, encoding="utf-8")
 
-        resultat = self._executer("j2.jsonl",
-                                  Registre.avec_surcouches(complete))
+        registre = Registre.avec_surcouches(complete)
+
+        # La repetition passe maintenant, puisque l'incident est CLASSE.
+        repetition = self._executer("j2.jsonl", registre, mode="dry-run")
+        self.assertEqual(repetition.etat, "termine")
+
+        # 7. Et le run, sur le meme journal, va au bout — la garde 5.5 y
+        #    trouve la repetition qu'elle exige, sans qu'on ait rien a forcer.
+        resultat = self._executer("j2.jsonl", registre)
         self.assertEqual(resultat.etat, "termine")
         self.assertEqual(resultat.compteurs["ko"], 2,
                          "le lot n'est pas alle au bout")

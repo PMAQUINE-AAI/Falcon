@@ -366,6 +366,8 @@ def executer(pipeline: Pipeline,
              mandant: str = "",
              utilisateur: str = "",
              dossier_dumps: str | Path | None = None,
+             forcer_sans_repetition: bool = False,
+             motif_forcage: str = "",
              sortie_ko: str | Path | None = None,
              observateur: Callable[[Progres], None] | None = None,
              horloge: Horloge = maintenant) -> Resultat:
@@ -392,6 +394,10 @@ def executer(pipeline: Pipeline,
 
     if mode in (RUN, DRY_RUN):
         _refuser_les_douteux_du_journal(chemin_journal, items, mode)
+
+    garde_de_la_repetition(chemin_journal, pipeline.empreinte,
+                           empreinte_jeu(jeu), mode,
+                           forcer_sans_repetition, motif_forcage)
 
     if mode == REPRISE:
         reprise = preparer(chemin_journal, [i.item_id for i in items],
@@ -439,7 +445,9 @@ def executer(pipeline: Pipeline,
             systeme=systeme, mandant=mandant, utilisateur=utilisateur,
             plafond_items=pipeline.plafond_items,
             derogations=[{"etape": e.nom, "garde": d.garde, "motif": d.motif}
-                         for e in pipeline.etapes for d in e.derogations]))
+                         for e in pipeline.etapes for d in e.derogations],
+            repetition_forcee=(motif_forcage.strip()
+                               if forcer_sans_repetition else "")))
 
         for rang, item in enumerate(items, start=1):
             if rang > pipeline.plafond_items:
@@ -556,6 +564,83 @@ def _refuser_les_douteux_du_journal(chemin: Path, items: list[Item],
         f"Les rejouer en mode {mode!r} ecrirait une seconde fois. Va voir "
         f"dans SAP ce qui y est reellement, retire ces lignes du jeu, puis "
         f"relance")
+
+
+class RepetitionManquante(PreparationImpossible):
+    """Le `run` n'a pas ete precede d'une repetition a blanc sur ces empreintes.
+
+    Une exception a elle, et pas seulement un message : la console doit
+    pouvoir proposer le contournement TRACE sans avoir a reconnaitre un refus
+    au texte de son message.
+    """
+
+
+def garde_de_la_repetition(chemin: Path, pipeline_empreinte: str,
+                           jeu_empreinte: str, mode: str,
+                           forcer: bool, motif: str) -> None:
+    """Garde 5, seconde moitie : « `dry-run` obligatoire avant tout premier
+    passage en production » (§5.5).
+
+    La specification en fait une GARDE ; le code n'en faisait qu'un ordre
+    d'affichage — la console proposait « Repetition a blanc » au-dessus de
+    « Executer », et c'etait tout. Un ordre de menu n'arrete personne.
+
+    Elle porte sur CES empreintes, pas sur cette pipeline. La consequence est
+    assumee et se documente : corriger une virgule change l'empreinte, donc
+    exige une nouvelle repetition. C'est le prix d'une garde qui porte sur ce
+    qui sera REELLEMENT execute, et non sur un fichier qui portait le meme nom
+    hier.
+
+    Une repetition INTERROMPUE ne compte pas : elle prouve justement que
+    quelque chose n'allait pas. Une repetition arretee au plafond compte —
+    c'est le comportement normal quand le jeu est plus grand que le plafond, et
+    refuser la rendrait impossible a satisfaire dans le cas meme ou les
+    plafonds servent.
+
+    `forcer` passe outre, et EXIGE un motif qui sera ecrit dans l'ouverture du
+    journal. Un contournement qui ne laisse pas de trace n'est pas un
+    contournement, c'est un trou.
+    """
+    if mode != RUN:
+        # `dry-run` est la repetition elle-meme ; `resume` repart d'un journal
+        # dont `garde_du_monde` a deja verifie que TOUTES les ouvertures
+        # portent ces empreintes — la repetition y est donc, ou le monde a
+        # change et c'est l'autre garde qui parle.
+        return
+
+    if forcer:
+        if not motif.strip():
+            raise PreparationImpossible(
+                "forcer un run sans repetition a blanc exige un motif : il "
+                "sera ecrit dans le journal, et c'est ce qui distingue un "
+                "contournement d'un trou")
+        return
+
+    repetitions = []
+    if chemin.exists():
+        enregistrements = lire(chemin)
+        ouvertures = [(rang, e) for rang, e in enumerate(enregistrements)
+                      if isinstance(e, ExecutionDebut) and e.mode == DRY_RUN
+                      and e.pipeline_empreinte == pipeline_empreinte
+                      and e.jeu_empreinte == jeu_empreinte]
+        for rang, _ in ouvertures:
+            fin = next((e for e in enregistrements[rang + 1:]
+                        if isinstance(e, ExecutionFin)), None)
+            if fin is not None and fin.etat != INTERROMPU:
+                repetitions.append(fin)
+
+    if repetitions:
+        return
+
+    raise RepetitionManquante(
+        f"aucune repetition a blanc n'a abouti sur ces empreintes "
+        f"(pipeline {pipeline_empreinte}, jeu {jeu_empreinte}) dans "
+        f"{chemin}. La specification en fait une garde : on ne decouvre pas "
+        f"en production qu'une cible a change de nom. Lance d'abord le mode "
+        f"« dry-run » sur ce meme journal.\n\n"
+        f"Note que l'empreinte porte sur le TEXTE : corriger une virgule dans "
+        f"la pipeline en exige une nouvelle. C'est le prix d'une garde qui "
+        f"porte sur ce qui sera reellement execute.")
 
 
 def _clore(ecrivain: Ecrivain, run_id: str, item: Item, etat: str,

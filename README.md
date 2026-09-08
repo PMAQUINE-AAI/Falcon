@@ -97,8 +97,26 @@ elle est donc précédée d'un récapitulatif — pipeline et jeu avec leurs
 empreintes, mode, **les deux plafonds**, nombre d'items, et chaque dérogation
 avec son motif — puis d'une confirmation **en toutes lettres**. Le mot attendu
 est le nom de la pipeline : on ne peut pas le taper sans avoir lu le
-récapitulatif qui le nomme. Pas de `o/n`, qui se tape sans lire. La répétition
-à blanc est proposée avant l'exécution, et l'exécution avant la reprise.
+récapitulatif qui le nomme. Pas de `o/n`, qui se tape sans lire.
+
+**La répétition à blanc n'est pas une suggestion : c'est une garde.** La
+spécification en fait la seconde moitié du rayon d'action (§5.5), et le code
+n'en faisait qu'un ordre de menu — « Répétition à blanc » au-dessus
+d'« Exécuter », et c'était tout. Un ordre de menu n'arrête personne. Un `run`
+refuse désormais si aucune répétition n'a **abouti** sur **ces empreintes**,
+dans ce journal.
+
+Conséquence à assumer : l'empreinte porte sur le *texte* de la pipeline, donc
+corriger une virgule en exige une nouvelle. C'est le prix d'une garde qui
+porte sur ce qui sera réellement exécuté, et non sur un fichier qui portait le
+même nom hier. Une répétition **interrompue** ne compte pas — elle prouve
+justement que quelque chose n'allait pas ; une répétition arrêtée au plafond
+compte, sans quoi la garde serait impossible à satisfaire dans le cas même où
+les plafonds servent.
+
+On peut passer outre, et il faut alors dire pourquoi : le motif part dans
+l'ouverture du journal, à côté des dérogations. Un contournement qui ne laisse
+pas de trace n'est pas un contournement, c'est un trou.
 
 Les mêmes choses en scriptable, hors terminal :
 

@@ -862,8 +862,32 @@ def ecran_pipelines(env: Environnement) -> Menu:
                 return None
         return pipeline, jeu, items, empreinte, journal, registre
 
+    def _forcage(console: Console, erreur) -> dict:
+        """Propose le contournement TRACE de la garde de repetition a blanc.
+
+        La garde refuse d'abord, et explique. C'est seulement ensuite qu'on
+        offre de passer outre — et le motif n'est pas une formalite : il part
+        dans l'ouverture du journal, a cote des derogations. Un contournement
+        qui ne laisse pas de trace n'est pas un contournement, c'est un trou.
+        """
+        console.ecrire(f"\n  Refuse.\n")
+        for ligne in str(erreur).splitlines():
+            console.ecrire(f"  {ligne}")
+        console.ecrire()
+        console.ecrire("  Tu peux passer outre, mais il faudra dire pourquoi :")
+        console.ecrire("  le motif sera ecrit dans le journal, a cote des")
+        console.ecrire("  derogations, et c'est ce qu'on relira le jour ou ce")
+        console.ecrire("  lot sera conteste.")
+        try:
+            motif = console.lire("\n  motif (vide : renoncer) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return {}
+        if not motif:
+            return {}
+        return {"forcer_sans_repetition": True, "motif_forcage": motif}
+
     def _executer(console: Console, mode: str, titre: str) -> str:
-        from falcon.moteur import executer
+        from falcon.moteur import RepetitionManquante, executer
         from falcon.noyau import ErreurFalcon
 
         prepare = _preparer(console, mode)
@@ -903,12 +927,34 @@ def ecran_pipelines(env: Environnement) -> Menu:
         provenance = _provenance(driver)
 
         observateur = env.rapporteur()
+        forcage: dict = {}
         try:
             resultat = executer(
                 pipeline, jeu, driver, journal=journal, mode=mode,
                 registre=registre, **provenance,
                 sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
                 observateur=observateur)
+        except RepetitionManquante as erreur:
+            # La garde a refuse AVANT toute action : rien n'a ete ecrit, et on
+            # peut donc proposer le contournement sans risque de double
+            # execution. On ne le propose qu'ici, jamais d'avance : offrir de
+            # desarmer une garde avant qu'elle ait parle, c'est l'inviter.
+            forcage = _forcage(console, erreur)
+            if not forcage:
+                console.ecrire("\n  Annule. Rien n'a ete ecrit.")
+                console.pause()
+                return CONTINUER
+            try:
+                resultat = executer(
+                    pipeline, jeu, driver, journal=journal, mode=mode,
+                    registre=registre, **provenance, **forcage,
+                    sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                    observateur=observateur)
+            except ErreurFalcon as seconde:
+                console.ecrire(f"\n  {type(seconde).__name__} : {seconde}")
+                console.ecrire(f"\n  Le journal fait foi : {journal}")
+                console.pause()
+                return CONTINUER
         except ErreurFalcon as erreur:
             # Le moteur a refuse AVANT d'agir, ou s'est arrete sur un
             # inconnu. Dans les deux cas le journal dit ce qui a ete fait ;
@@ -944,7 +990,7 @@ def ecran_pipelines(env: Environnement) -> Menu:
         monde est faux, et passer au suivant serait ecrire n'importe ou avec
         entrain.
         """
-        from falcon.moteur import Maillon, enchainer
+        from falcon.moteur import Maillon, RepetitionManquante, enchainer
         from falcon.noyau import ErreurFalcon
 
         console.titre("Chaine de pipelines")
@@ -999,6 +1045,23 @@ def ecran_pipelines(env: Environnement) -> Menu:
         try:
             resultats = enchainer(maillons, driver, registre=registre,
                                   observateur=observateur)
+        except RepetitionManquante as erreur:
+            # La garde a refuse sur le PREMIER maillon, donc avant toute
+            # action : rien n'a ete ecrit. Le motif vaut pour la chaine
+            # entiere, ce qui est coherent avec `enchainer`, qui ne prend
+            # qu'un jeu d'options pour tous les maillons.
+            forcage = _forcage(console, erreur)
+            if not forcage:
+                console.ecrire("\n  Annule. Rien n'a ete ecrit.")
+                console.pause()
+                return CONTINUER
+            try:
+                resultats = enchainer(maillons, driver, registre=registre,
+                                      observateur=observateur, **forcage)
+            except ErreurFalcon as seconde:
+                console.ecrire(f"\n  {type(seconde).__name__} : {seconde}")
+                console.pause()
+                return CONTINUER
         except ErreurFalcon as erreur:
             console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
             console.pause()
