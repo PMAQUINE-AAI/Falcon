@@ -559,3 +559,65 @@ class TestPipelineNePeutPasContourner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLeNeutraliseurCouvreToutesLesGardes(unittest.TestCase):
+    """Le verificateur du verificateur.
+
+    `outils/neutraliser.py` retire chaque garde tour a tour et exige que la
+    suite tombe. C'est ce qui distingue une garde VERIFIEE d'une garde
+    seulement couverte par des tests qui passent.
+
+    Mais l'outil ne verifie que ce qui figure dans sa table. Amputee de deux
+    entrees, il annonce « les 5 gardes sont protegees » et sort a zero : il
+    REUSSIT sur une liste incomplete, ce qui est le pire comportement possible
+    pour un outil de ce genre.
+
+    C'est arrive. La garde de reprise n'y figurait pas, et son contournement
+    par empreinte vide a vecu jusqu'a ce qu'on le cherche a la main.
+    """
+
+    def _cibles(self) -> dict:
+        import importlib.util
+        from pathlib import Path
+
+        chemin = (Path(__file__).resolve().parent.parent / "outils"
+                  / "neutraliser.py")
+        specification = importlib.util.spec_from_file_location(
+            "_neutraliser", chemin)
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        return module.CIBLES
+
+    def test_les_cinq_gardes_de_session_y_sont(self):
+        from falcon.noyau import GARDES
+
+        methodes = {attribut for _, attribut, _ in self._cibles().values()}
+        for garde in GARDES:
+            with self.subTest(garde=garde):
+                # Sous-chaine, pas egalite : le vocabulaire dit « fenetre » et
+                # la methode `_garde_fenetres`. C'est le seul ecart, et le
+                # figer par une table de correspondance ajouterait une source
+                # de verite pour un « s ».
+                self.assertTrue(
+                    any(garde in methode for methode in methodes),
+                    f"aucune cible du neutraliseur ne porte la garde {garde!r}")
+
+    def test_les_gardes_de_REPRISE_y_sont_aussi(self):
+        """Elles ne sont pas au §5 — aucun driver n'est ouvert quand elles
+        s'appliquent. Mais une garde de reprise qui cede fait rejouer un item
+        que SAP a peut-etre deja enregistre : c'est la meme consequence, par un
+        autre chemin."""
+        portes = {(getattr(porteur, "__name__", str(porteur)), attribut)
+                  for porteur, attribut, _ in self._cibles().values()}
+        self.assertIn(("falcon.journal.lecteur", "garde_du_monde"), portes)
+        self.assertIn(("Pipeline", "__post_init__"), portes)
+
+    def test_chaque_cible_designe_quelque_chose_qui_existe(self):
+        """Une entree qui pointe dans le vide ferait passer la neutralisation
+        pour reussie sans avoir rien retire."""
+        for libelle, (porteur, attribut, suite) in self._cibles().items():
+            with self.subTest(garde=libelle):
+                self.assertTrue(hasattr(porteur, attribut),
+                                f"{porteur} n'a pas {attribut!r}")
+                self.assertTrue(suite.startswith("tests."))

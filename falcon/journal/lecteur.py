@@ -120,6 +120,46 @@ class Reprise:
     deja_faits: int = 0
 
 
+def garde_du_monde(origine: ExecutionDebut, pipeline_empreinte: str,
+                   jeu_empreinte: str, forcer: bool) -> None:
+    """La garde d'identite, appliquee a la REPRISE.
+
+    Elle porte un nom et vit dans une fonction a elle pour une raison
+    mecanique : `outils/neutraliser.py` retire chaque garde tour a tour et
+    exige que la suite tombe. Une garde ecrite en ligne au milieu de
+    `preparer` n'a pas de nom, donc ne se neutralise pas, donc n'etait pas
+    verifiee — et c'est exactement ce qui a laisse vivre le contournement par
+    empreinte vide.
+
+    Deux refus, et le premier ne cede pas a `forcer` : forcer sert a passer
+    outre un ecart CONSTATE, avec un motif trace. Il ne peut pas servir a
+    passer outre une comparaison qui n'a pas eu lieu.
+    """
+    # `if empreinte and ...` traitait « je ne sais pas » comme « c'est
+    # pareil ». Or ne pas savoir sur quoi on reprend est precisement le cas ou
+    # il ne faut pas reprendre.
+    for quoi, valeur in (("pipeline", pipeline_empreinte),
+                         ("jeu", jeu_empreinte)):
+        if not str(valeur).strip():
+            raise RepriseIncoherente(
+                f"empreinte de {quoi} vide : la reprise ne peut pas verifier "
+                f"que le monde n'a pas change depuis. Une empreinte absente "
+                f"n'est pas une empreinte identique")
+
+    if forcer:
+        return
+
+    ecarts = []
+    if origine.pipeline_empreinte != pipeline_empreinte:
+        ecarts.append(f"pipeline {origine.pipeline_empreinte!r} -> "
+                      f"{pipeline_empreinte!r}")
+    if origine.jeu_empreinte != jeu_empreinte:
+        ecarts.append(f"jeu {origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
+    if ecarts:
+        raise RepriseIncoherente(
+            "reprise refusee, le monde a change depuis : " + " ; ".join(ecarts))
+
+
 def preparer(chemin: str | Path,
              items: Sequence[str],
              *,
@@ -169,33 +209,7 @@ def preparer(chemin: str | Path,
             f"dit qu'on ne sait pas ce qui a ete fait. Pour lancer un lot "
             f"neuf, c'est le mode `run`")
 
-    # Une empreinte vide est un refus, pas un laissez-passer.
-    #
-    # C'est le point exact ou la garde se desarmait : `if empreinte and ...`
-    # traite « je ne sais pas » comme « c'est pareil ». Or ne pas savoir sur
-    # quoi on reprend est precisement le cas ou il ne faut pas reprendre.
-    for quoi, valeur in (("pipeline", pipeline_empreinte),
-                         ("jeu", jeu_empreinte)):
-        if not str(valeur).strip():
-            raise RepriseIncoherente(
-                f"empreinte de {quoi} vide : la reprise ne peut pas verifier "
-                f"que le monde n'a pas change depuis. Une empreinte absente "
-                f"n'est pas une empreinte identique")
-
-    if not forcer:
-        if ouvertures:
-            origine = ouvertures[0]
-            ecarts = []
-            if origine.pipeline_empreinte != pipeline_empreinte:
-                ecarts.append(
-                    f"pipeline {origine.pipeline_empreinte!r} -> {pipeline_empreinte!r}")
-            if origine.jeu_empreinte != jeu_empreinte:
-                ecarts.append(
-                    f"jeu {origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
-            if ecarts:
-                raise RepriseIncoherente(
-                    "reprise refusee, le monde a change depuis : "
-                    + " ; ".join(ecarts))
+    garde_du_monde(ouvertures[0], pipeline_empreinte, jeu_empreinte, forcer)
 
     connus = etats(enregistrements)
     a_traiter = tuple(i for i in items

@@ -18,7 +18,7 @@ parenthèses y renvoient.
 
 ```bash
 python outils/verifier.py       # les deux suites, FALCON et l'archive
-python outils/neutraliser.py    # chaque garde retirée doit faire tomber la suite
+python outils/neutraliser.py    # chaque garde retirée doit faire tomber la suite (7)
 ```
 
 La seconde commande existe parce qu'une garde couverte par des tests qui
