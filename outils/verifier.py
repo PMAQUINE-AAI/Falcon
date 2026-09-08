@@ -25,9 +25,28 @@ SUITES = [
 ]
 
 
-#: `test_x (...) ... skipped 'motif'`, tel que unittest l'ecrit en verbeux.
-IGNORE = re.compile(r"^(?P<test>\S+) .*\.\.\. skipped ['\"](?P<motif>.*)['\"]$",
-                    re.MULTILINE)
+#: Un test ignore, tel que `unittest -v` l'ecrit. DEUX formes, et la seconde
+#: cassait la premiere version de ce motif :
+#:
+#:     test_x (mod.Classe.test_x) ... skipped 'motif'
+#:
+#:     test_x (mod.Classe.test_x)
+#:     Premiere ligne de la docstring ... skipped 'motif'
+#:
+#: Quand le test a une docstring, `... skipped` se trouve sur la LIGNE DE LA
+#: DOCSTRING. Un `^(\S+)` y capturait donc son premier mot — la liste
+#: annoncait « La », « Une », « Meme » au lieu des noms de tests. Une liste de
+#: ce qui n'a pas ete verifie et qui ne sait pas le nommer ne vaut pas mieux
+#: que le decompte qu'elle remplace.
+IGNORE = re.compile(
+    r"^(?P<test>\w+) \((?P<chemin>[\w.]+)\)"       # toujours sur sa ligne
+    r"(?:\n[^\n]*?)?"                              # la docstring, s'il y en a
+    # Le guillemet fermant doit etre CELUI qui a ouvert : `unittest` passe le
+    # motif par `repr`, donc un motif contenant une apostrophe — « pas
+    # dependance d'execution » — sort entre guillemets doubles. Une classe
+    # `['\"]` des deux cotes tronquait le motif a la premiere apostrophe.
+    r" \.\.\. skipped (?P<q>['\"])(?P<motif>.*?)(?P=q)$",
+    re.MULTILINE)
 
 
 def ignores(arguments: list[str]) -> list[tuple[str, str]]:

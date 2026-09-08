@@ -354,3 +354,53 @@ class TestPaquetInstallable(unittest.TestCase):
         presents = sorted(n for n in self.noms if n.endswith(".yaml"))
         self.assertEqual(presents, attendus)
 
+
+
+class TestRapportDesTestsIgnores(unittest.TestCase):
+    """`verifier.py` doit NOMMER ce qui n'a pas tourne.
+
+    « Un test qui ne s'execute pas doit le DIRE » : `unittest` n'annonce qu'un
+    decompte — « OK (skipped=4) » — et sur un projet dont le module le plus
+    critique n'est testable sur aucune machine du depot, laisser cette
+    information au niveau du decompte reviendrait a la perdre.
+
+    Le motif d'origine capturait `^(\\S+)` sur la ligne portant « ... skipped ».
+    Or quand un test a une DOCSTRING, unittest met le marqueur sur la ligne de
+    la docstring : la liste annoncait donc « La », « Une », « Meme » au lieu
+    des noms de tests. Une liste qui ne sait pas nommer ce qu'elle liste ne
+    vaut pas mieux que le decompte qu'elle remplace.
+    """
+
+    def _extraire(self, sortie: str):
+        from outils.verifier import IGNORE
+        return [(m.group("test"), m.group("motif"))
+                for m in IGNORE.finditer(sortie)]
+
+    def test_un_test_SANS_docstring_est_nomme(self):
+        sortie = ("test_sans_doc (tests.test_x.TestY.test_sans_doc) ... "
+                  "skipped 'un motif'\n")
+        self.assertEqual(self._extraire(sortie),
+                         [("test_sans_doc", "un motif")])
+
+    def test_un_test_AVEC_docstring_est_nomme_lui_aussi(self):
+        """Le cas qui echouait : le marqueur est sur la ligne de la docstring."""
+        sortie = ("test_avec_doc (tests.test_x.TestY.test_avec_doc)\n"
+                  "La preuve la plus forte possible. ... skipped 'un motif'\n")
+        self.assertEqual(self._extraire(sortie),
+                         [("test_avec_doc", "un motif")])
+
+    def test_un_motif_contenant_une_APOSTROPHE_n_est_pas_tronque(self):
+        """`unittest` passe le motif par `repr` : un motif avec apostrophe
+        sort entre guillemets DOUBLES. Une classe `['\\"]` des deux cotes le
+        tronquait a la premiere apostrophe."""
+        sortie = ('test_x (tests.test_x.TestY.test_x) ... skipped '
+                  '"pas dependance d\'execution"\n')
+        self.assertEqual(self._extraire(sortie),
+                         [("test_x", "pas dependance d'execution")])
+
+    def test_plusieurs_tests_se_lisent_a_la_suite(self):
+        sortie = ("test_a (m.C.test_a) ... skipped 'motif a'\n"
+                  "test_b (m.C.test_b)\nUne docstring. ... skipped 'motif b'\n"
+                  "test_c (m.C.test_c) ... ok\n")
+        self.assertEqual([t for t, _ in self._extraire(sortie)],
+                         ["test_a", "test_b"])
