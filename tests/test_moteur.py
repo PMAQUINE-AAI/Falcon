@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import inspect
+import io
 import tempfile
 import textwrap
 import unittest
@@ -914,6 +915,13 @@ class TestChaine(Base):
         disent CE QUI s'est passe, pas ce qu'il y avait dans les colonnes. Et
         `enchainer` ne les transmet a aucun maillon suivant — un test voisin
         l'epingle. La limite tient.
+
+        **`extraits` a ete ajoute deliberement, et ce test est la ou la
+        deliberation a lieu.** Ce sont des CHEMINS, de la meme nature que `ko`
+        et `journal` : l'appelant doit ouvrir le fichier pour savoir ce qu'il
+        contient. C'est exactement le point d'arret que le §1 impose entre la
+        passe d'audit et la passe de remediation — le fichier circule par le
+        disque et par un humain, pas par la chaine.
         """
         import dataclasses
 
@@ -921,7 +929,30 @@ class TestChaine(Base):
 
         champs = {c.name for c in dataclasses.fields(Resultat)}
         self.assertEqual(champs, {"run_id", "etat", "compteurs", "raison",
-                                  "journal", "ko", "duree_ms", "douteux"})
+                                  "journal", "ko", "duree_ms", "douteux",
+                                  "extraits"})
+
+    def test_les_champs_ajoutes_ne_portent_que_des_chemins(self):
+        """Le corollaire du test ci-dessus, et ce qui le rend verifiable.
+
+        « Des compteurs, des etats, des chemins et des identifiants d'item » :
+        `extraits` doit rester une suite de chaines, jamais des lignes. Un
+        `Resultat` qui porterait les LIGNES extraites ferait de la chaine un
+        orchestrateur, et la limite du §3.3 tomberait sans un mot.
+        """
+        resultat = self._executer()
+        self.assertIsInstance(resultat.extraits, tuple)
+        for chemin in resultat.extraits:
+            self.assertIsInstance(chemin, str)
+
+    def test_la_chaine_ne_transmet_pas_les_extraits(self):
+        """Un maillon ne voit pas ce que le precedent a extrait."""
+        import inspect
+
+        from falcon.moteur import chaine
+
+        source = inspect.getsource(chaine.enchainer)
+        self.assertNotIn("extraits", source)
 
 
 class TestBoutEnBout(Base):
@@ -1440,3 +1471,250 @@ class TestChoisirEtOuvrir(Base):
         resultat = self._lancer(self._pipeline_grille(), brut)
         self.assertEqual(resultat.etat, INTERROMPU)
         self.assertFalse([g for g in brut.gestes if g[1] == GRILLE_ALV])
+
+
+class TestExtraire(Base):
+    """Le fichier que la passe d'audit produit, et que l'humain relit.
+
+    Le §1 impose ce point d'arret : « passe d'audit -> fichier de constats
+    (relisible, editable) -> passe de remediation. L'humain valide le fichier
+    intermediaire avant toute ecriture. »
+    """
+
+    def _pipeline_extraction(self, *, colonnes: str = "") -> str:
+        """Une passe d'AUDIT : elle ne sauvegarde rien.
+
+        Pas batie sur `SOCLE`, et la raison est un defaut mesure : `SOCLE` se
+        termine par une etape `sauvegarde: true`, qui leve `RefusDryRun` en
+        dry-run AVANT que l'extraction ne tourne. Le test du suffixe de mode
+        passait donc a vide — aucun fichier ecrit, et `all([])` vaut True. Il
+        ne mordait pas quand on retirait le suffixe.
+
+        Une passe d'extraction ne sauvegarde pas : c'est ce qui la rend
+        exercable en dry-run, et c'est justement ce que le suffixe protege.
+        """
+        lignes = [
+            "version: 1",
+            "nom: audit_variantes",
+            "classe: iterative",
+            "cles: [site]",
+            "plafond_items: 50",
+            "plafond_sauvegardes: 50",
+            "etapes:",
+            "  - nom: variantes",
+            "    action: extraire",
+            f'    cible: "{GRILLE_ALV}"',
+        ]
+        if colonnes:
+            lignes.append(f"    colonnes: [{colonnes}]")
+        lignes.append(f"    {ECRAN}")
+        return "\n".join(lignes) + "\n"
+
+    def _lancer(self, texte: str, brut=None, **options):
+        chemin = self.racine / "p.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        brut = brut or self._driver()
+        brut.grilles.setdefault(GRILLE_ALV, list(LIGNES_ALV))
+        return executer(charger(chemin), self.jeu, brut,
+                        journal=self.journal, registre=self.registre,
+                        **{**SANS_REPETITION, **options})
+
+    # -- le fichier --------------------------------------------------------
+
+    def test_un_fichier_par_item_nomme_par_ses_clefs(self):
+        """`variantes_1000.csv`, pas un hash : ce fichier est fait pour etre
+        ouvert par un humain qui doit savoir lequel c'est."""
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(),
+                                sortie_extraction=sortie)
+        noms = sorted(p.name for p in sortie.glob("*.csv"))
+        self.assertEqual(noms, ["variantes_1000.csv", "variantes_2000.csv",
+                                "variantes_3000.csv"])
+        self.assertEqual(len(resultat.extraits), 3)
+
+    def test_le_mode_figure_dans_le_nom(self):
+        """La garde de repetition exige un dry-run avant tout run. Or une
+        pipeline d'extraction ne sauvegarde rien : `RefusDryRun` ne se
+        declenche jamais et le dry-run ECRIT le fichier. Sans le suffixe, le
+        run se ferait refuser par sa propre garde d'ecrasement, sur un fichier
+        qu'il vient d'ecrire lui-meme.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie,
+                     mode=DRY_RUN)
+        noms = sorted(p.name for p in sortie.glob("*.csv"))
+        self.assertTrue(noms, "la repetition a blanc doit ECRIRE : sans "
+                              "fichier, ce test passerait a vide")
+        self.assertTrue(all(n.endswith(".dry-run.csv") for n in noms), noms)
+        # Et le run qui suit ne bute sur rien.
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        self.assertTrue((sortie / "variantes_1000.csv").exists())
+
+    def test_les_colonnes_sont_clef_puis_grille_puis_provenance(self):
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        entete = texte.splitlines()[0].split(";")
+        self.assertEqual(entete[0], "site")            # la clef, sans prefixe
+        self.assertEqual(entete[1:3], ["VARIANT", "TEXT"])
+        self.assertTrue(all(c.startswith("falcon_") for c in entete[3:]),
+                        entete[3:])
+
+    def test_le_fichier_s_ouvre_dans_Excel(self):
+        """BOM et `;` : sans le BOM, Excel lit en ANSI et massacre les
+        accents ; sans le `;`, il pose tout en colonne A."""
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        octets = (sortie / "variantes_1000.csv").read_bytes()
+        self.assertTrue(octets.startswith(b"\xef\xbb\xbf"))
+        self.assertIn(b";", octets)
+
+    def test_la_provenance_est_sur_CHAQUE_ligne(self):
+        """Parce que quelqu'un va coller deux extractions dans le meme onglet.
+
+        Une provenance en en-tete deviendrait alors FAUSSE : un fichier
+        d'aspect normal qui affirme que tout vient du meme systeme. Une
+        provenance par ligne ne peut pas mentir comme ca.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie,
+                     systeme="QAS", mandant="200", utilisateur="DUPONT")
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        lignes = list(csv.DictReader(io.StringIO(texte), delimiter=";"))
+        self.assertTrue(lignes)
+        for ligne in lignes:
+            self.assertEqual(ligne["falcon_systeme"], "QAS")
+            self.assertEqual(ligne["falcon_mandant"], "200")
+            self.assertEqual(ligne["falcon_utilisateur"], "DUPONT")
+
+    # -- l'aller-retour, LE test du lot -----------------------------------
+
+    def test_le_fichier_extrait_se_redonne_TEL_QUEL_comme_jeu(self):
+        """CONTROLE NEGATIF : mettre la provenance en en-tete fait tomber ce
+        test immediatement — `csv.DictReader` prendrait cette ligne pour
+        l'en-tete, et le fichier cesserait d'etre redonnable.
+
+        C'est le seul test qui prouve que le point d'arret fonctionne : la
+        passe d'audit ecrit, l'humain relit, la passe de remediation consomme,
+        sans une retouche.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+
+        items, dialecte = lire_items(sortie / "variantes_1000.csv",
+                                     ("site", "VARIANT"))
+        self.assertEqual(len(items), 4)
+        # Les colonnes `falcon_` ont ete retirees : le jeu ne voit que les
+        # donnees. C'est le prix de la reinjectabilite, et il est assume.
+        self.assertNotIn("falcon_systeme", dialecte.colonnes)
+        self.assertEqual(dialecte.colonnes, ("site", "VARIANT", "TEXT"))
+        self.assertEqual([i.cle["VARIANT"] for i in items],
+                         [l["VARIANT"] for l in LIGNES_ALV])
+        self.assertEqual({i.cle["site"] for i in items}, {"1000"})
+
+    def test_aucune_apostrophe_de_protection_tableur(self):
+        """CONTROLE NEGATIF : appliquer `_pour_tableur` fait tomber ce test.
+
+        `dictionnaire.py` prefixe `'` aux cellules commencant par `=`, `+`,
+        `-` ou `@`, et sa docstring dit pourquoi c'est sur la-bas : « aucune
+        n'est relue par FALCON ». Ici c'est l'inverse — ce fichier est relu et
+        ses valeurs sont RETAPEES dans SAP. L'apostrophe partirait dans le
+        champ, et « -K75 » deviendrait « '-K75 ».
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "-K75", "TEXT": "=SOMME(A1)"}]
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), brut, sortie_extraction=sortie)
+
+        items, _ = lire_items(sortie / "variantes_1000.csv", ("VARIANT",))
+        self.assertEqual(items[0].cle["VARIANT"], "-K75")
+        self.assertEqual(items[0].brut[0]["TEXT"], "=SOMME(A1)")
+
+    # -- les refus ---------------------------------------------------------
+
+    def test_une_grille_vide_n_ecrit_AUCUN_fichier(self):
+        """CONTROLE NEGATIF : ecrire un fichier vide fait tomber ce test.
+
+        Un fichier vide avec sa provenance affirmerait « 0 resultat », qui est
+        une des deux lectures possibles — l'autre etant « SAP a ouvert l'objet
+        directement parce qu'il n'y en avait qu'un ». Il n'y a rien a
+        affirmer.
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = []
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.compteurs[KO], 3)
+        self.assertEqual(resultat.extraits, ())
+        self.assertEqual(list(sortie.glob("*.csv")), [])
+
+    def test_le_refus_nomme_les_DEUX_causes_opposees(self):
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = []
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), brut, sortie_extraction=sortie)
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ItemFin" and e.etat == KO]
+        motif = fins[0].incident
+        self.assertIn("DEUX causes opposees", motif)
+        self.assertIn("n'a rien remonte", motif)
+        self.assertIn("QU'UNE ligne", motif)
+        self.assertIn("remanentes", motif)          # le piege des cases
+
+    def test_extraire_sans_dossier_de_sortie_est_refuse_au_PRE_VOL(self):
+        """Avant tout contact avec SAP : l'extraction tournerait, agirait sur
+        SAP, et son produit partirait nulle part."""
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as leve:
+            self._lancer(self._pipeline_extraction(), brut)
+        self.assertIn("partirait nulle part", str(leve.exception))
+        self.assertEqual(brut.gestes, [])
+
+    def test_un_fichier_existant_n_est_JAMAIS_ecrase(self):
+        """CONTROLE NEGATIF : retirer le refus fait tomber ce test.
+
+        C'est le fichier que l'humain vient peut-etre de relire et de
+        corriger dans Excel.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        temoin = (sortie / "variantes_1000.csv").read_bytes()
+
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as leve:
+            self._lancer(self._pipeline_extraction(), brut,
+                         sortie_extraction=sortie)
+        self.assertIn("existent deja", str(leve.exception))
+        self.assertEqual(brut.gestes, [])
+        self.assertEqual((sortie / "variantes_1000.csv").read_bytes(), temoin)
+
+    def test_une_colonne_de_grille_prefixee_falcon_est_refusee(self):
+        """Elle serait retiree a la relecture, en silence : la passe suivante
+        travaillerait sur un fichier dont il manque des colonnes."""
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP", "falcon_ruse": "x"}]
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("reserve", resultat.raison)
+        self.assertEqual(list(sortie.glob("*.csv")), [])
+
+    def test_une_colonne_de_grille_qui_collisionne_avec_la_clef_est_refusee(self):
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP", "site": "9999"}]
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("au hasard", resultat.raison)
+
+    def test_les_colonnes_declarees_restreignent_le_fichier(self):
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(colonnes="VARIANT"),
+                     sortie_extraction=sortie)
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        entete = texte.splitlines()[0].split(";")
+        self.assertEqual(entete[:2], ["site", "VARIANT"])
+        self.assertNotIn("TEXT", entete)

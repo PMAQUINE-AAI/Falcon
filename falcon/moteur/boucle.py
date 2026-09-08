@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from falcon.controleur import Constat, DriverGarde, Poste, contrat_pour
-from falcon.controleur.grille import GrilleIllisible, chercher
+from falcon.controleur.grille import GrilleIllisible, chercher, relever
 from falcon.donnees import (
     Dialecte, Item, empreinte_jeu, ecrire_items, lire_items,
 )
@@ -47,7 +47,8 @@ from falcon.journal import (
     ItemFin, etats, lire, preparer,
 )
 from falcon.noyau import (
-    ArretBloquant, Echec, ErreurFalcon, Horloge, ItemAbandonne, PlafondAtteint,
+    ArretBloquant, Echec, ErreurFalcon, Horloge, ItemAbandonne,
+    ObjetIntrouvable, PlafondAtteint,
     RefusDryRun, Refus, maintenant,
 )
 from falcon.pipeline import Etape, Pipeline, resoudre
@@ -57,6 +58,9 @@ from falcon.supervision import Progres
 from falcon.taxonomie import Registre, Signature, appliquer
 
 from .adaptateur import Adaptateur
+from .erreurs import ExtractionImpossible, PreparationImpossible
+from .extraction import Extracteur, verifier_les_chemins
+from falcon.volumique.export import Provenance
 
 if TYPE_CHECKING:                       # annotation seule : voir test_frontieres
     from falcon.couture import Driver
@@ -80,8 +84,10 @@ VRAI = frozenset({"true", "1", "x", "oui"})
 FAUX = frozenset({"false", "0", "", "non"})
 
 
-class PreparationImpossible(Exception):
-    """Le jeu et la pipeline ne vont pas ensemble. Rien n'a ete tente."""
+#: Reexporte pour que `from falcon.moteur.boucle import PreparationImpossible`
+#: continue de marcher. La definition vit dans `erreurs.py` : `extraction.py`
+#: en a besoin, et il ne peut pas importer ce module-ci sans cycle.
+PreparationImpossible = PreparationImpossible
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,15 @@ class Resultat:
     #: reprendra pas. Les nommer ici est la seule chose qui les rende
     #: visibles a l'appelant sans relire le journal.
     douteux: tuple[str, ...] = ()
+
+    #: Chemins des fichiers d'extraction ecrits, dans l'ordre.
+    #:
+    #: Des CHEMINS, comme `ko` et `journal`, et c'est ce qui rend ce champ
+    #: compatible avec la phrase ci-dessus : aucune valeur metier ne traverse.
+    #: L'appelant doit ouvrir le fichier pour savoir ce qu'il contient — c'est
+    #: exactement le point d'arret que le §1 impose entre la passe d'audit et
+    #: la passe de remediation.
+    extraits: tuple[str, ...] = ()
 
     @property
     def interrompu(self) -> bool:
@@ -280,7 +295,9 @@ def _verifier_coherence(pipeline: Pipeline, items: list[Item],
 # ---------------------------------------------------------------------------
 
 def _jouer_etape(etape: Etape, item: Item, garde: DriverGarde, poste: Poste,
-                 lues: dict[str, str]) -> None:
+                 lues: dict[str, str], *,
+                 extracteur: "Extracteur | None" = None,
+                 dialecte: Dialecte | None = None) -> None:
     """Execute une etape SOUS SON CONTRAT. Rien ne s'execute hors contrat."""
     with garde.sous_contrat(contrat_pour(etape)):
         action = etape.action
@@ -300,6 +317,8 @@ def _jouer_etape(etape: Etape, item: Item, garde: DriverGarde, poste: Poste,
             # L'etape lie sa lecture SOUS SON PROPRE NOM : c'est ce que le
             # chargeur a valide pour les sources « lue ».
             lues[etape.nom] = poste.read(etape.cible)
+        elif action == "extraire":
+            _extraire(etape, item, poste, extracteur, dialecte)
         elif action == "choisir":
             _choisir(etape, poste, _valeur(etape, item, lues))
         elif action == "ouvrir":
@@ -313,6 +332,56 @@ def _jouer_etape(etape: Etape, item: Item, garde: DriverGarde, poste: Poste,
         else:                                       # pragma: no cover
             raise PreparationImpossible(
                 f"etape {etape.nom!r} : action {action!r} sans execution")
+
+
+def _extraire(etape: Etape, item: Item, poste: Poste,
+              extracteur: "Extracteur | None",
+              dialecte: Dialecte | None) -> None:
+    """Releve la grille et l'ecrit. **Ne conclut jamais sur son absence.**
+
+    Grille introuvable, zero ligne, zero colonne : les trois donnent le meme
+    refus, et AUCUN FICHIER N'EST ECRIT. Deux causes opposees produisent
+    exactement cela — la recherche n'a rien remonte, OU elle n'a remonte
+    qu'une ligne et SAP a ouvert l'objet directement au lieu d'afficher la
+    liste. Rien ici ne les distingue.
+
+    Un fichier vide avec sa provenance affirmerait la premiere. Il n'y a rien
+    a affirmer, donc rien a ecrire.
+    """
+    if extracteur is None or dialecte is None or not extracteur.actif:
+        raise PreparationImpossible(
+            f"etape {etape.nom!r} : aucun dossier d'extraction. Le pre-vol "
+            f"aurait du refuser avant le premier contact avec SAP")
+
+    try:
+        lignes = relever(poste, etape.cible, colonnes=etape.colonnes)
+    except ObjetIntrouvable as absente:
+        raise ItemAbandonne(_rien_a_affirmer(etape, str(absente))) from None
+    if not lignes or not tuple(lignes[0]):
+        raise ItemAbandonne(_rien_a_affirmer(etape, "la grille est vide"))
+
+    extracteur.ecrire(etape.nom, item, dialecte, lignes)
+
+
+def _rien_a_affirmer(etape: Etape, constat: str) -> str:
+    """Le refus qui nomme les DEUX causes, parce qu'aucune ne se prouve."""
+    return (
+        f"etape {etape.nom!r} : aucune grille lisible en {etape.cible!r} "
+        f"({constat}). Aucun fichier n'a ete ecrit.\n"
+        f"\n"
+        f"DEUX causes opposees produisent exactement ceci, et rien ici ne les "
+        f"distingue :\n"
+        f"  - la recherche n'a rien remonte ;\n"
+        f"  - la recherche n'a remonte QU'UNE ligne, et SAP a ouvert l'objet "
+        f"directement au lieu d'afficher la liste.\n"
+        f"Un fichier vide affirmerait la premiere. Il n'y a rien a affirmer.\n"
+        f"\n"
+        f"Et l'absence de resultat n'est pas une preuve d'absence de donnees : "
+        f"les cases de selection de SAP sont remanentes d'un appel a l'autre, "
+        f"et une case restee cochee ne produit AUCUN message.\n"
+        f"\n"
+        f"Va voir dans SAP ce que cette recherche affiche, puis relance cet "
+        f"item seul.")
 
 
 def _choisir(etape: Etape, poste: Poste, valeur: str) -> None:
@@ -392,17 +461,22 @@ def _classer_echec(erreur: Exception, canal: str, registre: Registre,
 
 def _jouer_item(pipeline: Pipeline, item: Item, garde: DriverGarde,
                 poste: Poste, registre: Registre,
-                adapter: Adaptateur) -> None:
+                adapter: Adaptateur, extracteur: "Extracteur",
+                dialecte: Dialecte) -> None:
     lues: dict[str, str] = {}
     for etape in pipeline.etapes:
         adapter.etape = etape.nom
         try:
-            _jouer_etape(etape, item, garde, poste, lues)
+            _jouer_etape(etape, item, garde, poste, lues,
+                         extracteur=extracteur, dialecte=dialecte)
         except Refus:
             # RefusDryRun, ItemAbandonne, ArretBloquant : deja typés par la
             # doctrine. Un repli n'a pas le droit de les rattraper.
             raise
         except (PreparationImpossible, GrilleIllisible):
+            # `ExtractionImpossible` est une `PreparationImpossible` : une
+            # colonne de grille qui collisionne avec une colonne de clef est
+            # un defaut de la pipeline, pas un comportement de SAP.
             # Un defaut de la pipeline ou du jeu, pas un comportement de SAP.
             # Le faire classer par la taxonomie le deguiserait en incident
             # metier, et l'auteur de la pipeline chercherait au mauvais
@@ -454,6 +528,7 @@ def executer(pipeline: Pipeline,
              forcer_reprise: bool = False,
              motif_reprise: str = "",
              sortie_ko: str | Path | None = None,
+             sortie_extraction: str | Path | None = None,
              observateur: Callable[[Progres], None] | None = None,
              horloge: Horloge = maintenant) -> Resultat:
     """Execute une pipeline iterative sur un jeu de donnees.
@@ -472,6 +547,21 @@ def executer(pipeline: Pipeline,
 
     items, dialecte = lire_items(jeu, pipeline.cles)
     _verifier_coherence(pipeline, items, dialecte.colonnes)
+
+    # Les etapes `extraire` produisent des fichiers. Tout ce qui peut etre
+    # refuse a leur sujet l'est ICI, avant le premier contact avec SAP : les
+    # `item_id` et les valeurs de clef sont connus des la lecture du jeu, donc
+    # TOUS les chemins cibles sont calculables sans agir.
+    extractions = tuple(e.nom for e in pipeline.etapes
+                        if e.action == "extraire")
+    if extractions and sortie_extraction is None:
+        raise PreparationImpossible(
+            f"{pipeline.nom!r} porte {len(extractions)} etape(s) `extraire` "
+            f"({list(extractions)}) et aucun dossier de sortie n'est donne. "
+            f"L'extraction tournerait, agirait sur SAP, et son produit "
+            f"partirait nulle part")
+    if extractions:
+        verifier_les_chemins(sortie_extraction, extractions, items, mode=mode)
 
     run_id = uuid.uuid4().hex[:16]
     chemin_journal = Path(journal)
@@ -551,6 +641,13 @@ def executer(pipeline: Pipeline,
         dumps = (Path(dossier_dumps) if dossier_dumps is not None
                  else Path(journal).parent / "dumps")
         adapter = Adaptateur(ecrivain.ecrire, run_id, dumps)
+        extracteur = Extracteur(
+            sortie_extraction, mode=mode,
+            provenance=Provenance(
+                systeme=systeme or "?", mandant=mandant or "?",
+                table=pipeline.nom, horodatage=horloge(),
+                utilisateur=utilisateur or "?",
+                criteres={c: "" for c in pipeline.cles}))
         garde = DriverGarde(brut, registre or Registre.charger(), mode=mode,
                             plafond_sauvegardes=pipeline.plafond_sauvegardes,
                             noter=adapter)
@@ -589,7 +686,8 @@ def executer(pipeline: Pipeline,
 
             try:
                 _jouer_item(pipeline, item, garde, poste,
-                            registre or Registre.charger(), adapter)
+                            registre or Registre.charger(), adapter,
+                            extracteur, dialecte)
             except RefusDryRun as erreur:
                 _clore(ecrivain, run_id, item, IGNORE, debut, garde, compteurs,
                        sauvegardes=garde.sauvegardes - avant)
@@ -603,14 +701,15 @@ def executer(pipeline: Pipeline,
                 _diagnostiquer(diagnostics, perdus, item, "item", erreur,
                                adapter, garde.sauvegardes - avant)
                 continue
-            except (ArretBloquant, PlafondAtteint, GrilleIllisible) as erreur:
+            except (ArretBloquant, PlafondAtteint, GrilleIllisible,
+                    ExtractionImpossible) as erreur:
                 # Regle 3 : PAS de fin d'item. Il reste ouvert, et le repli
                 # decidera s'il est rejouable ou douteux.
                 #
-                # `GrilleIllisible` est rattrapee ICI, et pas laissee remonter,
-                # pour une raison qui n'est pas de confort : une execution qui
-                # s'echappe par une exception ne pose PAS d'`ExecutionFin` au
-                # journal. Le repli des etats verrait un run jamais termine, et
+                # `GrilleIllisible` et `ExtractionImpossible` sont rattrapees
+                # ICI, et pas laissees remonter, pour une raison qui n'est pas
+                # de confort : une execution qui s'echappe par une exception ne
+                # pose PAS d'`ExecutionFin` au journal. Le repli des etats verrait un run jamais termine, et
                 # `garde_de_la_repetition` chercherait une repetition a blanc
                 # aboutie qu'elle ne trouverait pas. Un defaut de pipeline
                 # doit arreter le lot proprement, pas casser le journal.
@@ -658,6 +757,7 @@ def executer(pipeline: Pipeline,
     return Resultat(run_id=run_id, etat=etat, compteurs=compteurs,
                     raison=raison, journal=str(chemin_journal), ko=chemin_ko,
                     douteux=tuple(douteux),
+                    extraits=tuple(extracteur.ecrits),
                     duree_ms=int((time.monotonic() - depart) * 1000))
 
 

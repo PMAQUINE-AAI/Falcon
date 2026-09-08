@@ -7,6 +7,7 @@ pipeline ne peut donc pas contourner une garde en passant par lui.
 """
 
 from .adaptateur import Adaptateur
+from .erreurs import ExtractionImpossible
 from .boucle import (
     DRY_RUN, INTERROMPU, MODES, PLAFOND, REPRISE, RUN, TERMINE,
     PreparationImpossible, RepetitionManquante, Resultat, executer,
@@ -15,7 +16,8 @@ from .boucle import (
 from .chaine import Maillon, enchainer, retour_accueil
 
 __all__ = [
-    "executer", "Resultat", "PreparationImpossible", "RepetitionManquante",
+    "executer", "Resultat", "PreparationImpossible", "ExtractionImpossible",
+    "RepetitionManquante",
     "RUN", "DRY_RUN", "REPRISE", "MODES",
     "TERMINE", "INTERROMPU", "PLAFOND",
     "enchainer", "Maillon", "retour_accueil", "Adaptateur",
