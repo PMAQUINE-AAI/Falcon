@@ -240,3 +240,109 @@ class TestExecution(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLaConsoleDepuisLArchive(Base):
+    """Deux branches de la console etaient CASSEES dans le bundle.
+
+    `RACINE` et `FIXTURES` se calculent par `Path(__file__)`, qui depuis
+    `falcon.pyz` designe un chemin A L'INTERIEUR de l'archive : `RACINE` vaut
+    le fichier `.pyz` lui-meme, et `FIXTURES` ne designe rien.
+
+    Consequence mesuree sur la livraison que le README recommande : « Traces »
+    affichait une liste vide sans un mot, et « Verification » passait
+    `cwd=<un fichier>` a `subprocess`, ce qui leve une `NotADirectoryError`
+    que rien n'attrape — sur l'ecran meme auquel on demande si tout va bien.
+
+    Ces branches ne PEUVENT pas marcher depuis l'archive : elles lisent le
+    depot, qui n'y est pas et n'a aucune raison d'y etre. Le bon comportement
+    est de le dire.
+    """
+
+    def _dans_l_archive(self, expression: str) -> str:
+        rendu = subprocess.run(
+            [sys.executable, "-S", "-c", textwrap.dedent(f"""\
+                import sys
+                sys.path.insert(0, {str(self.bundle)!r})
+                import falcon.console.ecrans as e
+                print({expression})
+                """)],
+            cwd=tempfile.gettempdir(), capture_output=True, text=True)
+        self.assertEqual(rendu.returncode, 0, rendu.stderr)
+        return rendu.stdout.strip()
+
+    def test_l_archive_se_sait_hors_du_depot(self):
+        self.assertEqual(self._dans_l_archive("e.depuis_le_depot()"), "False")
+
+    def test_lancer_un_outil_DIT_pourquoi_au_lieu_de_lever(self):
+        sortie = self._dans_l_archive("e._lancer(['-c', 'print(1)'])")
+        self.assertIn("DEPOT", sortie)
+        self.assertNotIn("NotADirectoryError", sortie)
+
+    def test_les_listes_du_depot_sont_vides_sans_lever(self):
+        """`Path.glob` sur un dossier inexistant ne leve pas : la liste etait
+        vide, et l'utilisateur en concluait qu'il n'y avait aucune trace."""
+        for quoi in ("_traces", "_suites"):
+            with self.subTest(liste=quoi):
+                self.assertEqual(
+                    self._dans_l_archive(f"len(e.{quoi}(e.Environnement()))"),
+                    "0")
+
+
+class TestPaquetInstallable(unittest.TestCase):
+    """L'AUTRE chemin de livraison, et il etait casse des deux facons.
+
+    Le bundle est le mode retenu par le §6, donc ces defauts etaient latents.
+    Mais `pip install -e .` est ce qu'on fait pour DEVELOPPER, et il donnait
+    un import casse sans un mot :
+
+    - `packages = ["falcon"]` ne RECURSE PAS : une roue livrait
+      `falcon/__init__.py` et aucun des quinze sous-paquets ;
+    - et aucun `package-data` : la roue ne portait AUCUN fichier YAML, donc
+      `Registre.charger()` ne trouvait pas `registre.yaml` et un FALCON
+      installe n'avait plus de taxonomie du tout — exactement le defaut deja
+      corrige sur le bundle, par l'autre chemin.
+
+    On CONSTRUIT la roue, comme les tests ci-dessus construisent l'archive :
+    verifier l'intention de livrer ne prouve rien sur le livrable.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._dossier = tempfile.TemporaryDirectory()
+        rendu = subprocess.run(
+            [sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "-w",
+             cls._dossier.name],
+            cwd=RACINE, capture_output=True, text=True, timeout=300)
+        if rendu.returncode != 0:
+            raise unittest.SkipTest(
+                f"construction de la roue impossible : {rendu.stderr[-400:]}")
+        roues = list(Path(cls._dossier.name).glob("*.whl"))
+        if not roues:
+            raise unittest.SkipTest("aucune roue produite")
+        cls.roue = roues[0]
+        cls.noms = zipfile.ZipFile(cls.roue).namelist()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._dossier.cleanup()
+
+    def test_TOUS_les_sous_paquets_sont_dans_la_roue(self):
+        livres = sorted(d.name for d in (RACINE / "falcon").iterdir()
+                        if d.is_dir() and (d / "__init__.py").exists())
+        embarques = {n.split("/")[1] for n in self.noms
+                     if n.startswith("falcon/") and n.count("/") > 1}
+        manquants = sorted(set(livres) - embarques)
+        self.assertEqual(manquants, [],
+                         f"la roue ne porte pas {manquants} : "
+                         f"`import falcon.<paquet>` echouerait apres "
+                         f"`pip install`")
+
+    def test_les_YAML_livres_sont_dans_la_roue(self):
+        """Sans eux, `Registre.charger()` echoue et FALCON n'a plus de
+        taxonomie — un lot ne pourrait plus classer le moindre incident."""
+        attendus = sorted(str(c.relative_to(RACINE)).replace("\\", "/")
+                          for c in (RACINE / "falcon").rglob("*.yaml"))
+        presents = sorted(n for n in self.noms if n.endswith(".yaml"))
+        self.assertEqual(presents, attendus)
+

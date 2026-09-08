@@ -43,8 +43,26 @@ MARQUEUR_BROUILLON = "TODO"
 
 CLES_PIPELINE = frozenset({
     "version", "nom", "classe", "cles", "plafond_items",
-    "plafond_sauvegardes", "validation_reelle", "etapes",
+    "plafond_sauvegardes", "etapes",
 })
+
+#: Clefs RETIREES, et ce qu'on repond a qui les ecrit encore.
+#:
+#: `validation_reelle` etait acceptee, stockee, et lue NULLE PART — ni en
+#: production, ni en test, ni dans la specification, qui ne la nomme pas. Un
+#: utilisateur qui la declarait croyait avoir arme quelque chose ; il n'avait
+#: rien arme. C'est la meme classe de defaut que les affirmations perimees de
+#: la documentation, sous forme de clef de configuration.
+#:
+#: La retirer sans un mot ferait « cle inconnue », qui envoie chercher une
+#: faute de frappe. On dit ce qui s'est passe.
+CLES_RETIREES = {
+    "validation_reelle":
+        "elle etait acceptee et lue NULLE PART — declarer cette cle "
+        "n'armait rien. Ce que tu voulais borner se declare avec "
+        "`plafond_items` et `plafond_sauvegardes`, que le controleur "
+        "applique vraiment",
+}
 
 CLES_ETAPE = frozenset({
     "nom", "action", "cible", "source", "fonction", "ecran",
@@ -97,6 +115,11 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
 
     if not isinstance(contenu, dict):
         raise _refus(source, "un dictionnaire est attendu a la racine")
+
+    retirees = sorted(set(contenu) & set(CLES_RETIREES))
+    if retirees:
+        raise _refus(source, "; ".join(
+            f"`{cle}` : {CLES_RETIREES[cle]}" for cle in retirees))
 
     inconnues = sorted(set(contenu) - CLES_PIPELINE)
     if inconnues:
@@ -180,7 +203,6 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
         nom=nom, classe=classe, etapes=tuple(etapes), cles=cles,
         plafond_items=plafonds["plafond_items"],
         plafond_sauvegardes=plafonds["plafond_sauvegardes"],
-        validation_reelle=contenu.get("validation_reelle"),
         empreinte=hashlib.sha256(brut.encode("utf-8")).hexdigest()[:16],
         source=source,
     )

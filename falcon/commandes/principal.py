@@ -44,6 +44,7 @@ Toutes les autres sont en lecture seule.
   brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
   dictionnaire    le catalogue a plat, en CSV lisible par un tableur
   composer        les CSV du classeur -> une pipeline YAML
+  promouvoir      verse une capture de quarantaine au catalogue
   recolter        les entrees de registre a ecrire, d'apres les dumps
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
@@ -143,7 +144,65 @@ def analyseur() -> argparse.ArgumentParser:
                           help="fichier a ecrire (defaut : sortie standard, "
                                "sans rien ecrire)")
 
+    promotion = sous.add_parser(
+        "promouvoir", help="verse une capture de quarantaine au catalogue",
+        description="`diagnostiquer --catalogue` verse en QUARANTAINE, et dit "
+                    "que la promotion reste un geste explicite. C'est ce "
+                    "geste. Sans argument, il LISTE ce qui attend ; avec une "
+                    "empreinte, il promeut cette capture-la. La console "
+                    "(« 5 > Promouvoir ») montre en plus ce qu'on promeut "
+                    "avant de le promouvoir.")
+    promotion.add_argument("catalogue", metavar="DOSSIER")
+    promotion.add_argument("--empreinte", default=None,
+                           help="empreinte de la capture a promouvoir ; sans "
+                                "elle, la commande se contente de lister")
+
     return principal
+
+
+def _promouvoir(options: argparse.Namespace) -> int:
+    from falcon.catalogue import CatalogueInvalide, Depot
+
+    racine = Path(options.catalogue)
+    if not racine.is_dir():
+        print(f"{racine} n'est pas un dossier", file=sys.stderr)
+        return 1
+
+    depot = Depot(racine)
+    ecarte = Depot(depot.quarantaine)
+    clefs = [v.clef for t in ecarte.triplets() for v in ecarte.variantes(t)]
+    if not clefs:
+        print(f"{racine} : la quarantaine est vide. Une capture y entre par "
+              f"`diagnostiquer --catalogue`.", file=sys.stderr)
+        return 1
+
+    if not options.empreinte:
+        # Sans empreinte on LISTE, on ne promeut pas « la premiere ». Choisir
+        # a la place de l'utilisateur ce qu'il certifie avoir relu serait le
+        # contraire de ce que ce geste signifie.
+        print(f"{len(clefs)} capture(s) en quarantaine :\n")
+        for clef in clefs:
+            variante = ecarte.pour_edition(clef)
+            marque = "observee" if variante.observee else "ESQUISSE"
+            print(f"  {clef.empreinte}  {clef.transaction}/{clef.programme}"
+                  f"/{clef.dynpro}  {len(variante.champs):>3} champ(s)  "
+                  f"{marque}")
+        print("\n  --empreinte <EMPREINTE> pour en promouvoir une.")
+        return 0
+
+    choisies = [c for c in clefs if c.empreinte == options.empreinte]
+    if not choisies:
+        print(f"empreinte {options.empreinte!r} : rien de tel en quarantaine",
+              file=sys.stderr)
+        return 1
+
+    try:
+        chemin = depot.promouvoir(choisies[0])
+    except CatalogueInvalide as erreur:
+        print(str(erreur), file=sys.stderr)
+        return 1
+    print(f"{chemin}")
+    return 0
 
 
 def _composer(options: argparse.Namespace) -> int:
@@ -280,7 +339,7 @@ def _brouillon(options: argparse.Namespace) -> int:
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
              "inventaire": _inventaire, "brouillon": _brouillon,
              "dictionnaire": _dictionnaire, "recolter": _recolter,
-             "composer": _composer}
+             "composer": _composer, "promouvoir": _promouvoir}
 
 
 def main(arguments: list[str] | None = None) -> int:

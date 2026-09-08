@@ -116,6 +116,22 @@ class TestChargementValide(Base):
                     self._charger(VALIDE.replace(avant, apres))
                 self.assertIn(f"ecran.{cle}", str(capture.exception))
 
+    def test_une_cle_RETIREE_dit_ce_qui_s_est_passe(self):
+        """`validation_reelle` etait acceptee, stockee, et lue NULLE PART.
+
+        Ni en production, ni en test, ni dans la specification, qui ne la
+        nomme pas. Un utilisateur qui la declarait croyait avoir arme quelque
+        chose ; il n'avait rien arme. La retirer en silence ferait « cle
+        inconnue », qui envoie chercher une faute de frappe — d'ou un refus
+        qui dit ce qui s'est passe et vers quoi se tourner.
+        """
+        with self.assertRaises(PipelineInvalide) as capture:
+            self._charger(VALIDE + "\n    validation_reelle: {actif: true}\n")
+        message = str(capture.exception)
+        self.assertIn("validation_reelle", message)
+        self.assertIn("n'armait rien", message)
+        self.assertIn("plafond_sauvegardes", message)
+
     def test_la_source_est_typee(self):
         source = self._charger(VALIDE).etapes[0].source
         self.assertEqual((source.genre, source.valeur), ("colonne", "site"))

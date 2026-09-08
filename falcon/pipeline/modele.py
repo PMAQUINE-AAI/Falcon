@@ -130,7 +130,6 @@ class Pipeline:
     plafond_items: int
     plafond_sauvegardes: int
     cles: tuple[str, ...] = ()               # obligatoire si iterative
-    validation_reelle: dict[str, Any] | None = None
     #: `sha256` du texte integral du fichier, tronque a 16 hex.
     #:
     #: Le defaut vide est conserve pour l'ordre des champs de la dataclasse,

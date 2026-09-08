@@ -35,12 +35,49 @@ RACINE = Path(__file__).resolve().parent.parent.parent
 FIXTURES = RACINE / "tests" / "fixtures" / "traces"
 
 
+def depuis_le_depot() -> bool:
+    """Tourne-t-on sur l'arborescence source, ou depuis `falcon.pyz` ?
+
+    Deux branches de la console — « Verification » et « Traces » — lisent des
+    choses qui n'existent QUE dans le depot : les suites de tests, les outils,
+    et les traces d'exemple. Depuis le bundle, `Path(__file__)` designe un
+    chemin A L'INTERIEUR de l'archive : `RACINE` vaut le fichier `.pyz`
+    lui-meme, et `FIXTURES` ne designe rien.
+
+    Mesure avant ce controle, sur la livraison que le README recommande : le
+    lancement d'un outil recevait `cwd=<un fichier>`, et la liste des traces
+    etait vide sans un mot. Deux branches cassees, dont l'une s'appelle
+    « Verification » — c'est-a-dire celle a laquelle on demande si tout va
+    bien.
+
+    Le bon comportement n'est pas de les faire marcher — le depot n'est pas
+    la, et l'embarquer serait absurde — c'est de le DIRE.
+    """
+    return RACINE.is_dir() and (RACINE / "outils").is_dir()
+
+
+#: Ce qu'on affiche quand une branche exige le depot et qu'on est dans le
+#: bundle. Un message qui nomme la cause et la sortie, pas une liste vide.
+SANS_DEPOT = (
+    "Cette branche lit des fichiers du DEPOT — les suites de tests, les\n"
+    "outils, les traces d'exemple — et tu tournes depuis `falcon.pyz`,\n"
+    "qui ne les embarque pas (et n'a aucune raison de le faire).\n"
+    "\n"
+    "Pour t'en servir, lance FALCON depuis le depot :\n"
+    "    python -m falcon console")
+
+
 def _lancer(arguments: list[str]) -> tuple[int, str]:
     """Execute un outil du depot et rend (code, sortie fusionnee).
 
     Liste d'arguments, jamais `shell=True` : rien de ce que l'utilisateur
     tape ne doit pouvoir atteindre un interpreteur de commandes.
     """
+    if not depuis_le_depot():
+        # `cwd=RACINE` recevrait le chemin du `.pyz`, qui n'est pas un
+        # dossier : `subprocess` leve alors une `NotADirectoryError` que rien
+        # n'attrape, sur un ecran qui s'appelle « Verification ».
+        return 1, SANS_DEPOT
     fini = subprocess.run([sys.executable, *arguments], cwd=RACINE,
                           capture_output=True, text=True)
     return fini.returncode, (fini.stdout or "") + (fini.stderr or "")
@@ -182,21 +219,45 @@ def demander_chemin_neuf(console: Console, invite: str) -> Path | None:
 
 
 def _traces(env: Environnement) -> list[tuple[str, str]]:
+    """Les traces livrees avec le DEPOT. Vide depuis le bundle, et c'est normal.
+
+    `Path.glob` sur un dossier inexistant rend une suite vide sans lever : la
+    liste etait donc vide depuis `falcon.pyz`, sans un mot, et l'utilisateur
+    en concluait qu'il n'y avait aucune trace. C'est l'ecran appelant qui doit
+    le dire — voir `SANS_DEPOT`.
+    """
+    if not env.fixtures.is_dir():
+        return []
     return [(str(c), f"{c.name}  ({c.stat().st_size} o)")
             for c in sorted(env.fixtures.glob("*.vbs"))]
 
 
 def _suites(env: Environnement) -> list[tuple[str, str]]:
     dossier = env.racine / "tests"
+    if not dossier.is_dir():
+        return []
     return [(f"tests.{c.stem}", c.name)
             for c in sorted(dossier.glob("test_*.py"))]
 
 
 def _trace_choisie(console: Console, env: Environnement):
-    """Demande une trace et la lit STRICTEMENT. Rend la trace, ou None."""
+    """Demande une trace et la lit STRICTEMENT. Rend la trace, ou None.
+
+    Une trace se saisit toujours au chemin, meme sans depot : c'est la
+    branche entiere qui n'aurait aucune trace A PROPOSER, pas la lecture qui
+    serait impossible. On le dit, et on laisse saisir.
+    """
     from falcon.trace import TraceInvalide, lire
 
-    chemin = choisir(console, "Quelle trace ?", _traces(env),
+    livrees = _traces(env)
+    if not livrees:
+        console.ecrire()
+        for ligne in SANS_DEPOT.splitlines():
+            console.ecrire(f"  {ligne}")
+        console.ecrire()
+        console.ecrire("  Tu peux tout de meme saisir le chemin d'une trace.")
+
+    chemin = choisir(console, "Quelle trace ?", livrees,
                      invite_libre="saisir un autre chemin")
     if chemin is None:
         return None
@@ -490,6 +551,24 @@ def _rendre_jeu(console: Console, dialecte, lignes: list) -> None:
                    "d'origine.")
 
 
+def _provenance(driver) -> dict[str, str]:
+    """`systeme` et `mandant`, LUS sur la session ouverte.
+
+    Ils viennent de `screen()`, qui les porte deja : rien de neuf n'est
+    demande a la couture, dont la surface est epinglee. Une session qui ne
+    les rend pas laisse les champs vides — « on ne sait pas » est une reponse,
+    inventer n'en est pas une.
+    """
+    try:
+        identite = driver.screen()
+    except Exception:                                # noqa: BLE001
+        # La provenance est un CONFORT du journal ; la perdre ne doit pas
+        # empecher un lot de tourner. Le journal dira « inconnu ».
+        return {}
+    return {"systeme": getattr(identite, "systeme", "") or "",
+            "mandant": getattr(identite, "mandant", "") or ""}
+
+
 def _recapituler(console: Console, pipeline, items, jeu: Path,
                  jeu_empreinte: str, mode: str) -> None:
     """Ce qui va se passer, AVANT que ca se passe.
@@ -515,6 +594,21 @@ def _recapituler(console: Console, pipeline, items, jeu: Path,
     libres = [e.nom for e in pipeline.etapes if e.navigation_libre]
     console.ecrire(f"    etapes qui sauvent    "
                    f"{', '.join(sauvent) or '(aucune)'}")
+
+    # Une pipeline qui ne sauvegarde NULLE PART n'ecrit rien dans SAP.
+    #
+    # `Pipeline.sauvegarde_quelque_part` existait sans aucun appelant, ni en
+    # production ni en test. Elle a pourtant un usage evident : c'est presque
+    # toujours une erreur de redaction, et le seul moment ou la signaler
+    # utilement est celui ou l'on s'apprete a taper le nom pour confirmer. La
+    # dire ici coute une ligne ; l'apprendre a la fin d'un lot qui « a
+    # marche » coute la confiance dans le lot suivant.
+    if mode != "dry-run" and not pipeline.sauvegarde_quelque_part:
+        console.ecrire()
+        console.ecrire("    ATTENTION : aucune etape ne SAUVEGARDE.")
+        console.ecrire("    Ce lot va parcourir SAP sans rien y valider. Si")
+        console.ecrire("    tu attendais une ecriture, c'est une etape qui")
+        console.ecrire("    manque — pas un lot qui a reussi.")
 
     composees = [e for e in pipeline.etapes
                  if e.format or e.defaut is not None
@@ -793,11 +887,26 @@ def ecran_pipelines(env: Environnement) -> Menu:
             console.pause()
             return CONTINUER
 
+        # La PROVENANCE, prise sur la session reellement ouverte.
+        #
+        # `executer` accepte `systeme`, `mandant` et `utilisateur`, et la
+        # console n'en passait aucun : le journal ne disait donc ni sur quel
+        # systeme ni sur quel mandant le lot avait tourne. Pour un fichier
+        # cense faire foi, c'est le premier renseignement qu'on lui demande le
+        # jour ou une correction de masse est contestee.
+        #
+        # `utilisateur` reste vide, et ce n'est pas un oubli : la couture est
+        # epinglee a dix-huit methodes (§3.4) et aucune ne rend l'identifiant
+        # de connexion. Le deviner serait inventer du comportement SAP. Un
+        # champ vide dit « on ne sait pas » ; un champ rempli au hasard dirait
+        # quelque chose de faux.
+        provenance = _provenance(driver)
+
         observateur = env.rapporteur()
         try:
             resultat = executer(
                 pipeline, jeu, driver, journal=journal, mode=mode,
-                registre=registre,
+                registre=registre, **provenance,
                 sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
                 observateur=observateur)
         except ErreurFalcon as erreur:
@@ -1472,14 +1581,144 @@ def ecran_catalogue(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def promouvoir(console: Console) -> str:
+        """Le geste que `diagnostiquer` annonce et qui n'existait nulle part.
+
+        `Depot.promouvoir` n'etait appele que par des tests. Or
+        `diagnostiquer --catalogue` verse en QUARANTAINE et dit a
+        l'utilisateur que « le promouvoir au catalogue reste un geste
+        explicite » — un geste qui n'existait ni en CLI ni ici. Le catalogue
+        cure restait donc vide, et `dictionnaire` devait etre lance avec
+        `--quarantaine` pour voir quoi que ce soit.
+
+        Cet ecran est le bon endroit : c'est le seul d'ou l'utilisateur VOIT
+        ce qu'il promeut avant de le promouvoir.
+        """
+        from falcon.catalogue import CatalogueInvalide, ClefVariante, Depot
+
+        depot = _depot(console)
+        if depot is None:
+            return CONTINUER
+
+        console.titre("Promouvoir une capture")
+        ecarte = Depot(depot.quarantaine)
+        clefs = [v.clef for t in ecarte.triplets() for v in ecarte.variantes(t)]
+        if not clefs:
+            console.ecrire("\n  La quarantaine est vide : rien a promouvoir.")
+            console.ecrire("  Une capture y entre par "
+                           "`diagnostiquer --catalogue`.")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire()
+        for rang, clef in enumerate(clefs, start=1):
+            variante = ecarte.pour_edition(clef)
+            marque = ("observee" if variante.observee
+                      else "ESQUISSE — ne peut pas garder un ecran")
+            console.ecrire(f"  {rang:>2}  {clef.transaction}/{clef.programme}"
+                           f"/{clef.dynpro}  {clef.empreinte}")
+            console.ecrire(f"      {len(variante.champs):>3} champ(s)  "
+                           f"{marque}  « {variante.titre} »")
+
+        try:
+            saisie = console.lire("\n  numero a promouvoir (vide : "
+                                  "aucune) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return CONTINUER
+        if not saisie:
+            return CONTINUER
+        try:
+            choisie = clefs[int(saisie) - 1]
+            if int(saisie) < 1:
+                raise IndexError
+        except (ValueError, IndexError):
+            console.ecrire(f"\n  « {saisie} » n'est pas dans la liste.")
+            console.pause()
+            return CONTINUER
+
+        # Confirmation par l'EMPREINTE, en toutes lettres. Deux variantes d'un
+        # meme ecran ne different que par elle : un « oui » ne dirait pas
+        # laquelle on a relue, et c'est precisement ce qu'on certifie ici.
+        console.ecrire("\n  Promouvoir, c'est dire que TU as relu cet ecran.")
+        console.ecrire("  Pour confirmer, tape son empreinte en toutes "
+                       "lettres.")
+        if not confirmer(console, choisie.empreinte):
+            console.pause()
+            return CONTINUER
+
+        try:
+            chemin = depot.promouvoir(choisie)
+        except CatalogueInvalide as erreur:
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+        console.ecrire(f"\n  Promue : {chemin}")
+        console.pause()
+        return CONTINUER
+
+    def dictionnaire(console: Console) -> str:
+        """Le catalogue a plat, pour le classeur. Existait en CLI seulement.
+
+        Le lot 15 s'appelle « la console pilote tout FALCON » ; `dictionnaire`
+        y faisait exception.
+        """
+        from falcon.catalogue import Depot
+        from falcon.commandes.dictionnaire import exporter, recenser
+
+        depot = _depot(console)
+        if depot is None:
+            return CONTINUER
+
+        console.titre("Dictionnaire des ecrans")
+        console.ecrire()
+        console.ecrire("  Une ligne par champ, pour que le classeur propose "
+                       "les ecrans")
+        console.ecrire("  et les cibles dans des listes deroulantes.")
+
+        try:
+            reponse = console.lire("\n  recenser la quarantaine plutot que le "
+                                   "catalogue cure ? (oui/non) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return CONTINUER
+        if reponse.lower() in ("oui", "o"):
+            depot = Depot(depot.quarantaine)
+
+        lignes = recenser(depot)
+        if not lignes:
+            console.ecrire("\n  Aucun champ a recenser. Un ecran entre au "
+                           "catalogue par")
+            console.ecrire("  `diagnostiquer --catalogue`, puis par la "
+                           "promotion.")
+            console.pause()
+            return CONTINUER
+
+        chemin = demander_chemin_neuf(console, "fichier CSV a ecrire")
+        if chemin is None:
+            return CONTINUER
+        exporter(depot, chemin)
+        ecrans = len({(l["transaction"], l["programme"], l["dynpro"],
+                       l["empreinte"]) for l in lignes})
+        console.ecrire(f"\n  {chemin}  —  {len(lignes)} champ(s) sur "
+                       f"{ecrans} variante(s)")
+        console.pause()
+        return CONTINUER
+
     return Menu(
         titre="FALCON — catalogue d'ecrans",
-        preambule="Lecture seule. La promotion d'une capture reste un geste "
-                  "delibere,\net ne se fait pas depuis ici.",
+        preambule=(
+            "Les deux premieres entrees lisent. La troisieme PROMEUT une\n"
+            "capture : c'est le geste par lequel tu dis avoir relu l'ecran,\n"
+            "et il se confirme par l'empreinte en toutes lettres.\n"
+            "\n"
+            "Rien ici n'ecrit dans SAP."),
         entrees=(
             Entree("1", "Catalogue cure", cure, "ce qu'un humain a valide"),
             Entree("2", "Quarantaine", quarantaine,
                    "les captures pas encore relues"),
+            Entree("3", "Promouvoir une capture", promouvoir,
+                   "de la quarantaine au catalogue — apres relecture"),
+            Entree("4", "Exporter le dictionnaire", dictionnaire,
+                   "le catalogue a plat, en CSV pour le classeur"),
         ))
 
 

@@ -538,14 +538,114 @@ class TestCatalogue(unittest.TestCase):
         parcourir(racine(), journal.console())
         self.assertIn("n'est pas un dossier", journal.texte)
 
-    def test_la_console_ne_promeut_rien(self):
-        """La promotion reste un geste delibere, et pas depuis un menu."""
+    def _quarantaine_distincte(self) -> str:
+        """Une capture qui n'est PAS deja au catalogue cure.
+
+        Le `setUp` met le meme ecran des deux cotes ; l'empreinte porte sur le
+        contenu de l'ecran, donc elle y est identique et ne dirait rien sur
+        l'effet d'une promotion. Celle-ci porte un champ de plus.
+        """
+        autre = Ecran(identite=IA08,
+                      champs=(Champ(id="wnd[0]/usr/txtA"),
+                              Champ(id="wnd[0]/usr/txtB")))
+        Depot(self.racine).mettre_en_quarantaine(variante_de(autre))
+        ecarte = Depot(Depot(self.racine).quarantaine)
+        cure = Depot(self.racine)
+        deja = {v.clef.empreinte
+                for t in cure.triplets() for v in cure.variantes(t)}
+        for triplet in ecarte.triplets():
+            for variante in ecarte.variantes(triplet):
+                if variante.clef.empreinte not in deja:
+                    return variante.clef.empreinte
+        raise AssertionError("aucune capture distincte en quarantaine")
+
+    def _rang_de(self, empreinte: str) -> str:
+        """Le numero que la console affiche, dans son ordre a elle."""
+        ecarte = Depot(Depot(self.racine).quarantaine)
+        clefs = [v.clef for t in ecarte.triplets() for v in ecarte.variantes(t)]
+        return str([c.empreinte for c in clefs].index(empreinte) + 1)
+
+    def test_une_capture_promue_ENTRE_reellement_au_catalogue(self):
+        """Le geste que `diagnostiquer --catalogue` annonce, et qui n'existait
+        ni en CLI ni en console : `Depot.promouvoir` n'avait que des tests
+        pour appelants."""
+        empreinte = self._quarantaine_distincte()
+        rang = self._rang_de(empreinte)
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Promouvoir une capture"),
+            str(self.racine), rang, empreinte, "", "0", "0")
+        parcourir(racine(), journal.console())
+
+        self.assertIn("Promue", journal.texte)
+        cure = Depot(self.racine)
+        empreintes = [v.clef.empreinte
+                      for t in cure.triplets() for v in cure.variantes(t)]
+        self.assertIn(empreinte, empreintes)
+
+    def test_une_promotion_NON_confirmee_ne_promeut_rien(self):
+        empreinte = self._quarantaine_distincte()
+        rang = self._rang_de(empreinte)
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Promouvoir une capture"),
+            str(self.racine), rang, "oui", "", "0", "0")
+        parcourir(racine(), journal.console())
+
+        cure = Depot(self.racine)
+        empreintes = [v.clef.empreinte
+                      for t in cure.triplets() for v in cure.variantes(t)]
+        self.assertNotIn(empreinte, empreintes,
+                         "un « oui » a suffi a promouvoir")
+
+    def test_le_dictionnaire_s_exporte_depuis_la_console(self):
+        """Le lot 15 s'appelle « la console pilote tout FALCON » ;
+        `dictionnaire` y faisait exception."""
+        sortie = self.racine.parent / "dico.csv"
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Exporter le dictionnaire"),
+            str(self.racine), "non", str(sortie), "", "0", "0")
+        parcourir(racine(), journal.console())
+        self.assertTrue(sortie.exists(), journal.texte)
+        self.assertIn("champ(s)", journal.texte)
+
+    def test_la_promotion_exige_une_confirmation_en_toutes_lettres(self):
+        """Ce test interdisait la promotion depuis la console. Il visait la
+        bonne chose et refusait la mauvaise.
+
+        L'intention — « la promotion reste un geste delibere » — est juste. La
+        consequence ne l'etait pas : le geste n'existait alors NULLE PART,
+        ni en CLI ni ici, alors que `diagnostiquer --catalogue` annonce a
+        l'utilisateur que « le promouvoir au catalogue reste un geste
+        explicite ». Le catalogue cure restait vide, et `dictionnaire` devait
+        etre lance avec `--quarantaine` pour montrer quoi que ce soit.
+
+        Delibere n'est pas absent. La console est meme le seul endroit d'ou
+        l'utilisateur VOIT ce qu'il promeut ; ce qu'il faut garantir, c'est
+        que la promotion ne parte pas d'une touche. Elle exige donc l'
+        empreinte en toutes lettres — deux variantes d'un meme ecran ne
+        different que par elle, et un « oui » ne dirait pas laquelle on a
+        relue.
+        """
+        promotions = []
         for module, arbre in _arbres():
-            for noeud in ast.walk(arbre):
-                if isinstance(noeud, ast.Call):
-                    self.assertNotEqual(getattr(noeud.func, "attr", None),
-                                        "promouvoir",
-                                        f"{module}:{noeud.lineno}")
+            for fonction in ast.walk(arbre):
+                if not isinstance(fonction, (ast.FunctionDef,
+                                             ast.AsyncFunctionDef)):
+                    continue
+                appels = [n for n in ast.walk(fonction)
+                          if isinstance(n, ast.Call)]
+                if not any(getattr(a.func, "attr", None) == "promouvoir"
+                           for a in appels):
+                    continue
+                promotions.append(f"{module}:{fonction.name}")
+                self.assertTrue(
+                    any(getattr(a.func, "id", None) == "confirmer"
+                        for a in appels),
+                    f"{module}:{fonction.name} appelle `promouvoir` sans "
+                    f"passer par `confirmer` : la promotion partirait d'une "
+                    f"simple touche")
+        self.assertTrue(promotions,
+                        "aucune promotion dans la console : le geste que "
+                        "`diagnostiquer` annonce n'existerait nulle part")
 
 
 if __name__ == "__main__":
@@ -1596,6 +1696,35 @@ class TestExecution(unittest.TestCase):
         self.assertIn("2 maillon(s)", journal.texte)
         self.assertTrue(self.journal.exists(), journal.texte)
         self.assertTrue(second.exists(), journal.texte)
+
+    def test_une_pipeline_qui_ne_SAUVEGARDE_nulle_part_est_signalee(self):
+        """`Pipeline.sauvegarde_quelque_part` n'avait AUCUN appelant.
+
+        Or une pipeline qui ne sauvegarde nulle part n'ecrit rien dans SAP :
+        c'est presque toujours une erreur de redaction, et le seul moment ou
+        la signaler utilement est celui ou l'on s'apprete a taper le nom pour
+        confirmer. L'apprendre a la fin d'un lot qui « a marche » coute la
+        confiance dans le lot suivant.
+        """
+        muette = self.racine / "muette.yaml"
+        muette.write_text(
+            textwrap.dedent(EXECUTABLE).replace("    sauvegarde: true\n", ""),
+            encoding="utf-8")
+        journal = self._session("Executer", str(muette), str(self.jeu),
+                                str(self.journal), "", "non")
+        self.assertIn("aucune etape ne SAUVEGARDE", journal.texte)
+        self.assertIn("pas un lot qui a reussi", journal.texte)
+
+    def test_la_repetition_a_blanc_ne_s_en_plaint_PAS(self):
+        """Elle s'arrete avant toute validation : lui reprocher de ne rien
+        sauvegarder serait du bruit a l'endroit ou l'on veut du silence."""
+        muette = self.racine / "muette.yaml"
+        muette.write_text(
+            textwrap.dedent(EXECUTABLE).replace("    sauvegarde: true\n", ""),
+            encoding="utf-8")
+        journal = self._session("Repetition", str(muette), str(self.jeu),
+                                str(self.journal), "")
+        self.assertNotIn("aucune etape ne SAUVEGARDE", journal.texte)
 
     # -- la surcouche de registre ------------------------------------------
 

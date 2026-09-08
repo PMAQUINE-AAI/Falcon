@@ -142,7 +142,7 @@ geste explicite, celui par lequel un humain dit avoir relu l'écran.
 Le dépôt est modulaire, la livraison est **un fichier unique** (§6) :
 
 ```bash
-python outils/embarquer.py        # produit falcon.pyz, ~160 Kio
+python outils/embarquer.py        # produit falcon.pyz — la taille est imprimee
 python falcon.pyz inventaire trace.vbs
 ```
 
