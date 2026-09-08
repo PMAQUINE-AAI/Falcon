@@ -31,12 +31,15 @@ from falcon.journal import (
     DOUTEUX, EN_COURS, KO, OK, ExecutionDebut, ItemFin, depuis_journal, etats,
     lire,
 )
+from falcon.moteur.boucle import _refuser_les_douteux_du_journal
 from falcon.moteur import (
     DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
     PreparationImpossible, RepetitionManquante, enchainer, executer,
     garde_de_la_repetition,
 )
-from falcon.noyau import CHAMP_DE_COMMANDE, Fenetre, Identite, Statut
+from falcon.noyau import (
+    CHAMP_DE_COMMANDE, Fenetre, Identite, RepriseIncoherente, Statut,
+)
 from falcon.pipeline import charger, etape_python, oublier_tout
 from falcon.taxonomie import Registre
 
@@ -1141,10 +1144,93 @@ class TestGardeDeLaRepetition(Base):
             garde_de_la_repetition(self.journal, "AAAA", "JJJJ", RUN,
                                    False, "")
 
+    def test_la_REPRISE_y_est_soumise_aussi(self):
+        """Le commentaire disait que `garde_du_monde` suffisait. Il avait tort.
+
+        `garde_du_monde` compare des EMPREINTES ; elle ne dit rien de
+        l'existence d'une repetition qui ait abouti. Sur un journal ne portant
+        qu'une repetition INTERROMPUE, le `run` etait refuse et la reprise
+        passait — elle ecrivait donc dans SAP sur la seule preuve d'une
+        repetition dont cette garde dit qu'elle « ne compte pas ».
+        """
+        from falcon.journal import Ecrivain, ExecutionFin
+
+        with Ecrivain(self.journal) as ecrivain:
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="tuee", mode=DRY_RUN, classe="iterative", pipeline="p",
+                pipeline_empreinte="AAAA", jeu="j.csv",
+                jeu_empreinte="JJJJ", plafond_items=3))
+            ecrivain.ecrire(ExecutionFin(run_id="tuee", etat=INTERROMPU))
+
+        for mode in (RUN, REPRISE):
+            with self.subTest(mode=mode):
+                with self.assertRaises(RepetitionManquante):
+                    garde_de_la_repetition(self.journal, "AAAA", "JJJJ", mode,
+                                           False, "")
+
+    def test_la_repetition_a_blanc_n_est_PAS_refusee_sur_un_douteux(self):
+        """Elle n'ecrit rien : `_avant_sauvegarde` leve avant toute
+        sauvegarde. Lui refuser un item douteux interdisait d'essayer sans
+        rien ecrire au moment precis ou l'on en a besoin — et le message
+        affirmait qu'elle « ecrirait une seconde fois », ce qui ne peut pas
+        arriver."""
+        from falcon.journal import Ecrivain, ItemDebut, ItemFin
+
+        items, _ = lire_items(self.jeu, ("site",))
+        with Ecrivain(self.journal) as ecrivain:
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="r", mode=RUN, classe="iterative", pipeline="essai",
+                pipeline_empreinte="X", jeu="j", jeu_empreinte="Y",
+                plafond_items=9))
+            ecrivain.ecrire(ItemDebut(run_id="r", item_id=items[0].item_id))
+            ecrivain.ecrire(ItemFin(run_id="r", item_id=items[0].item_id,
+                                    etat=DOUTEUX))
+
+        # `run` reste refuse : c'est lui qui ecrirait une seconde fois.
+        with self.assertRaises(PreparationImpossible):
+            _refuser_les_douteux_du_journal(self.journal, items, RUN)
+        # La repetition, non.
+        _refuser_les_douteux_du_journal(self.journal, items, DRY_RUN)
+
     def test_forcer_EXIGE_un_motif(self):
         with self.assertRaises(PreparationImpossible) as capture:
             self._run(forcer_sans_repetition=True)
         self.assertIn("motif", str(capture.exception))
+
+    def test_le_motif_du_forcage_de_REPRISE_est_trace_lui_aussi(self):
+        """`preparer` promettait « un motif, qui sera trace ». Il etait exige
+        puis jete, et `executer` n'exposait meme pas le parametre : la porte
+        de sortie decrite par deux docstrings n'existait dans aucune
+        commande."""
+        self._blanc()
+        self._run()
+        # Le jeu CHANGE : sans forcage, la reprise est refusee. C'est ce qui
+        # rend le test discriminant — forcer doit servir a quelque chose.
+        self.jeu.write_text("site,libelle\n1000,Paris\n2000,Nice\n",
+                            encoding="utf-8")
+        with self.assertRaises(RepriseIncoherente):
+            executer(self._pipeline(), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     mode=REPRISE)
+
+        motif = "Correction d'une faute de frappe sur un libelle, sans effet."
+        executer(self._pipeline(), self.jeu, self._driver(),
+                 journal=self.journal, registre=self.registre, mode=REPRISE,
+                 forcer_reprise=True, motif_reprise=motif,
+                 **SANS_REPETITION)
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].reprise_forcee, motif)
+
+    def test_forcer_la_reprise_EXIGE_un_motif(self):
+        self._blanc()
+        self._run()
+        self.jeu.write_text("site,libelle\n1000,Paris\n2000,Nice\n",
+                            encoding="utf-8")
+        with self.assertRaises(ValueError):
+            executer(self._pipeline(), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     mode=REPRISE, forcer_reprise=True, **SANS_REPETITION)
 
     def test_le_motif_du_forcage_est_TRACE_dans_le_journal(self):
         """Un contournement qui ne laisse pas de trace n'est pas un

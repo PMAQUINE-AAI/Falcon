@@ -201,7 +201,15 @@ def preparer(chemin: str | Path,
     n'a plus les memes rangs, et la reprise doit rester juste malgre ca.
 
     La comparaison des empreintes est la garde d'identite appliquee a la
-    reprise. Passer outre demande `forcer` ET un motif, qui sera trace.
+    reprise. Passer outre demande `forcer` ET un motif.
+
+    Ce motif est trace par l'ECRIVAIN, dans `ExecutionDebut.reprise_forcee` —
+    pas ici : cette fonction lit un journal, elle ne l'ecrit pas. La version
+    precedente de ce paragraphe promettait « un motif, qui sera trace » sans
+    que personne ne l'ecrive nulle part, et `executer` n'exposait meme pas le
+    parametre : le motif etait exige puis jete, et la porte de sortie que deux
+    docstrings decrivaient n'existait dans aucune commande. Une reprise
+    refusee etait une impasse.
 
     Les empreintes n'ont deliberement PAS de valeur par defaut : les omettre
     est une `TypeError` a l'appel, pas un silence. La version precedente les

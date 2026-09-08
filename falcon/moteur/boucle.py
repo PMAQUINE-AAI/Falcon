@@ -382,6 +382,8 @@ def executer(pipeline: Pipeline,
              dossier_dumps: str | Path | None = None,
              forcer_sans_repetition: bool = False,
              motif_forcage: str = "",
+             forcer_reprise: bool = False,
+             motif_reprise: str = "",
              sortie_ko: str | Path | None = None,
              observateur: Callable[[Progres], None] | None = None,
              horloge: Horloge = maintenant) -> Resultat:
@@ -409,17 +411,28 @@ def executer(pipeline: Pipeline,
     if mode in (RUN, DRY_RUN):
         _refuser_les_douteux_du_journal(chemin_journal, items, mode)
 
-    garde_de_la_repetition(chemin_journal, pipeline.empreinte,
-                           empreinte_jeu(jeu), mode,
-                           forcer_sans_repetition, motif_forcage)
-
+    # L'ordre des deux gardes n'est pas indifferent en REPRISE.
+    #
+    # Un jeu modifie change son empreinte, donc AUCUNE repetition n'a abouti
+    # « sur ces empreintes » — et la garde de repetition parlait la premiere,
+    # avec un message qui envoie relancer un dry-run. C'est la consequence,
+    # pas la cause : ce qu'il faut dire, c'est que le monde a change. La garde
+    # de reprise passe donc devant, et elle est la plus specifique des deux.
+    #
+    # Aucune des deux n'ecrit quoi que ce soit : les intervertir ne coute rien
+    # d'autre que l'ordre des messages, qui est precisement l'enjeu.
     if mode == REPRISE:
         reprise = preparer(chemin_journal, [i.item_id for i in items],
                            pipeline_empreinte=pipeline.empreinte,
-                           jeu_empreinte=empreinte_jeu(jeu))
+                           jeu_empreinte=empreinte_jeu(jeu),
+                           forcer=forcer_reprise, motif=motif_reprise)
         restants = set(reprise.a_traiter)
         items = [i for i in items if i.item_id in restants]
         deja = reprise.deja_faits
+
+    garde_de_la_repetition(chemin_journal, pipeline.empreinte,
+                           empreinte_jeu(jeu), mode,
+                           forcer_sans_repetition, motif_forcage)
 
     compteurs = {OK: 0, KO: 0, IGNORE: 0, DOUTEUX: 0, "deja_faits": deja}
     diagnostics: dict[str, dict[str, str]] = {}
@@ -461,7 +474,9 @@ def executer(pipeline: Pipeline,
             derogations=[{"etape": e.nom, "garde": d.garde, "motif": d.motif}
                          for e in pipeline.etapes for d in e.derogations],
             repetition_forcee=(motif_forcage.strip()
-                               if forcer_sans_repetition else "")))
+                               if forcer_sans_repetition else ""),
+            reprise_forcee=(motif_reprise.strip()
+                            if forcer_reprise else "")))
 
         for rang, item in enumerate(items, start=1):
             if rang > pipeline.plafond_items:
@@ -563,6 +578,14 @@ def _refuser_les_douteux_du_journal(chemin: Path, items: list[Item],
     legitimement etre rejoue si quelqu'un le decide. Le douteux est le seul
     dont on ne SAIT PAS ce que SAP en a fait.
     """
+    if mode == DRY_RUN:
+        # Une repetition a blanc n'ecrit RIEN : `_avant_sauvegarde` leve
+        # `RefusDryRun` avant toute sauvegarde. Lui refuser un item douteux
+        # etait doublement faux — le message affirmait qu'elle « ecrirait une
+        # seconde fois », ce qui ne peut pas arriver, et surtout ca interdisait
+        # de REPETER une pipeline apres un lot interrompu, c'est-a-dire au
+        # moment precis ou l'on veut essayer sans rien ecrire.
+        return
     if not chemin.exists():
         return
     connus = etats(lire(chemin))
@@ -615,12 +638,26 @@ def garde_de_la_repetition(chemin: Path, pipeline_empreinte: str,
     journal. Un contournement qui ne laisse pas de trace n'est pas un
     contournement, c'est un trou.
     """
-    if mode != RUN:
-        # `dry-run` est la repetition elle-meme ; `resume` repart d'un journal
-        # dont `garde_du_monde` a deja verifie que TOUTES les ouvertures
-        # portent ces empreintes — la repetition y est donc, ou le monde a
-        # change et c'est l'autre garde qui parle.
+    if mode == DRY_RUN:
+        # `dry-run` est la repetition elle-meme. Exiger qu'elle ait ete
+        # precedee d'une repetition serait circulaire : aucune ne pourrait
+        # jamais avoir lieu.
         return
+
+    # `resume` EST soumis a la garde, contrairement a ce que disait ce
+    # commentaire : « `garde_du_monde` a deja verifie que toutes les
+    # ouvertures portent ces empreintes — la repetition y est donc ». C'etait
+    # faux. `garde_du_monde` compare des EMPREINTES ; elle ne dit rien de
+    # l'existence d'une repetition qui ait ABOUTI.
+    #
+    # Mesure sur un journal ne portant qu'une repetition INTERROMPUE : le
+    # `run` etait refuse, la `reprise` passait. Elle ecrivait donc dans SAP
+    # sur la seule preuve d'une repetition dont cette garde dit elle-meme
+    # qu'elle « ne compte pas : elle prouve justement que quelque chose
+    # n'allait pas ».
+    #
+    # Le parcours nominal n'y perd rien : la repetition qui a autorise le run
+    # est dans le meme journal, et la reprise repart de ce journal-la.
 
     if forcer:
         if not motif.strip():

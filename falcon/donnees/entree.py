@@ -334,5 +334,28 @@ def lire_items(chemin: str | Path,
 
 
 def empreinte_jeu(chemin: str | Path) -> str:
-    """Empreinte du fichier, pour la garde de reprise."""
-    return hashlib.sha256(Path(chemin).read_bytes()).hexdigest()[:16]
+    """Empreinte du jeu, pour la garde de reprise.
+
+    Elle porte sur le TEXTE DECODE, fins de ligne normalisees — pas sur les
+    octets. Les deux empreintes que la reprise compare doivent poser la meme
+    question : « FALCON lirait-il la meme chose ? »
+
+    Elles n'y repondaient pas de la meme facon. Celle de la pipeline passe par
+    `read_text`, donc par les fins de ligne universelles ; celle-ci hachait
+    les octets bruts. Mesure sur un contenu IDENTIQUE :
+
+        pipeline LF / CRLF  ->  92f0df95545a5d28  92f0df95545a5d28   identiques
+        jeu      LF / CRLF  ->  38c51400c26fa990  aff7a5dc7040adef   differents
+
+    Conséquence : ouvrir le jeu dans un editeur Windows et l'enregistrer — le
+    geste le plus banal du poste vise — suffisait a interdire la reprise d'un
+    lot interrompu, sur une donnee inchangee. Et le contournement decrit par
+    la docstring de `preparer` n'etait atteignable depuis aucune commande.
+
+    Le decodage est CELUI DE LA LECTURE : deux fichiers qui donnent les memes
+    valeurs a `lire` donnent la meme empreinte, et c'est exactement ce que la
+    garde veut savoir. Toute difference de contenu reelle la change toujours.
+    """
+    texte, _, _ = _decoder(Path(chemin).read_bytes())
+    normalise = texte.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalise.encode("utf-8")).hexdigest()[:16]

@@ -128,6 +128,14 @@ class ExecutionDebut(Enregistrement):
     #: de masse est contestee.
     repetition_forcee: str = ""
 
+    #: Motif du contournement de la garde de REPRISE (`garde_du_monde`).
+    #:
+    #: `preparer` promettait « un motif, qui sera trace » — et ne l'ecrivait
+    #: nulle part. Il etait exige puis jete, et `executer` n'exposait meme pas
+    #: le parametre : la porte de sortie decrite par deux docstrings
+    #: n'existait dans aucune commande. Une reprise refusee etait une impasse.
+    reprise_forcee: str = ""
+
 
 @_enregistre
 @dataclass(frozen=True, kw_only=True)

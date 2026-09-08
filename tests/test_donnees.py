@@ -279,6 +279,22 @@ class TestAllerRetourKO(unittest.TestCase):
         aucun moyen de savoir que l'item avait DEJA ecrit dans SAP."""
         self.assertIn("falcon_sauvegardes", COLONNES_DIAGNOSTIC)
 
+    def test_l_empreinte_du_jeu_ignore_les_FINS_DE_LIGNE(self):
+        """Les deux empreintes que la reprise compare doivent poser la MEME
+        question : « FALCON lirait-il la meme chose ? »
+
+        Elles n'y repondaient pas de la meme facon. Celle de la pipeline passe
+        par `read_text`, donc par les fins de ligne universelles ; celle-ci
+        hachait les octets. Ouvrir le jeu dans un editeur Windows et
+        l'enregistrer — le geste le plus banal du poste vise — suffisait donc
+        a interdire la reprise d'un lot interrompu, sur une donnee INCHANGEE.
+        Et le contournement que `preparer` decrit n'etait atteignable depuis
+        aucune commande.
+        """
+        lf = self.racine / "lf.csv"; lf.write_bytes(b"site\nFR12\nFR13\n")
+        crlf = self.racine / "crlf.csv"; crlf.write_bytes(b"site\r\nFR12\r\nFR13\r\n")
+        self.assertEqual(empreinte_jeu(lf), empreinte_jeu(crlf))
+
     def test_l_empreinte_du_jeu_change_avec_le_contenu(self):
         """Base de la garde de reprise."""
         a = self.racine / "a.csv"; a.write_bytes(b"site\nFR12\n")

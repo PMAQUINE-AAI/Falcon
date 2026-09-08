@@ -886,9 +886,34 @@ def ecran_pipelines(env: Environnement) -> Menu:
             return {}
         return {"forcer_sans_repetition": True, "motif_forcage": motif}
 
+    def _forcage_reprise(console: Console, erreur) -> dict:
+        """Le pendant de `_forcage`, pour la garde de REPRISE.
+
+        `preparer` promettait « un motif, qui sera trace » — et `executer`
+        n'exposait meme pas le parametre : une reprise refusee etait une
+        impasse. Elle l'etait d'autant plus que le refus se declenchait sur
+        une donnee INCHANGEE dont on avait seulement change les fins de ligne.
+        """
+        console.ecrire(f"\n  Refuse.\n")
+        for ligne in str(erreur).splitlines():
+            console.ecrire(f"  {ligne}")
+        console.ecrire()
+        console.ecrire("  Reprendre malgre cet ecart demande de dire pourquoi :")
+        console.ecrire("  le motif sera ecrit dans le journal. Reprendre sur un")
+        console.ecrire("  monde qui a change, c'est rejouer des items avec un")
+        console.ecrire("  modele du monde faux — assure-toi que l'ecart est")
+        console.ecrire("  celui que tu crois.")
+        try:
+            motif = console.lire("\n  motif (vide : renoncer) : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return {}
+        if not motif:
+            return {}
+        return {"forcer_reprise": True, "motif_reprise": motif}
+
     def _executer(console: Console, mode: str, titre: str) -> str:
         from falcon.moteur import RepetitionManquante, executer
-        from falcon.noyau import ErreurFalcon
+        from falcon.noyau import ErreurFalcon, RepriseIncoherente
 
         prepare = _preparer(console, mode)
         if prepare is None:
@@ -940,6 +965,25 @@ def ecran_pipelines(env: Environnement) -> Menu:
             # execution. On ne le propose qu'ici, jamais d'avance : offrir de
             # desarmer une garde avant qu'elle ait parle, c'est l'inviter.
             forcage = _forcage(console, erreur)
+            if not forcage:
+                console.ecrire("\n  Annule. Rien n'a ete ecrit.")
+                console.pause()
+                return CONTINUER
+            try:
+                resultat = executer(
+                    pipeline, jeu, driver, journal=journal, mode=mode,
+                    registre=registre, **provenance, **forcage,
+                    sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                    observateur=observateur)
+            except ErreurFalcon as seconde:
+                console.ecrire(f"\n  {type(seconde).__name__} : {seconde}")
+                console.ecrire(f"\n  Le journal fait foi : {journal}")
+                console.pause()
+                return CONTINUER
+        except RepriseIncoherente as erreur:
+            # Meme posture que pour la repetition : la garde refuse d'abord et
+            # explique, et c'est seulement ensuite qu'on offre de passer outre.
+            forcage = _forcage_reprise(console, erreur)
             if not forcage:
                 console.ecrire("\n  Annule. Rien n'a ete ecrit.")
                 console.pause()
