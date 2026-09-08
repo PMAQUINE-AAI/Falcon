@@ -352,6 +352,32 @@ class Registre:
             entrees.extend(nouvelles)
         return cls(entrees)
 
+    @classmethod
+    def avec_surcouches(cls, *chemins: str | Path) -> "Registre":
+        """Le registre LIVRE, enrichi par des fichiers de projet.
+
+        `charger(chemin)` ne fait pas ca : passer un chemin remplace le
+        registre livre au lieu de s'y ajouter, parce que le premier fichier y
+        sert de base. C'est utile pour rejouer un registre entier, et c'est un
+        piege pour une surcouche — les entrees livrees disparaitraient sans un
+        mot.
+
+        Cette methode est celle que la CLI et la console appellent. L'en-tete
+        du registre dit que la taxonomie « se recolte et ne se specifie pas » ;
+        c'est ici que la recolte revient dans le produit.
+
+        La protection ne bouge pas : une surcouche ENRICHIT, elle ne peut ni
+        retirer une entree livree ni en assouplir une.
+        """
+        entrees = list(_lire_texte(_ressource(__package__, "registre.yaml"),
+                                   Path(CHEMIN_REGISTRE_DEFAUT)))
+        for chemin in chemins:
+            nouvelles = _lire_fichier(Path(chemin))
+            _verifier_absence_d_assouplissement(entrees, nouvelles,
+                                                Path(chemin))
+            entrees.extend(nouvelles)
+        return cls(entrees)
+
     def _verifier_absence_d_ambiguite(self) -> None:
         for rang, gauche in enumerate(self._entrees):
             for droite in self._entrees[rang + 1:]:

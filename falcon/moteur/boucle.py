@@ -411,7 +411,22 @@ def executer(pipeline: Pipeline,
     # `with` seul : `__enter__` appelle deja `ouvrir`, et l'appeler en plus
     # ouvrait un second descripteur en abandonnant le premier.
     with Ecrivain(chemin_journal, horloge=horloge) as ecrivain:
-        adapter = Adaptateur(ecrivain.ecrire, run_id, dossier_dumps)
+        # Le dossier de dumps est fourni PAR DEFAUT, a cote du journal.
+        #
+        # Sans dump, un incident inconnu — donc bloquant — arrete le lot en ne
+        # laissant qu'une ligne de journal. Or c'est le dump qui porte de quoi
+        # ECRIRE l'entree de registre manquante, et l'en-tete du registre dit
+        # que la taxonomie « se recolte et ne se specifie pas ». Le mecanisme
+        # de recolte existait et n'etait jamais alimente : aucun appelant de
+        # production ne passait `dossier_dumps`.
+        #
+        # Le defaut n'est donc pas un confort, c'est ce qui rend le premier
+        # run reel exploitable : sur un systeme neuf, le premier message
+        # d'erreur metier arrete le lot, et il faut pouvoir en tirer l'entree
+        # a ecrire plutot que de recommencer a l'aveugle.
+        dumps = (Path(dossier_dumps) if dossier_dumps is not None
+                 else Path(journal).parent / "dumps")
+        adapter = Adaptateur(ecrivain.ecrire, run_id, dumps)
         garde = DriverGarde(brut, registre or Registre.charger(), mode=mode,
                             plafond_sauvegardes=pipeline.plafond_sauvegardes,
                             noter=adapter)

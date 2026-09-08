@@ -56,6 +56,17 @@ class Constat:
     derogation: Derogation | None = None
     taxonomie: Verdict | None = None
 
+    #: La signature SOUMISE au registre, quand il y en a eu une.
+    #:
+    #: Elle est ce sur quoi le registre apparie ; sans elle, le dump d'un
+    #: inconnu obligeait a RECONSTRUIRE la signature a partir de `detail`, ce
+    #: qui est une conjecture — et une conjecture fausse, mesuree : `garde`
+    #: porte le NOM de la garde qui a parle, pas le canal, si bien qu'un
+    #: message `E` sans `statut_attendu` etait propose sur le canal `garde`
+    #: alors que le registre l'avait classe sur le canal `statut`. L'entree
+    #: ecrite d'apres cette proposition n'aurait jamais apparie.
+    signature: Signature | None = None
+
     def __post_init__(self) -> None:
         # Le vocabulaire est ferme et partage avec le journal. Un verdict
         # invente ici s'ecrirait sinon dans un fichier cense faire foi, et
@@ -262,7 +273,7 @@ class DriverGarde(Driver):
 
         verdict = self._registre.classer(signature)
         self._noter(Constat(garde=garde, verdict="violation", detail=detail,
-                            taxonomie=verdict))
+                            taxonomie=verdict, signature=signature))
 
         # La regle est ailleurs, et partagee : le moteur classe lui aussi ce
         # que levent la couture et les etapes Python, et doit en tirer les

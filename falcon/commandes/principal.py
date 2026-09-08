@@ -34,13 +34,16 @@ ERREURS_LISIBLES = (ErreurFalcon, TraceInvalide, PipelineInvalide,
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Cinq commandes, et aucune n'ecrit dans SAP :
+Six commandes. Une seule peut ecrire dans SAP — `console` — et elle ne le
+fait que sur trois de ses ecrans, apres confirmation du nom de la pipeline
+en toutes lettres. Les cinq autres sont en lecture seule.
 
-  console         menus interactifs : tests, traces, catalogue, diagnostic
+  console         menus interactifs : tests, traces, catalogue, EXECUTION
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
   brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
   dictionnaire    le catalogue a plat, en CSV lisible par un tableur
+  recolter        les entrees de registre a ecrire, d'apres les dumps
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
 """
@@ -56,8 +59,10 @@ def analyseur() -> argparse.ArgumentParser:
 
     sous.add_parser(
         "console", help="menus interactifs (tests, traces, catalogue, SAP)",
-        description="Tout FALCON depuis un seul endroit. Aucun ecran n'ecrit "
-                    "dans SAP.")
+        description="Tout FALCON depuis un seul endroit. Trois ecrans "
+                    "ECRIVENT dans SAP — execution, reprise, enchainement — "
+                    "et demandent le nom de la pipeline en toutes lettres "
+                    "avant d'agir. La repetition a blanc, elle, n'ecrit rien.")
 
     diagnostic = sous.add_parser(
         "diagnostiquer",
@@ -106,7 +111,52 @@ def analyseur() -> argparse.ArgumentParser:
                       help="recenser la quarantaine plutot que le catalogue "
                            "cure — utile pour un ecran tout juste releve")
 
+    recolte = sous.add_parser(
+        "recolter", help="propose les entrees de registre d'apres les dumps",
+        description="Un incident inconnu est bloquant, et laisse un dump. "
+                    "Cette commande relit ces dumps et propose la surcouche "
+                    "de registre a completer : c'est le geste que l'en-tete "
+                    "du registre appelle « la taxonomie se recolte ». Rien "
+                    "n'est decide a ta place — categorie et politique portent "
+                    "un marqueur, et le fichier refuse de charger tant qu'il "
+                    "en reste un.")
+    recolte.add_argument("dumps", metavar="DOSSIER",
+                         help="dossier de dumps (a cote du journal, par "
+                              "defaut : <journal>/../dumps)")
+    recolte.add_argument("-o", "--sortie", metavar="SURCOUCHE.yaml",
+                         default=None,
+                         help="fichier a ecrire (defaut : sortie standard)")
+
     return principal
+
+
+def _recolter(options: argparse.Namespace) -> int:
+    from falcon.taxonomie.recolte import (
+        dumps_de, lire_dump, surcouche_proposee,
+    )
+
+    dossier = Path(options.dumps)
+    if not dossier.is_dir():
+        print(f"{dossier} n'est pas un dossier. Les dumps sont ecrits a cote "
+              f"du journal, dans « dumps ».", file=sys.stderr)
+        return 1
+
+    chemins = dumps_de(dossier)
+    if not chemins:
+        # Aucun dump n'est une BONNE nouvelle : rien n'a bloque. Le dire
+        # comme tel, plutot que de rendre un fichier vide qu'on prendrait
+        # pour une surcouche legitime.
+        print(f"{dossier} ne porte aucun dump : aucun incident inconnu n'a "
+              f"bloque de lot.", file=sys.stderr)
+        return 1
+
+    texte = surcouche_proposee([lire_dump(c) for c in chemins])
+    if options.sortie:
+        Path(options.sortie).write_text(texte, encoding="utf-8")
+        print(f"{options.sortie}  —  {len(chemins)} entree(s) a completer")
+    else:
+        print(texte)
+    return 0
 
 
 def _dictionnaire(options: argparse.Namespace) -> int:
@@ -189,7 +239,7 @@ def _brouillon(options: argparse.Namespace) -> int:
 
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
              "inventaire": _inventaire, "brouillon": _brouillon,
-             "dictionnaire": _dictionnaire}
+             "dictionnaire": _dictionnaire, "recolter": _recolter}
 
 
 def main(arguments: list[str] | None = None) -> int:

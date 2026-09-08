@@ -180,9 +180,19 @@ class TestLigneDeCommande(unittest.TestCase):
             _lancer("--aide")
         self.assertEqual(capture.exception.code, 0)
 
-    def test_l_aide_dit_qu_aucune_commande_n_ecrit(self):
-        self.assertIn("aucune n'ecrit dans SAP",
-                      analyseur().format_help())
+    def test_l_aide_dit_LAQUELLE_des_commandes_peut_ecrire(self):
+        """Ce test epinglait « aucune n'ecrit dans SAP », et c'etait faux.
+
+        `console` ecrit, sur trois de ses ecrans, depuis le lot d'execution.
+        Un texte rassurant a l'endroit exact ou quelqu'un decide qu'il peut
+        cliquer sans reflechir est la meme classe de defaut que le reste de ce
+        projet traque — et le fait qu'un test le garantissait le rendait
+        durable.
+        """
+        aide = analyseur().format_help()
+        self.assertIn("Une seule peut ecrire dans SAP", aide)
+        self.assertIn("console", aide)
+        self.assertNotIn("aucune n'ecrit dans SAP", aide)
 
     def test_inventaire_marche_sans_sap(self):
         """Le sous-module SAP n'est importe que par `diagnostiquer` : une

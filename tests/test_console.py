@@ -32,7 +32,7 @@ from falcon.console import (
 from falcon.console import ecrans
 from falcon.console.ecrans import Environnement
 from falcon.couture.double import DriverScripte
-from falcon.noyau import Champ, Ecran, Identite, SapIndisponible
+from falcon.noyau import Champ, Ecran, Identite, SapIndisponible, Statut
 
 from tests.test_gardes import MUTATIONS
 
@@ -1370,9 +1370,17 @@ class TestExecution(unittest.TestCase):
         parcourir(arbre, journal.console())
         return journal
 
-    def _saisies(self, mot: str | None = "bcp_ia08_variantes"):
-        """pipeline, jeu, journal, puis la confirmation si on en attend une."""
-        base = [str(self.pipeline), str(self.jeu), str(self.journal)]
+    def _saisies(self, mot: str | None = "bcp_ia08_variantes", *,
+                 surcouche: str = ""):
+        """pipeline, jeu, journal, surcouche, puis la confirmation.
+
+        La surcouche de registre est FACULTATIVE et vide par defaut : c'est le
+        cas courant, et c'est ce que la console propose en premier. Elle a sa
+        place ici plutot que dans chaque test, pour que l'ajout d'une invite
+        ne se paie pas en decalages silencieux de sequences saisies.
+        """
+        base = [str(self.pipeline), str(self.jeu), str(self.journal),
+                surcouche]
         return base if mot is None else base + [mot]
 
     # -- l'ordre des entrees -----------------------------------------------
@@ -1582,10 +1590,84 @@ class TestExecution(unittest.TestCase):
             "Enchainer",
             str(self.pipeline), str(self.jeu), str(self.journal),
             str(self.pipeline), str(self.jeu), str(second),
-            "", "bcp_ia08_variantes", "")
+            "",                          # plus de maillon
+            "",                          # surcouche de registre : aucune
+            "bcp_ia08_variantes", "")
         self.assertIn("2 maillon(s)", journal.texte)
         self.assertTrue(self.journal.exists(), journal.texte)
         self.assertTrue(second.exists(), journal.texte)
+
+    # -- la surcouche de registre ------------------------------------------
+
+    def test_la_surcouche_de_registre_est_REELLEMENT_passee_au_moteur(self):
+        """Le maillon qui manquait, et qu'aucun test ne tenait.
+
+        `Registre.charger` acceptait des surcouches ; aucun appelant de
+        production n'en passait. La console pouvait donc demander le chemin,
+        charger le fichier, et jeter le registre — l'utilisateur aurait
+        recolte une taxonomie qui ne servait a rien, sans le savoir.
+
+        On l'observe par son EFFET : la surcouche classe l'incident, donc le
+        lot va au bout la ou il s'arreterait.
+        """
+        pipeline = self.racine / "stricte.yaml"
+        pipeline.write_text(textwrap.dedent("""\
+            version: 1
+            nom: bcp_ia08_variantes
+            classe: iterative
+            cles: [site]
+            plafond_items: 50
+            plafond_sauvegardes: 50
+            etapes:
+              - nom: saisir
+                action: set
+                cible: "wnd[0]/usr/ctxtWERKS-LOW"
+                source: {colonne: site}
+                statut_attendu: "S"
+                ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}
+            """), encoding="utf-8")
+
+        def repondre(pilote, geste, cible):
+            if geste == "write":
+                pilote.valeurs[cible] = pilote.valeurs.get(cible, "")
+                pilote.statut = Statut(type="E", id="IW", numero="010",
+                                       texte="Equipement inexistant")
+
+        self.driver.apres_action = repondre
+
+        surcouche = self.racine / "s.yaml"
+        surcouche.write_text(textwrap.dedent("""\
+            version: 1
+            entrees:
+              - nom: statut_iw_010
+                categorie: connue_fautive
+                canal: garde
+                correspondance:
+                  garde: "statut"
+                  attendu: "S"
+                  observe: "E"
+                  id: "IW"
+                  numero: "010"
+                politique: {poursuivre: true, item: ko}
+                origine: falcon_observe
+                justification: "Hors perimetre : item KO, lot poursuivi."
+            """), encoding="utf-8")
+
+        journal = self._session(
+            "Executer", str(pipeline), str(self.jeu), str(self.journal),
+            str(surcouche), "bcp_ia08_variantes")
+        self.assertIn("termine", journal.texte)
+        self.assertIn("ko", journal.texte)
+
+    def test_une_surcouche_illisible_est_refusee_AVANT_toute_connexion(self):
+        surcouche = self.racine / "s.yaml"
+        surcouche.write_text("version: 1\nentrees: [{nom: x}]\n",
+                             encoding="utf-8")
+        journal = self._session(
+            "Executer", str(self.pipeline), str(self.jeu), str(self.journal),
+            str(surcouche))
+        self.assertIn("Surcouche refusee", journal.texte)
+        self.assertEqual(self.driver.gestes, [])
 
     def test_une_chaine_vide_ne_lance_rien(self):
         journal = self._session("Enchainer", "", "")
@@ -1595,7 +1677,7 @@ class TestExecution(unittest.TestCase):
     def test_une_chaine_non_confirmee_ne_lance_rien(self):
         journal = self._session(
             "Enchainer", str(self.pipeline), str(self.jeu),
-            str(self.journal), "", "non", "")
+            str(self.journal), "", "", "non", "")
         self.assertIn("Annule", journal.texte)
         self.assertEqual(self.driver.gestes, [])
         self.assertFalse(self.journal.exists())

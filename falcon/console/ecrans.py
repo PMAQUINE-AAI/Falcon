@@ -138,6 +138,27 @@ def demander_chemin(console: Console, invite: str, *,
     return chemin
 
 
+def demander_chemin_facultatif(console: Console, invite: str) -> Path | None:
+    """Un chemin dont l'absence est une reponse valide, pas un renoncement.
+
+    `demander_chemin` rend `None` aussi bien pour « rien saisi » que pour
+    « annule », et ses appelants lisent les deux comme un abandon. Pour une
+    surcouche de registre, ne rien saisir est le cas NORMAL — on n'en a une
+    que quand on en a recolte une.
+    """
+    try:
+        saisie = console.lire(f"\n  {invite} : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not saisie:
+        return None
+    chemin = Path(saisie)
+    if not chemin.exists():
+        console.ecrire(f"\n  {chemin} n'existe pas — poursuite sans surcouche.")
+        return None
+    return chemin
+
+
 def demander_chemin_neuf(console: Console, invite: str) -> Path | None:
     """Demande un chemin a ECRIRE. Refuse un fichier qui existe deja.
 
@@ -667,8 +688,33 @@ def ecran_pipelines(env: Environnement) -> Menu:
     # cosmetique : la repetition a blanc est proposee AVANT l'execution, et
     # l'execution avant la reprise.
 
-    def _preparer(console: Console, mode: str):
-        """(pipeline, jeu, items, empreinte, journal) ou None.
+    def _demander_surcouche(console: Console):
+        """(registre, ok) — le registre livre ENRICHI, ou None si aucune.
+
+        Facultative, et c'est le point : sans elle, tout incident non apparie
+        est `inconnue`, donc BLOQUANT, et la garde de statut y route tout
+        message E/A. Sur un systeme reel, le premier message d'erreur metier
+        arrete donc le lot — c'est le comportement voulu — et la surcouche est
+        ce qui permet de repartir en ayant CLASSE ce message plutot qu'en le
+        redecouvrant. `falcon recolter` la propose depuis les dumps.
+
+        `avec_surcouches`, pas `charger` : un chemin passe a `charger`
+        REMPLACE les entrees livrees au lieu de s'y ajouter.
+        """
+        chemin = demander_chemin_facultatif(
+            console, "surcouche de registre (facultatif, Entree pour aucune)")
+        if chemin is None:
+            return None, True
+        from falcon.taxonomie import Registre, RegistreInvalide
+        try:
+            return Registre.avec_surcouches(chemin), True
+        except RegistreInvalide as erreur:
+            console.ecrire(f"\n  Surcouche refusee.\n\n  {erreur}")
+            console.pause()
+            return None, False
+
+    def _preparer(console: Console, mode: str, *, surcouche: bool = True):
+        """(pipeline, jeu, items, empreinte, journal, registre) ou None.
 
         Tout ce qui peut etre refuse l'est ICI, avant la moindre connexion :
         pipeline illisible, jeu illisible, regroupement impossible. Tomber a
@@ -711,7 +757,16 @@ def ecran_pipelines(env: Environnement) -> Menu:
                                   existant=False)
         if journal is None:
             return None
-        return pipeline, jeu, items, empreinte, journal
+
+        # La chaine ne demande PAS la surcouche ici : `enchainer` n'accepte
+        # qu'un registre pour toute la chaine, donc la poser par maillon
+        # ferait saisir n fois une reponse dont n-1 seraient jetees.
+        registre = None
+        if surcouche:
+            registre, ok = _demander_surcouche(console)
+            if not ok:
+                return None
+        return pipeline, jeu, items, empreinte, journal, registre
 
     def _executer(console: Console, mode: str, titre: str) -> str:
         from falcon.moteur import executer
@@ -720,7 +775,7 @@ def ecran_pipelines(env: Environnement) -> Menu:
         prepare = _preparer(console, mode)
         if prepare is None:
             return CONTINUER
-        pipeline, jeu, items, empreinte, journal = prepare
+        pipeline, jeu, items, empreinte, journal, registre = prepare
 
         console.titre(titre)
         _recapituler(console, pipeline, items, jeu, empreinte, mode)
@@ -742,6 +797,7 @@ def ecran_pipelines(env: Environnement) -> Menu:
         try:
             resultat = executer(
                 pipeline, jeu, driver, journal=journal, mode=mode,
+                registre=registre,
                 sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
                 observateur=observateur)
         except ErreurFalcon as erreur:
@@ -794,10 +850,10 @@ def ecran_pipelines(env: Environnement) -> Menu:
             console.ecrire()
             console.ecrire(f"  Maillon {len(maillons) + 1} — laisser vide "
                            "pour lancer la chaine.")
-            prepare = _preparer(console, "run")
+            prepare = _preparer(console, "run", surcouche=False)
             if prepare is None:
                 break
-            pipeline, jeu, items, empreinte, journal = prepare
+            pipeline, jeu, items, empreinte, journal, _ = prepare
             maillons.append(Maillon(
                 pipeline=pipeline, jeu=jeu, journal=journal,
                 sortie_ko=str(Path(journal).with_suffix(".ko.csv"))))
@@ -807,6 +863,10 @@ def ecran_pipelines(env: Environnement) -> Menu:
         if not maillons:
             console.ecrire("\n  Chaine vide. Rien a lancer.")
             console.pause()
+            return CONTINUER
+
+        registre, ok = _demander_surcouche(console)
+        if not ok:
             return CONTINUER
 
         console.titre(f"Chaine — {len(maillons)} maillon(s)")
@@ -828,7 +888,8 @@ def ecran_pipelines(env: Environnement) -> Menu:
 
         observateur = env.rapporteur()
         try:
-            resultats = enchainer(maillons, driver, observateur=observateur)
+            resultats = enchainer(maillons, driver, registre=registre,
+                                  observateur=observateur)
         except ErreurFalcon as erreur:
             console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
             console.pause()
@@ -1479,6 +1540,147 @@ def ecran_sap(env: Environnement) -> Menu:
 
 # ---------------------------------------------------------------------------
 
+def ecran_taxonomie(env: Environnement) -> Menu:
+    """Recolter la taxonomie : d'un inconnu bloquant a l'entree qui le classe.
+
+    Le maillon qui manquait. Tout incident non apparie est `inconnue`, donc
+    BLOQUANT, et le registre livre ne porte aucun message SAP — il ne peut pas
+    en porter, personne n'en a observe. Sur un systeme reel, le premier
+    message d'erreur metier arrete donc le lot entier ; c'est le comportement
+    voulu, mais il ne laissait aucune sortie.
+    """
+
+    def _dossier(console: Console):
+        """Le dossier de dumps, ou None. Par defaut a cote d'un journal."""
+        chemin = demander_chemin(console, "dossier de dumps, ou journal JSONL")
+        if chemin is None:
+            return None
+        # On accepte le JOURNAL, parce que c'est le chemin que l'utilisateur a
+        # sous les yeux : les dumps sont ecrits a cote, dans « dumps ».
+        if chemin.is_file():
+            chemin = chemin.parent / "dumps"
+        if not chemin.is_dir():
+            console.ecrire(f"\n  {chemin} n'est pas un dossier de dumps.")
+            console.ecrire("  Aucun incident inconnu n'a donc bloque de lot.")
+            console.pause()
+            return None
+        return chemin
+
+    def inspecter(console: Console) -> str:
+        from falcon.taxonomie.recolte import dumps_de, lire_dump
+
+        console.titre("Incidents inconnus")
+        dossier = _dossier(console)
+        if dossier is None:
+            return CONTINUER
+
+        chemins = dumps_de(dossier)
+        if not chemins:
+            console.ecrire(f"\n  {dossier} ne porte aucun dump.")
+            console.ecrire("  Aucun incident inconnu n'a bloque de lot — "
+                           "c'est une bonne nouvelle.")
+            console.pause()
+            return CONTINUER
+
+        console.ecrire(f"\n  {len(chemins)} dump(s), du plus recent au plus "
+                       f"ancien.\n")
+        for chemin in chemins:
+            inconnu = lire_dump(chemin)
+            console.ecrire(f"  {chemin.name}")
+            console.ecrire(f"    item {inconnu.item_id or '?'}   "
+                           f"garde {inconnu.garde or '?'}   "
+                           f"canal {inconnu.canal}")
+            for cle, valeur in sorted(inconnu.detail.items()):
+                console.ecrire(f"      {cle:<12} {valeur!r}")
+            console.ecrire()
+        console.pause()
+        return CONTINUER
+
+    def proposer(console: Console) -> str:
+        from falcon.taxonomie.recolte import (
+            dumps_de, lire_dump, surcouche_proposee,
+        )
+
+        console.titre("Surcouche de registre proposee")
+        dossier = _dossier(console)
+        if dossier is None:
+            return CONTINUER
+
+        chemins = dumps_de(dossier)
+        if not chemins:
+            console.ecrire(f"\n  {dossier} ne porte aucun dump : rien a "
+                           f"proposer.")
+            console.pause()
+            return CONTINUER
+
+        texte = surcouche_proposee([lire_dump(c) for c in chemins])
+        console.ecrire()
+        for ligne in texte.splitlines():
+            console.ecrire(f"  {ligne}")
+
+        console.ecrire()
+        console.ecrire("  Ce qui a ete OBSERVE est rempli ; ce qui se DECIDE")
+        console.ecrire("  porte un marqueur, et le registre refuse de charger")
+        console.ecrire("  tant qu'il en reste un. Decider a ta place qu'un")
+        console.ecrire("  message est benin serait ecrire une regle de")
+        console.ecrire("  securite sur une seule observation.")
+
+        chemin = demander_chemin_neuf(console,
+                                      "enregistrer sous (vide : ne pas ecrire)")
+        if chemin is not None:
+            chemin.write_text(texte, encoding="utf-8")
+            console.ecrire(f"\n  {chemin}")
+        console.pause()
+        return CONTINUER
+
+    def registre_courant(console: Console) -> str:
+        from falcon.taxonomie import Registre, RegistreInvalide
+
+        console.titre("Registre en vigueur")
+        chemin = demander_chemin_facultatif(
+            console, "surcouche a joindre (facultatif, Entree pour aucune)")
+        try:
+            registre = (Registre.avec_surcouches(chemin) if chemin
+                        else Registre.charger())
+        except RegistreInvalide as erreur:
+            console.ecrire(f"\n  Refuse.\n\n  {erreur}")
+            console.pause()
+            return CONTINUER
+
+        entrees = registre.entrees
+        console.ecrire(f"\n  {len(entrees)} entree(s).\n")
+        for entree in entrees:
+            console.ecrire(f"  {entree.nom}")
+            console.ecrire(f"    {entree.categorie}   canal {entree.canal}   "
+                           f"origine {entree.origine}")
+            console.ecrire(f"    poursuivre {entree.politique.poursuivre}   "
+                           f"item {entree.politique.item}")
+        console.ecrire()
+        console.ecrire("  Aucune entree livree ne porte de message SAP : elles")
+        console.ecrire("  ne peuvent pas en porter, personne n'en a observe.")
+        console.pause()
+        return CONTINUER
+
+    return Menu(
+        titre="FALCON — taxonomie des incidents",
+        preambule=(
+            "Un incident que rien n'apparie est INCONNU, donc BLOQUANT, et il\n"
+            "laisse un dump a cote du journal. C'est de ce dump que sort\n"
+            "l'entree de registre qui le classera la prochaine fois.\n"
+            "\n"
+            "Rien ici n'ecrit dans SAP."),
+        entrees=(
+            Entree("1", "Voir les incidents inconnus", inspecter,
+                   "ce qui a bloque, et sur quelle signature"),
+            Entree("2", "Proposer la surcouche a completer", proposer,
+                   "le YAML a relire, completer, puis joindre a l'execution"),
+            Entree("3", "Voir le registre en vigueur", registre_courant,
+                   "ce qui est deja classe, livre et surcouche"),
+        ))
+
+
+# ---------------------------------------------------------------------------
+
 def racine(env: Environnement | None = None) -> Menu:
     env = env or Environnement()
     return Menu(
@@ -1502,6 +1704,8 @@ def racine(env: Environnement | None = None) -> Menu:
                    "variantes curees et quarantaine"),
             Entree("6", "Exports de table", ecran_volumique(env),
                    "conservation, delta contre le precedent, carte SE16N"),
-            Entree("7", "Session SAP", ecran_sap(env),
+            Entree("7", "Taxonomie des incidents", ecran_taxonomie(env),
+                   "inconnus bloquants, et les entrees de registre a ecrire"),
+            Entree("8", "Session SAP", ecran_sap(env),
                    "diagnostic de l'ecran courant, en lecture seule"),
         ))

@@ -106,9 +106,17 @@ class Adaptateur:
         if verdict.categorie == INCONNUE and self._dumps is not None:
             # Un inconnu est bloquant : on garde de quoi le comprendre, et
             # c'est ce dump qui fera entrer une entree dans le registre.
+            # La SIGNATURE, et pas seulement le detail : c'est elle que le
+            # registre apparie, donc elle seule permet d'ecrire une entree
+            # qui appariera reellement. La reconstruire depuis `detail` etait
+            # une conjecture, et une conjecture fausse — `garde` porte le nom
+            # de la garde, pas le canal.
             dump = str(ecrire_dump(self._dumps, {
                 "run_id": self._run_id, "item_id": self.item_id,
-                "garde": constat.garde, "detail": constat.detail}))
+                "garde": constat.garde,
+                "signature": (asdict(constat.signature)
+                              if constat.signature is not None else None),
+                "detail": constat.detail}))
         if self.item_id is not None:
             self.classements[self.item_id] = (verdict.categorie,
                                               verdict.entree or "")
