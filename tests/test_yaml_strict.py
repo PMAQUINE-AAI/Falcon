@@ -19,7 +19,7 @@ from __future__ import annotations
 import unittest
 
 from falcon.noyau.yaml_strict import (
-    YamlAmbigu, booleen, entier, liste_de_texte, lire, texte,
+    ABSENT, YamlAmbigu, booleen, entier, liste_de_texte, lire, texte,
 )
 
 
@@ -93,9 +93,18 @@ class TestTexte(unittest.TestCase):
         self.assertEqual(texte("007", "constante"), "007")
 
     def test_le_defaut_ne_vaut_que_pour_une_cle_ABSENTE(self):
-        """Ecrire la cle et ne rien mettre derriere n'est pas la meme chose
-        que ne pas l'ecrire : c'est une omission, et elle doit se voir."""
-        self.assertEqual(texte(None, "x", defaut="TODO"), "TODO")
+        """Ce test portait le bon nom et epinglait le contraire.
+
+        Il affirmait `texte(None, defaut="TODO") == "TODO"` sous une docstring
+        disant qu'ecrire la cle et ne rien mettre derriere « doit se voir ».
+        Or YAML rend `None` dans LES DEUX cas, et l'appelant ecrivait
+        `brute.get(cle)` : la distinction etait perdue avant l'accesseur, et
+        le test la declarait acquise.
+        """
+        self.assertEqual(texte(ABSENT, "x", defaut="TODO"), "TODO")
+        # La cle ECRITE et laissee vide est une omission, pas une valeur.
+        with self.assertRaises(YamlAmbigu):
+            texte(None, "x", defaut="TODO")
 
 
 class TestBooleen(unittest.TestCase):
@@ -119,7 +128,13 @@ class TestBooleen(unittest.TestCase):
         self.assertIs(booleen(False, "poursuivre"), False)
 
     def test_une_cle_absente_prend_le_defaut(self):
-        self.assertIs(booleen(None, "poursuivre", defaut=False), False)
+        self.assertIs(booleen(ABSENT, "poursuivre", defaut=False), False)
+
+    def test_une_cle_ECRITE_ET_VIDE_est_refusee(self):
+        """« sauvegarde: » suivi de rien valait False, sans un mot — sur la
+        cle meme qui decide si l'etape ecrit dans SAP."""
+        with self.assertRaises(YamlAmbigu):
+            booleen(None, "sauvegarde", defaut=False)
 
 
 class TestEntier(unittest.TestCase):
@@ -286,3 +301,80 @@ class TestSurLesLecteursReels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClefDupliquee(unittest.TestCase):
+    """PyYAML garde la DERNIERE occurrence, sans un mot.
+
+    Le geste qui produit ce fichier est le plus banal qui soit : dupliquer un
+    bloc pour en ecrire un second, et oublier d'en corriger une ligne.
+    """
+
+    def test_une_clef_ecrite_deux_fois_est_refusee(self):
+        with self.assertRaises(YamlAmbigu) as capture:
+            lire("plafond_items: 5\nplafond_items: 100000\n", "p.yaml")
+        message = str(capture.exception)
+        self.assertIn("deux fois", message)
+        self.assertIn("ligne 2", message)        # l'occurrence fautive
+        self.assertIn("ligne 1", message)        # et la premiere
+
+    def test_le_cas_mesure_le_plafond_multiplie_par_vingt_mille(self):
+        """`plafond_items` est le rayon d'action, decrit comme « obligatoire,
+        pas optionnel ». Une ligne recopiee le faisait passer de 5 a 100000."""
+        with self.assertRaises(YamlAmbigu):
+            lire("nom: t\nplafond_items: 5\nautre: 1\nplafond_items: 100000\n",
+                 "p.yaml")
+
+    def test_la_duplication_est_refusee_AUSSI_en_profondeur(self):
+        """Une etape est un mapping imbrique ; c'est la que `sauvegarde` vit."""
+        with self.assertRaises(YamlAmbigu):
+            lire("etapes:\n  - nom: e1\n    sauvegarde: true\n"
+                 "    sauvegarde: false\n", "p.yaml")
+
+    def test_deux_clefs_DIFFERENTES_passent(self):
+        self.assertEqual(lire("a: 1\nb: 2\n", "p.yaml"), {"a": 1, "b": 2})
+
+    def test_la_meme_clef_dans_DEUX_mappings_freres_passe(self):
+        """Deux etapes ont evidemment chacune leur `nom`."""
+        lu = lire("etapes:\n  - nom: e1\n  - nom: e2\n", "p.yaml")
+        self.assertEqual([e["nom"] for e in lu["etapes"]], ["e1", "e2"])
+
+
+class TestSexagesimalFlottant(unittest.TestCase):
+    """`SEXAGESIMAL` n'etait installe que sur l'entier.
+
+    L'en-tete du module annonce refuser « 12:30 » ; la moitie du cas passait.
+    """
+
+    def test_le_sexagesimal_flottant_est_refuse(self):
+        for brut in ("12:30.0", "1:2.5", "190:20:30.15", "-0:30.5"):
+            with self.subTest(valeur=brut):
+                with self.assertRaises(YamlAmbigu):
+                    lire(f"x: {brut}\n", "p.yaml")
+
+    def test_un_flottant_ordinaire_passe(self):
+        self.assertEqual(lire("x: 1.5\n", "p.yaml")["x"], 1.5)
+        self.assertEqual(lire("x: -0.25\n", "p.yaml")["x"], -0.25)
+
+
+class TestListeMapping(unittest.TestCase):
+
+    def test_un_mapping_n_est_pas_une_liste(self):
+        """`tuple({'site': 'division'})` rend `('site',)` — les CLEFS.
+
+        Applique a `cles`, ca fabrique des colonnes de clef a partir de la
+        moitie gauche d'un mapping, et l'`item_id` — donc toute la reprise —
+        est calcule dessus.
+        """
+        with self.assertRaises(YamlAmbigu):
+            liste_de_texte({"site": "division", "lot": "numero"}, "cles")
+
+    def test_un_ensemble_non_plus(self):
+        """L'ordre des clefs decide de l'`item_id` ; un `set` n'en a pas."""
+        with self.assertRaises(YamlAmbigu):
+            liste_de_texte({"site", "lot"}, "cles")
+
+    def test_une_vraie_liste_passe(self):
+        self.assertEqual(liste_de_texte(["site", "lot"], "cles"),
+                         ("site", "lot"))
+

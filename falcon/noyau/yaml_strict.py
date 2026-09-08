@@ -34,7 +34,8 @@ quelque chose, et c'est precisement ce qu'il ne faut pas ici.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Sequence
+from collections.abc import Hashable
+from typing import Any, Sequence
 
 import yaml
 
@@ -57,8 +58,74 @@ class YamlAmbigu(Exception):
     """
 
 
+class _Absent:
+    """La cle n'etait PAS ecrite. Distinct de la cle ecrite et laissee vide.
+
+    YAML rend `None` dans les deux cas, et `brute.get(cle)` acheve de les
+    confondre. Or ce sont deux intentions opposees : ne pas ecrire `sauvegarde`
+    est un choix de rediger court, l'ecrire et ne rien mettre derriere est une
+    phrase interrompue. Les accesseurs appliquent leur `defaut` au premier
+    seulement — le second est une omission, et se refuse.
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "<absent>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+#: Le temoin a passer a `mapping.get(cle, ABSENT)`.
+ABSENT = _Absent()
+
+
 class LecteurStrict(yaml.SafeLoader):
     """`SafeLoader`, moins les resolutions qui surprennent."""
+
+    def construct_mapping(self, noeud, deep=False):
+        """Refuse une cle ECRITE DEUX FOIS. PyYAML garde la derniere, en silence.
+
+        Le geste qui produit ce fichier est le plus banal qui soit : dupliquer
+        un bloc pour en ecrire un second, et oublier d'en changer une ligne.
+        Mesure avant ce refus, sur une pipeline valide par ailleurs :
+
+            plafond_items: 5     puis plafond_items: 100000  -> 100000
+            sauvegarde: true     puis sauvegarde: false      -> False
+            poursuivre: true     puis poursuivre: false      -> False
+
+        Le premier multiplie le rayon d'action par vingt mille, alors que
+        `chargeur` le decrit comme « obligatoire, pas optionnel ». Le dernier
+        est mot pour mot le defaut que `booleen` declare avoir corrige — « le
+        lot continuait a ecrire dans SAP » — reste atteignable par un autre
+        chemin.
+
+        Aucune des deux valeurs n'est la bonne a coup sur, donc on n'en choisit
+        aucune.
+        """
+        vus: dict[Any, int] = {}
+        for cle_noeud, _ in noeud.value:
+            try:
+                cle = self.construct_object(cle_noeud, deep=deep)
+                temoin = cle if isinstance(cle, Hashable) else repr(cle)
+            except Exception:                       # noqa: BLE001
+                temoin = getattr(cle_noeud, "value", None)
+            if temoin in vus:
+                raise YamlAmbigu(
+                    f"{_ou(cle_noeud)}, « {temoin} » : cle ecrite deux fois "
+                    f"(deja {_ou_ligne(vus[temoin])}). YAML garde la DERNIERE, "
+                    f"sans un mot — un bloc recopie et mal corrige suffit a "
+                    f"remplacer un plafond ou une sauvegarde. Aucune des deux "
+                    f"valeurs n'est la bonne a coup sur : n'en garde qu'une")
+            vus[temoin] = getattr(getattr(cle_noeud, "start_mark", None),
+                                  "line", -1)
+        return super().construct_mapping(noeud, deep)
 
 
 def _ou(noeud: yaml.Node) -> str:
@@ -71,6 +138,29 @@ def _ou(noeud: yaml.Node) -> str:
     """
     marque = getattr(noeud, "start_mark", None)
     return f"ligne {marque.line + 1}" if marque is not None else "?"
+
+
+def _ou_ligne(ligne: int) -> str:
+    return f"ligne {ligne + 1}" if ligne >= 0 else "plus haut"
+
+
+def _flottant_strict(lecteur: LecteurStrict, noeud: yaml.Node) -> float:
+    """Le pendant flottant de `_entier_strict`, et il manquait.
+
+    `SEXAGESIMAL` n'etait installe que sur `tag:yaml.org,2002:int`, si bien que
+    la moitie du cas que l'en-tete du module annonce refuser passait :
+
+        12:30    -> REFUS       12:30.0  -> 750.0
+                                1:2.5    -> 62.5
+
+    Un deux-points n'apparait dans aucun flottant legitime ; le chercher suffit
+    et ne peut pas se tromper.
+    """
+    if ":" in noeud.value:
+        raise YamlAmbigu(
+            f"{_ou(noeud)}, « {noeud.value} » : YAML le lit en base 60 — "
+            f"« 12:30.0 » vaut 750. Entre guillemets si c'est un texte")
+    return yaml.SafeLoader.construct_yaml_float(lecteur, noeud)
 
 
 def _entier_strict(lecteur: LecteurStrict, noeud: yaml.Node) -> int:
@@ -89,6 +179,7 @@ def _entier_strict(lecteur: LecteurStrict, noeud: yaml.Node) -> int:
 
 
 LecteurStrict.add_constructor("tag:yaml.org,2002:int", _entier_strict)
+LecteurStrict.add_constructor("tag:yaml.org,2002:float", _flottant_strict)
 
 
 def lire(brut: str, source: str) -> Any:
@@ -119,9 +210,17 @@ def texte(valeur: Any, quoi: str, *, source: str = "",
     `defaut` sert aux cles absentes. Une cle PRESENTE mais vide reste refusee :
     l'ecrire et ne rien mettre derriere est une omission, pas une valeur, et
     `str(None)` en ferait le texte « None ».
+
+    ET CE PARAGRAPHE ETAIT FAUX. Le test etait `valeur is None`, or YAML rend
+    `None` aussi bien pour la cle absente que pour la cle vide, et l'appelant
+    ecrivait `brute.get(cle)` — la distinction etait perdue avant meme d'entrer
+    ici. Le defaut s'appliquait donc aux deux, et « sauvegarde: » sans rien
+    derriere valait False sans un mot. Il faut passer `brute.get(cle, ABSENT)`.
     """
-    if valeur is None and defaut is not None:
-        return defaut
+    if valeur is ABSENT:
+        if defaut is not None:
+            return defaut
+        valeur = None
     if not isinstance(valeur, str):
         raise YamlAmbigu(
             f"{_situer(quoi, source)} doit etre une CHAINE, entre guillemets "
@@ -153,9 +252,14 @@ def booleen(valeur: Any, quoi: str, *, source: str = "",
     `bool()`. Un `poursuivre: non` — que YAML lit comme la CHAINE « non »,
     puisque « non » n'est pas un booleen YAML — valait donc True. L'entree
     disait « arrete le lot » et le lot continuait a ecrire dans SAP.
+
+    Meme correction que `texte` : le defaut ne vaut que pour la cle ABSENTE.
+    Ecrire « poursuivre: » et s'arreter la n'est pas declarer une valeur.
     """
-    if valeur is None and defaut is not None:
-        return defaut
+    if valeur is ABSENT:
+        if defaut is not None:
+            return defaut
+        valeur = None
     if not isinstance(valeur, bool):
         raise YamlAmbigu(
             f"{_situer(quoi, source)} doit etre `true` ou `false` "
@@ -173,10 +277,25 @@ def liste_de_texte(valeur: Any, quoi: str, *, source: str = "",
     nommees s, i, t et e. L'erreur ressortait bien plus loin, sous la forme
     d'une colonne absente du jeu de donnees — et accusait le fichier de
     donnees plutot que la pipeline.
+
+    Le type attendu est une LISTE, enumeree ici, et non « un iterable qui n'est
+    pas une chaine ». La formule precedente laissait passer trois choses :
+
+        cles: {site: division}   un mapping, dont `tuple()` rend les CLEFS
+        un `set`                 dont l'ordre n'existe pas, alors que l'ordre
+                                 des clefs decide de l'`item_id`, donc de la
+                                 reprise entiere
+        un generateur            consomme a la premiere lecture
+
+    Le mapping est le cas atteignable : `cles:` ecrit en bloc indente donnait
+    `('site', 'lot')` sans un mot. Enumerer ce qu'on accepte plutot que ce
+    qu'on refuse ferme la famille au lieu d'un membre.
     """
-    if valeur is None and defaut is not None:
-        return tuple(defaut)
-    if isinstance(valeur, str) or not isinstance(valeur, Iterable):
+    if valeur is ABSENT:
+        if defaut is not None:
+            return tuple(defaut)
+        valeur = None
+    if not isinstance(valeur, (list, tuple)):
         raise YamlAmbigu(
             f"{_situer(quoi, source)} doit etre une LISTE, entre crochets "
             f"(recu {valeur!r}). Un scalaire seul serait eclate caractere par "

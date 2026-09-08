@@ -92,6 +92,30 @@ class TestChargementValide(Base):
         pipeline = self._charger(VALIDE)
         self.assertEqual(pipeline.etapes[0].ecran, ("IA08", "RIPLKO10", "1000"))
 
+    def test_les_TROIS_composantes_de_l_ecran_exigent_une_chaine(self):
+        """Seul `dynpro` etait type ; les deux autres passaient par `str()`.
+
+        C'est l'operation que l'en-tete de `yaml_strict` designe comme
+        « precisement ce qu'il ne faut pas ici », employee a trois lignes du
+        commentaire qui l'interdit pour `dynpro`. Mesure avant correction :
+
+            transaction: on   -> ('True', 'RIPLKO10', '1000')
+            programme: 1.50   -> ('IA08', '1.5', '1000')
+
+        Le triplet est ce que la garde d'identite compare a CHAQUE etape.
+        """
+        for cle, avant, apres in (("transaction", "transaction: IA08",
+                                   "transaction: on"),
+                                  ("programme", "programme: RIPLKO10",
+                                   "programme: 1.50"),
+                                  ("dynpro", 'dynpro: "1000"',
+                                   "dynpro: 1000")):
+            with self.subTest(composante=cle):
+                self.assertIn(avant, VALIDE, "l'ancre du test n'a pas mordu")
+                with self.assertRaises(PipelineInvalide) as capture:
+                    self._charger(VALIDE.replace(avant, apres))
+                self.assertIn(f"ecran.{cle}", str(capture.exception))
+
     def test_la_source_est_typee(self):
         source = self._charger(VALIDE).etapes[0].source
         self.assertEqual((source.genre, source.valeur), ("colonne", "site"))

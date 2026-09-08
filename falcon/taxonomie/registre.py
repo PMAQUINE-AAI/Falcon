@@ -36,7 +36,7 @@ from typing import Any, Iterable, Sequence
 import yaml
 
 from falcon.noyau.yaml_strict import (
-    YamlAmbigu, booleen, texte,
+    ABSENT, YamlAmbigu, booleen, texte,
 )
 from falcon.noyau.yaml_strict import lire as lire_yaml
 
@@ -524,10 +524,10 @@ def _construire(brute: dict[str, Any], chemin: Path) -> Entree:
     # chaine non vide vaut vrai. Une entree qui disait « arrete le lot »
     # laissait donc le lot continuer a ecrire dans SAP.
     politique = Politique(
-        poursuivre=_exiger_booleen(politique_brute.get("poursuivre"),
+        poursuivre=_exiger_booleen(politique_brute.get("poursuivre", ABSENT),
                                    "politique.poursuivre", chemin, nom),
         item=politique_brute.get("item"),
-        arreter_chaine=_exiger_booleen(politique_brute.get("arreter_chaine"),
+        arreter_chaine=_exiger_booleen(politique_brute.get("arreter_chaine", ABSENT),
                                        "politique.arreter_chaine", chemin, nom),
     )
 

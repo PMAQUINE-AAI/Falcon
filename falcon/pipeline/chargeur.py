@@ -21,7 +21,7 @@ from typing import Any
 import yaml
 
 from falcon.noyau.yaml_strict import (
-    YamlAmbigu, booleen, liste_de_texte, texte,
+    ABSENT, YamlAmbigu, booleen, liste_de_texte, texte,
 )
 from falcon.noyau.yaml_strict import lire as lire_yaml
 
@@ -107,8 +107,16 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
         raise _refus(source, f"version {contenu.get('version')!r}, "
                              f"attendu {VERSION}")
 
-    nom = contenu.get("nom")
-    if not nom:
+    # Le nom part dans `ExecutionDebut.pipeline`, donc dans le journal, donc
+    # dans le rapport. Il n'etait soumis a aucun controle de type : `nom: on`
+    # donnait `True`, et `nom: 2026-09-07` un `datetime.date` — que le journal
+    # ne sait pas serialiser en JSON, si bien que le lot tombait a la PREMIERE
+    # ecriture du journal, c'est-a-dire apres la connexion a SAP.
+    try:
+        nom = texte(contenu.get("nom", ABSENT), "nom", source=source)
+    except YamlAmbigu as erreur:
+        raise PipelineInvalide(str(erreur)) from None
+    if not nom.strip():
         raise _refus(source, "pipeline sans nom")
 
     classe = contenu.get("classe")
@@ -119,7 +127,7 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
     # s, i, t et e. L'erreur ressortait bien plus loin, au moment de lire le
     # jeu — et accusait le fichier de donnees plutot que la pipeline.
     try:
-        cles = liste_de_texte(contenu.get("cles"), "cles", source=source,
+        cles = liste_de_texte(contenu.get("cles", ABSENT), "cles", source=source,
                               defaut=())
     except YamlAmbigu as erreur:
         raise PipelineInvalide(str(erreur)) from None
@@ -190,7 +198,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
     # Meme piege sur `nom` : une etape nommee `True` n'est designable par
     # aucune derogation, qui s'y refere par son nom.
     try:
-        nom = texte(brute.get("nom"), "nom", source=source, defaut="")
+        nom = texte(brute.get("nom", ABSENT), "nom", source=source, defaut="")
     except YamlAmbigu as erreur:
         raise _refus(source, str(erreur).split(" : ", 1)[-1], rang) from None
 
@@ -206,7 +214,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
                      rang, nom)
 
     try:
-        cible = texte(brute.get("cible"), "cible", source=source, defaut="")
+        cible = texte(brute.get("cible", ABSENT), "cible", source=source, defaut="")
     except YamlAmbigu as erreur:
         raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
     if action in AVEC_CIBLE and not cible:
@@ -261,7 +269,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
     # supprimer l'ecran, alors que la faute est le « non ». Le refus doit
     # nommer la vraie faute, sinon il envoie corriger la mauvaise.
     try:
-        libre = booleen(brute.get("navigation_libre"), "navigation_libre",
+        libre = booleen(brute.get("navigation_libre", ABSENT), "navigation_libre",
                         source=source, defaut=False)
     except YamlAmbigu as erreur:
         raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
@@ -285,7 +293,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         # Meme piege que `cles` : « wnd[0] » en scalaire donnait six fenetres
         # attendues nommees w, n, d, [, 0 et ]. La fenetre principale n'etait
         # alors plus attendue, et la garde 3 la traitait en intruse.
-        fenetres = liste_de_texte(brute.get("fenetres"), "fenetres",
+        fenetres = liste_de_texte(brute.get("fenetres", ABSENT), "fenetres",
                                   source=source, defaut=("wnd[0]",))
         # Declarer la cle et ne rien mettre derriere donnait None, c'est-a-dire
         # exactement le meme resultat que ne pas la declarer : la garde 2
@@ -294,7 +302,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         statut = brute.get("statut_attendu")
         if "statut_attendu" in brute:
             statut = texte(statut, "statut_attendu", source=source)
-        sauvegarde = booleen(brute.get("sauvegarde"), "sauvegarde",
+        sauvegarde = booleen(brute.get("sauvegarde", ABSENT), "sauvegarde",
                              source=source, defaut=False)
         repli = brute.get("defaut")
         if "defaut" in brute:
@@ -393,13 +401,27 @@ def _ecran(brute: Any, source: str, rang: int, nom: str
     # YAML lit `0100` comme de l'octal et en fait 64, ce qui corrompt le
     # dynpro sans que rien ne leve — la garde d'identite comparerait ensuite
     # contre un numero d'ecran qui n'existe pas.
-    if not isinstance(brute["dynpro"], str):
-        raise _refus(source,
-                     f"`ecran.dynpro` doit etre une CHAINE, entre guillemets "
-                     f"(recu {brute['dynpro']!r}). Sans eux, YAML lit "
-                     f"« 0100 » comme de l'octal et en fait 64", rang, nom)
-    return (str(brute["transaction"]), str(brute["programme"]),
-            brute["dynpro"])
+    #
+    # LES TROIS COMPOSANTES, pas seulement le dynpro. Les deux autres
+    # passaient par `str()` a trois lignes de ce commentaire, c'est-a-dire par
+    # l'operation exacte que l'en-tete de `yaml_strict` designe comme
+    # « precisement ce qu'il ne faut pas ici ». Mesure avant correction :
+    #
+    #     transaction: on    -> ('True', ...)     la garde d'identite compare
+    #                                             ensuite contre « True »
+    #     programme: 1.50    -> ('1.5', ...)
+    #
+    # C'est le triplet que la garde d'identite compare a chaque etape : une
+    # composante fabriquee ne leve pas, elle fait echouer la comparaison sur
+    # un ecran par ailleurs correct — ou, pire, la fait reussir ailleurs.
+    for composante in ("transaction", "programme", "dynpro"):
+        if not isinstance(brute[composante], str):
+            raise _refus(source,
+                         f"`ecran.{composante}` doit etre une CHAINE, entre "
+                         f"guillemets (recu {brute[composante]!r}). Sans eux, "
+                         f"YAML lit « 0100 » comme de l'octal et en fait 64, "
+                         f"et « on » comme un booleen", rang, nom)
+    return (brute["transaction"], brute["programme"], brute["dynpro"])
 
 
 def _derogations(brute: Any, source: str, rang: int, nom: str
