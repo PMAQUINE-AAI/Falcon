@@ -13,11 +13,17 @@ ailleurs.
 
     python outils/neutraliser.py
 
-Rend 0 si les sept gardes sont detectees, 1 sinon.
+Rend 0 si toutes les gardes de `CIBLES` sont detectees, 1 sinon.
 
-Cinq gardent une SESSION SAP ouverte (§5). Deux gardent la REPRISE, un moment
-ou aucun driver n'existe et ou une garde qui cede fait rejouer un item que SAP
-a peut-etre deja enregistre.
+Le compte n'est pas ecrit ici : il se lit dans `CIBLES`, et le rapport
+l'imprime. Un chiffre recopie dans une docstring se perime au premier ajout —
+celui-ci disait « sept » quand le code en verifiait huit, ce qui est
+exactement le genre d'affirmation que cet outil existe pour empecher.
+
+Cinq gardent une SESSION SAP ouverte (§5). Les autres gardent des moments ou
+aucun driver n'existe — la REPRISE, et la repetition a blanc prealable — et
+ou une garde qui cede fait rejouer un item que SAP a peut-etre deja
+enregistre.
 """
 
 from __future__ import annotations

@@ -101,6 +101,23 @@ class TestLecture(unittest.TestCase):
                     lire(self._poser("j.jsonl", brut))
                 self.assertIn("CHAINE", str(capture.exception))
 
+    def test_un_caractere_que_JSON_autorise_ne_coupe_pas_la_ligne(self):
+        """`splitlines()` coupe sur U+0085 et U+2028, que JSON autorise BRUTS
+        a l'interieur d'une chaine.
+
+        Un jeu parfaitement valide etait donc refuse, avec un message qui
+        envoie chercher un guillemet manquant. JSONL est defini ligne par
+        ligne, et la ligne y est le saut de ligne — pas « tout ce que Python
+        considere comme une fin de ligne ».
+        """
+        for nom, caractere in (("U+0085", "\u0085"), ("U+2028", "\u2028")):
+            with self.subTest(caractere=nom):
+                chemin = self._poser(
+                    "j.jsonl",
+                    ('{"site":"Poste' + caractere + 'Est"}\n').encode("utf-8"))
+                lignes, _ = lire(chemin)
+                self.assertEqual(lignes[0]["site"], "Poste" + caractere + "Est")
+
     def test_une_clef_JSON_ecrite_deux_fois_est_refusee(self):
         """`json.loads` garde la DERNIERE, comme PyYAML et comme DictReader
         sur deux colonnes homonymes. Les deux autres etaient deja refuses."""

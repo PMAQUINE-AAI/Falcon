@@ -89,9 +89,22 @@ def _liste(feuille, colonne: str, valeurs, message: str,
     """
     from openpyxl.worksheet.datavalidation import DataValidation
 
+    # `showErrorMessage` et `showInputMessage` doivent etre POSES.
+    #
+    # Ils valent 0 par defaut, et `openpyxl` ne les leve pas quand on
+    # renseigne `error`/`prompt` : le XML sortait avec
+    # `showErrorMessage="0" showInputMessage="0"`, donc l'aide ne s'affichait
+    # jamais et une valeur hors liste etait ACCEPTEE sans alerte. Seule la
+    # fleche de la liste subsistait.
+    #
+    # C'est la seule documentation qui vive DANS la feuille — « constante :
+    # ecrite ici, ENTRE CROCHETS », « pas VRAI/FAUX », « zeros:18 » — et elle
+    # etait invisible. La justification de `allow_blank` ci-dessus decrivait
+    # meme un reglage dont l'effet n'existait pas.
     validation = DataValidation(
         type="list", formula1='"' + ",".join(valeurs) + '"',
-        allow_blank=True, showDropDown=False)
+        allow_blank=True, showDropDown=False,
+        showErrorMessage=True, showInputMessage=True)
     validation.error = message
     validation.errorTitle = "Valeur hors liste"
     validation.prompt = message

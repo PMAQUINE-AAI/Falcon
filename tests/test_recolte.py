@@ -171,6 +171,35 @@ class TestLectureDUnDump(unittest.TestCase):
         self.assertEqual(inconnu.canal, "com")
         self.assertEqual(inconnu.correspondance, {"exception": "SessionPerdue"})
 
+    def test_deux_dumps_du_MEME_incident_ne_font_qu_une_entree(self):
+        """Relancer un lot est le geste que ce module decrit lui-meme, et
+        chaque relance produit un dump du meme incident.
+
+        Sans dedoublonnage, la surcouche portait deux entrees identiques, et
+        le registre la refusait en annoncant qu'elles « peuvent apparier la
+        meme signature » — un message qui parle d'ambiguite et pas de
+        doublon. Meme completee soigneusement, elle etait inutilisable.
+        """
+        signature = {"canal": "statut", "id": "IW", "numero": "010",
+                     "type": "E", "texte": "Equipement inexistant"}
+        inconnus = [lire_dump(_dump(self.racine, f"{rang}.json",
+                                    horodatage="2026-09-08T10:00:00Z",
+                                    garde="statut", signature=signature,
+                                    detail={}))
+                    for rang in ("a", "b", "c")]
+        texte = surcouche_proposee(inconnus)
+        self.assertEqual(texte.count("- nom:"), 1)
+
+    def test_deux_incidents_DIFFERENTS_font_deux_entrees(self):
+        inconnus = [
+            lire_dump(_dump(self.racine, f"{numero}.json",
+                            horodatage="2026-09-08T10:00:00Z", garde="statut",
+                            signature={"canal": "statut", "id": "IW",
+                                       "numero": numero, "type": "E"},
+                            detail={}))
+            for numero in ("010", "061")]
+        self.assertEqual(surcouche_proposee(inconnus).count("- nom:"), 2)
+
     def test_les_dumps_sortent_du_plus_recent_au_plus_ancien(self):
         _dump(self.racine, "2026-09-08T10-00-00Z_a.json", garde="x", detail={})
         _dump(self.racine, "2026-09-08T11-00-00Z_b.json", garde="x", detail={})

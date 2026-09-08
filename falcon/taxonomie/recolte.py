@@ -275,8 +275,29 @@ def entree_proposee(inconnu: Inconnu) -> str:
     return "\n".join(lignes)
 
 
+def _sans_doublon(inconnus: list[Inconnu]) -> list[Inconnu]:
+    """Un incident par SIGNATURE, pas un par dump.
+
+    Relancer un lot est le geste que ce module decrit lui-meme : chaque
+    relance produit un dump du meme incident. Sans dedoublonnage, la surcouche
+    portait deux entrees identiques — meme nom, meme correspondance — et le
+    registre la refusait en annoncant qu'elles « peuvent apparier la meme
+    signature », un message qui parle d'ambiguite et pas de doublon.
+
+    Meme completee soigneusement, la surcouche etait donc inutilisable. On
+    garde le PLUS RECENT de chaque signature : c'est celui dont le libelle
+    observe est le plus a jour.
+    """
+    vus: dict[tuple, Inconnu] = {}
+    for inconnu in inconnus:
+        clef = (inconnu.canal, tuple(sorted(inconnu.correspondance.items())))
+        vus.setdefault(clef, inconnu)
+    return list(vus.values())
+
+
 def surcouche_proposee(inconnus: list[Inconnu]) -> str:
     """Un fichier de surcouche complet, pret a etre enregistre puis complete."""
+    inconnus = _sans_doublon(inconnus)
     entete = [
         "# Surcouche de registre proposee par FALCON.",
         "#",

@@ -17,6 +17,7 @@ une regle change d'un cote seulement.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -297,25 +298,29 @@ def convertir_fichiers(dossier: str | Path, sortie: str | Path) -> Path:
     texte = convertir(dossier)
     sortie = Path(sortie)
 
-    # On relit depuis un fichier TEMPORAIRE, a cote de la sortie : `charger()`
-    # lit un chemin, et l'empreinte se calcule sur le texte integral — donc le
-    # texte relu doit etre exactement celui qu'on ecrira, aux octets pres.
-    provisoire = sortie.with_name(sortie.name + ".relecture")
-    provisoire.parent.mkdir(parents=True, exist_ok=True)
-    provisoire.write_text(texte, encoding="utf-8", newline="\n")
-    try:
-        charger(provisoire)
-    except PipelineInvalide as erreur:
-        # Le message du chargeur, mais situe : sans ca, il envoie corriger un
-        # fichier qui n'existe pas encore et que personne n'a ecrit a la main.
-        detail = str(erreur).replace(str(provisoire), "le YAML produit")
-        raise TableurInvalide(
-            f"les CSV de {dossier} produisent un YAML que FALCON refuse, "
-            f"donc RIEN n'a ete ecrit :\n\n  {detail}\n\n"
-            f"Le YAML produit, pour situer :\n\n"
-            + "\n".join(f"  {l}" for l in texte.splitlines())) from None
-    finally:
-        provisoire.unlink(missing_ok=True)
+    # On relit depuis un fichier temporaire du SYSTEME, pas a cote de la
+    # sortie.
+    #
+    # `charger()` lit un chemin, et l'empreinte se calcule sur le TEXTE
+    # integral — le chemin n'y entre pas — donc relire d'ailleurs ne change
+    # rien a ce qui sera ecrit. Ecrire a cote, en revanche, obligeait a creer
+    # l'arborescence de sortie AVANT de savoir si le YAML tient : un refus
+    # annoncant « RIEN n'a ete ecrit » laissait des repertoires derriere lui.
+    with tempfile.TemporaryDirectory() as bac:
+        provisoire = Path(bac) / "relecture.yaml"
+        provisoire.write_text(texte, encoding="utf-8", newline="\n")
+        try:
+            charger(provisoire)
+        except PipelineInvalide as erreur:
+            # Le message du chargeur, mais situe : sans ca, il envoie corriger
+            # un fichier qui n'existe pas et que personne n'a ecrit a la main.
+            detail = str(erreur).replace(str(provisoire), "le YAML produit")
+            raise TableurInvalide(
+                f"les CSV de {dossier} produisent un YAML que FALCON refuse, "
+                f"donc RIEN n'a ete ecrit :\n\n  {detail}\n\n"
+                f"Le YAML produit, pour situer :\n\n"
+                + "\n".join(f"  {l}" for l in texte.splitlines())) from None
 
+    sortie.parent.mkdir(parents=True, exist_ok=True)
     sortie.write_text(texte, encoding="utf-8", newline="\n")
     return sortie

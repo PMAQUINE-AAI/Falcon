@@ -1168,6 +1168,27 @@ class TestGardeDeLaRepetition(Base):
                     garde_de_la_repetition(self.journal, "AAAA", "JJJJ", mode,
                                            False, "")
 
+    def test_un_jeu_SANS_ITEM_ne_fonde_aucun_lot(self):
+        """« Un lot qui semble passer et n'a rien fait, ce qui est le pire des
+        resultats » — la phrase est de ce depot, et rien ne refusait ce cas.
+
+        Un export SAP qui n'a rien ramene laisse un fichier reduit a son
+        en-tete. La repetition annoncait « termine », la production aussi, et
+        cette repetition qui n'avait rien exerce SATISFAISAIT la garde 5.5 :
+        elle autorisait un run sur un jeu rempli entre-temps, sans que rien
+        n'ait jamais ete repete.
+        """
+        self.jeu.write_text("site,libelle\n", encoding="utf-8")
+        for mode in (DRY_RUN, RUN):
+            with self.subTest(mode=mode):
+                brut = self._driver()
+                with self.assertRaises(PreparationImpossible) as capture:
+                    executer(self._pipeline(), self.jeu, brut,
+                             journal=self.journal, registre=self.registre,
+                             mode=mode, **SANS_REPETITION)
+                self.assertIn("aucun item", str(capture.exception))
+                self.assertEqual(brut.gestes, [])
+
     def test_la_repetition_a_blanc_n_est_PAS_refusee_sur_un_douteux(self):
         """Elle n'ecrit rien : `_avant_sauvegarde` leve avant toute
         sauvegarde. Lui refuser un item douteux interdisait d'essayer sans

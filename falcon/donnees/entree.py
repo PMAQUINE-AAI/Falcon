@@ -239,8 +239,20 @@ def _lire_jsonl(chemin: Path) -> tuple[list[dict[str, Any]], Dialecte]:
     texte, encodage, bom = _decoder(chemin.read_bytes())
     fin_de_ligne = "\r\n" if "\r\n" in texte else "\n"
 
+    # `split("\n")`, pas `splitlines()`.
+    #
+    # `splitlines()` coupe sur U+0085 et U+2028, que JSON autorise BRUTS a
+    # l'interieur d'une chaine. Un jeu parfaitement valide etait donc refuse,
+    # avec un message qui envoie chercher un guillemet manquant :
+    #
+    #     "Poste\x85Est"  ->  Unterminated string starting at: line 1 column 28
+    #
+    # JSONL est defini ligne par ligne, et la ligne y est le saut de ligne —
+    # pas « tout ce que Python considere comme une fin de ligne ». Le chemin
+    # CSV n'a pas ce defaut parce que le module `csv` decoupe lui-meme.
     lignes = []
-    for rang, brute in enumerate(texte.splitlines(), start=1):
+    for rang, brute in enumerate(texte.replace("\r\n", "\n").split("\n"),
+                                 start=1):
         if not brute.strip():
             continue
         try:

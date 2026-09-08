@@ -452,6 +452,25 @@ class TestColonnesEtProprietes(Base):
             convertir(self.racine)
         self.assertIn("rayon d'action", str(capture.exception))
 
+    def test_un_CSV_entierement_vide_est_REFUSE_et_pas_une_trace_de_pile(self):
+        """`splitlines()[0]` levait une `IndexError` nue, que la commande
+        n'attrape pas. Un fichier vide est un cas banal : la macro n'a pas
+        tourne, ou le dossier n'est pas celui qu'on croit."""
+        self._poser(CSV_ETAPES, "")
+        with self.assertRaises(TableurInvalide) as capture:
+            convertir(self.racine)
+        self.assertIn("vide", str(capture.exception))
+
+    def test_un_refus_ne_laisse_NI_fichier_NI_repertoire(self):
+        """Le refus annonce « RIEN n'a ete ecrit » ; l'arborescence de sortie
+        etait pourtant creee avant la relecture."""
+        self._etapes(f"10;a;sauter;wnd[0]/usr/c;{ECRAN};;;;;;non;;;")
+        neuf = self.racine / "neuf" / "sous"
+        with self.assertRaises(TableurInvalide):
+            convertir_fichiers(self.racine, neuf / "p.yaml")
+        self.assertFalse((self.racine / "neuf").exists(),
+                         "un repertoire subsiste apres un refus")
+
     def test_une_feuille_d_etapes_VIDE_est_refusee(self):
         self._poser(CSV_ETAPES, ENTETE)
         with self.assertRaises(TableurInvalide) as capture:
@@ -655,6 +674,31 @@ class TestLeClasseurLivre(unittest.TestCase):
                          ["saisir_site", "saisir_variante",
                           "saisir_equipement", "sauver"])
         self.assertTrue(pipeline.etapes[-1].sauvegarde)
+
+    def test_les_listes_deroulantes_AFFICHENT_leur_aide_et_leur_refus(self):
+        """`showErrorMessage` et `showInputMessage` valent 0 par defaut, et
+        `openpyxl` ne les leve pas quand on renseigne `error`/`prompt`.
+
+        Le XML sortait donc avec les deux a « 0 » : l'aide ne s'affichait
+        jamais, et une valeur hors liste etait ACCEPTEE sans alerte. Seule la
+        fleche subsistait. C'est la seule documentation qui vive DANS la
+        feuille — « ENTRE CROCHETS », « pas VRAI/FAUX », « zeros:18 » — et
+        elle etait invisible.
+        """
+        import re
+        import zipfile
+
+        archive = zipfile.ZipFile(self.CLASSEUR)
+        validations = [m.group(0)
+                       for nom in archive.namelist()
+                       if nom.startswith("xl/worksheets/")
+                       for m in re.finditer(r"<dataValidation [^>]*>",
+                                            archive.read(nom).decode())]
+        self.assertTrue(validations, "aucune liste deroulante")
+        for balise in validations:
+            with self.subTest(validation=balise[:60]):
+                self.assertIn('showErrorMessage="1"', balise)
+                self.assertIn('showInputMessage="1"', balise)
 
     def test_la_macro_ne_VALIDE_rien(self):
         """La parade au VBA non teste est architecturale : le garder bete.

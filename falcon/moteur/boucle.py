@@ -187,8 +187,10 @@ def _verifier_coherence(pipeline: Pipeline, items: list[Item],
                         colonnes: tuple[str, ...] = ()) -> None:
     """Tout ce qui se verifie AVANT de toucher a SAP.
 
-    Trois controles, et les trois tombent a la preparation plutot qu'a l'item
-    quarante — c'est-a-dire avant qu'une seule ecriture ait eu lieu.
+    Ils tombent TOUS a la preparation plutot qu'a l'item quarante —
+    c'est-a-dire avant qu'une seule ecriture ait eu lieu. Leur nombre n'est
+    pas ecrit ici : il a dit « trois » alors qu'ils etaient quatre, et un
+    compte recopie se perime au premier ajout.
     """
     # Controle 0 : la pipeline lit-elle des colonnes que le jeu porte ?
     #
@@ -407,6 +409,28 @@ def executer(pipeline: Pipeline,
     run_id = uuid.uuid4().hex[:16]
     chemin_journal = Path(journal)
     deja = 0
+
+    # Un jeu SANS ITEM ne fonde aucun lot.
+    #
+    # « Un lot qui semble passer et n'a rien fait, ce qui est le pire des
+    # resultats » — la phrase est de ce depot, et rien ne refusait ce cas. Un
+    # export SAP qui n'a rien ramene laisse un fichier reduit a son en-tete ;
+    # la repetition a blanc annoncait alors « termine », et la production
+    # aussi, avec des compteurs a zero que personne ne relit.
+    #
+    # Pire : cette repetition qui n'a rien exerce SATISFAISAIT la garde 5.5.
+    # Elle autorisait donc un run sur un jeu rempli entre-temps, sans que rien
+    # n'ait jamais ete repete.
+    #
+    # Le cas symetrique — une pipeline sans etape — est deja refuse par le
+    # convertisseur ; celui-ci ne l'etait nulle part.
+    if not items:
+        raise PreparationImpossible(
+            f"{jeu} ne porte aucun item. Un lot qui se termine sans rien "
+            f"faire ressemble a un lot qui a reussi : c'est le pire des "
+            f"resultats. Verifie que l'export a bien ramene des lignes, et "
+            f"que les colonnes de clef {list(pipeline.cles)} sont celles du "
+            f"fichier")
 
     if mode in (RUN, DRY_RUN):
         _refuser_les_douteux_du_journal(chemin_journal, items, mode)

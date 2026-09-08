@@ -117,11 +117,20 @@ def lire_feuille(chemin: str | Path, colonnes: tuple[str, ...]) -> Feuille:
         raise TableurInvalide(f"{chemin} est introuvable")
 
     texte = _decoder(chemin.read_bytes())
+    lignes = texte.splitlines()
+    if not lignes:
+        # `splitlines()[0]` levait une `IndexError` NUE, que `_composer`
+        # n'attrape pas : une trace de pile la ou l'utilisateur attend un
+        # refus situe. Un fichier vide est un cas banal — la macro n'a pas
+        # tourne, ou le dossier n'est pas celui qu'on croit.
+        raise TableurInvalide(
+            f"{chemin} est vide. Attendu au moins la ligne d'en-tete : "
+            f"{list(colonnes)}")
+
     # Excel francais ecrit `;`. Le renifleur de `donnees` ne convient pas ici :
     # les cibles SAP sont pleines de `[`, `]` et `/`, et une feuille a une
     # seule colonne remplie ne donne aucun indice.
-    delimiteur = ";" if texte.splitlines()[0].count(";") >= \
-        texte.splitlines()[0].count(",") else ","
+    delimiteur = ";" if lignes[0].count(";") >= lignes[0].count(",") else ","
 
     lecteur = csv.DictReader(io.StringIO(texte), delimiter=delimiteur)
     entete = tuple(lecteur.fieldnames or ())
@@ -199,10 +208,6 @@ def valeur_sap(brute: str, quoi: str, feuille: Feuille,
     return brute[1:-1]
 
 
-def est_encadree(brute: str) -> bool:
-    return brute.startswith("[") and brute.endswith("]")
-
-
 # ---------------------------------------------------------------------------
 # L'ecran
 # ---------------------------------------------------------------------------
@@ -274,12 +279,9 @@ def verifier_rangs(feuille: Feuille) -> None:
 def lire_liste(brute: str) -> list[str]:
     """Une cellule qui porte plusieurs valeurs, separees par des virgules.
 
-    Employe pour `fenetres` et pour `format`. Une cellule vide rend une liste
-    vide, jamais `[""]` : une fenetre nommee « » serait attendue et jamais
-    trouvee.
+    Employe pour `cles`, `fenetres` et `format`. Une cellule vide rend une
+    liste vide, jamais `[""]` : une fenetre nommee « » serait attendue et
+    jamais trouvee, et une colonne de clef nommee « » ferait un `item_id`
+    calcule sur rien.
     """
     return [m.strip() for m in brute.split(",") if m.strip()]
-
-
-def texte_ou_defaut(valeur: Any, defaut: str = "") -> str:
-    return valeur.strip() if isinstance(valeur, str) else defaut
