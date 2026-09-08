@@ -135,6 +135,36 @@ def lire_feuille(chemin: str | Path, colonnes: tuple[str, ...]) -> Feuille:
             f"{list(colonnes)}. Une colonne mal orthographiee serait ignoree, "
             f"et l'etape ferait autre chose que ce que la feuille montre")
 
+    # EXACTEMENT celles attendues — ce que cette docstring promettait, et que
+    # le seul controle ci-dessus ne donnait pas : il verifiait l'inclusion,
+    # pas l'egalite.
+    #
+    # Une colonne SUPPRIMEE etait donc acceptee, et sa valeur valait le defaut
+    # partout. Mesure : `sauvegarde` retiree, l'etape `sauver` chargeait avec
+    # `sauvegarde=False`. Le contrat n'annoncait plus la sauvegarde imminente,
+    # donc l'etat `douteux` cessait d'exister — et un item interrompu apres
+    # une sauvegarde repartait a la reprise. Double ecriture, par une colonne
+    # absente. Meme famille pour `defaut` (champ vide au lieu du repli) et
+    # `statut_attendu` (garde 2 muette).
+    manquantes = [c for c in colonnes if c not in set(entete)]
+    if manquantes:
+        raise TableurInvalide(
+            f"{chemin} : colonne(s) absente(s) {manquantes}. Elles vaudraient "
+            f"leur defaut partout, sans un mot — une colonne `sauvegarde` "
+            f"absente fait une pipeline qui n'annonce plus ses sauvegardes, "
+            f"donc des items interrompus qu'on rejoue")
+
+    # Une colonne DUPLIQUEE : `DictReader` garde la DERNIERE, donc la valeur
+    # de la premiere est perdue. C'est mot pour mot ce que `donnees/entree.py`
+    # refuse du cote jeu de donnees, et pour la meme raison — sauf qu'ici la
+    # valeur perdue est une CIBLE : la saisie partirait dans un autre champ
+    # SAP que celui que la feuille montre en premiere position.
+    doublons = sorted({c for c in entete if entete.count(c) > 1})
+    if doublons:
+        raise TableurInvalide(
+            f"{chemin} : colonne(s) en double {doublons}. La valeur de la "
+            f"premiere serait perdue au profit de la seconde, sans erreur")
+
     feuille = Feuille(fichier=str(chemin))
     for rang, cellules in enumerate(lecteur, start=2):      # 1 = l'en-tete
         if all(not (v or "").strip() for v in cellules.values()):

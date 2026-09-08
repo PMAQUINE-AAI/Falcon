@@ -240,12 +240,16 @@ def _derogations(chemin: Path, noms: list[str]) -> dict[str, list[dict[str, str]
             raise feuille.situer(
                 ligne, f"`portee` {portee!r} : attendu {PORTEE_TOTALE!r} ou "
                        f"« etape:<nom> »")
-        if portee.startswith("etape:") and portee[len("etape:"):] not in noms:
+        if portee.startswith("etape:") and portee[len("etape:"):] != etape:
+            vise = portee[len("etape:"):]
+            raison = ("une etape inconnue" if vise not in noms
+                      else f"l'etape {vise!r}, pas {etape!r}")
             raise feuille.situer(
                 ligne,
-                f"`portee` {portee!r} designe une etape inconnue. Etapes "
-                f"declarees : {noms}. Le chargeur ne verifie que le prefixe : "
-                f"cette derogation serait ACCEPTEE et ne couvrirait rien")
+                f"`portee` {portee!r} designe {raison}. Une derogation ne peut "
+                f"porter que sur SON etape ou sur {PORTEE_TOTALE!r} : visant "
+                f"une autre, elle ne couvrirait rien — la garde resterait "
+                f"armee, et le journal annoncerait pourtant « derogee »")
 
         par_etape.setdefault(etape, []).append(
             {"garde": garde, "portee": portee, "motif": motif})

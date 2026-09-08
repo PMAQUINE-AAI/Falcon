@@ -134,6 +134,20 @@ class Contrat:
                            {"etape": self.nom, "attendues": elargies}))
 
         for derogation in self.derogations:
+            # Ce qui est TRACE doit etre ce qui S'APPLIQUE.
+            #
+            # La boucle ecrivait « derogee » pour chaque derogation portee par
+            # l'etape, sans consulter `portee` — alors que `derogation_pour`,
+            # elle, la consulte. Une derogation visant une autre etape faisait
+            # donc ecrire au journal qu'une garde etait relachee pendant
+            # qu'elle restait armee : le journal disait le contraire de ce qui
+            # se passait, sur la ligne meme qu'un humain relit pour savoir
+            # quelles gardes ont ete assouplies.
+            #
+            # Le chargeur refuse desormais ce cas ; ce filtre est la seconde
+            # barriere, et il fait coincider les deux lectures de `portee`.
+            if derogation.portee not in (PORTEE_TOTALE, f"etape:{self.nom}"):
+                continue
             traces.append((derogation.garde, "derogee",
                            {"etape": self.nom, "portee": derogation.portee,
                             "motif": derogation.motif}))

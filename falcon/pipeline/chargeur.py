@@ -484,6 +484,24 @@ def _derogations(brute: Any, source: str, rang: int, nom: str
             raise _refus(source,
                          f"portee {portee!r} : attendu {PORTEE_TOTALE!r} ou "
                          f"« etape:<nom> »", rang, nom)
+        # Et cette etape doit etre CELLE-CI. Le controleur n'accorde une
+        # derogation que si sa portee vaut `*` ou `etape:<son propre nom>`
+        # (`controleur/contrat.py`) : une portee qui en designe une autre est
+        # MORTE PAR CONSTRUCTION.
+        #
+        # Elle etait pourtant acceptee, et pire : `Contrat.relachements`
+        # ecrivait quand meme « derogee » au journal, sans consulter la
+        # portee. L'humain qui relit le journal voyait donc une garde
+        # relachee, alors qu'elle etait restee armee — et le lot tombait a
+        # l'endroit meme ou il se croyait passe.
+        if portee.startswith("etape:") and portee[len("etape:"):] != nom:
+            raise _refus(source,
+                         f"portee {portee!r} : une derogation ne peut porter "
+                         f"que sur SON etape ({nom!r}) ou sur "
+                         f"{PORTEE_TOTALE!r}. Visant une autre etape, elle ne "
+                         f"couvrirait rien — la garde resterait armee, et le "
+                         f"journal annoncerait pourtant « derogee »",
+                         rang, nom)
 
         demandees.append(DerogationDeclaree(garde=garde, portee=portee,
                                            motif=motif))

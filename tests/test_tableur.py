@@ -266,11 +266,36 @@ class TestDerogationOrpheline(Base):
         self.assertIn("saisir", message)     # ce qui existe vraiment
 
     def test_une_PORTEE_qui_designe_une_etape_inconnue_est_refusee(self):
-        """Le cas exact que le chargeur laisse passer."""
         self._derogation("sauver", portee="etape:sauvre")
         with self.assertRaises(TableurInvalide) as capture:
             convertir(self.racine)
-        self.assertIn("ACCEPTEE et ne couvrirait rien", str(capture.exception))
+        self.assertIn("ne couvrirait rien", str(capture.exception))
+
+    def test_une_PORTEE_qui_designe_une_AUTRE_etape_existante_est_refusee(self):
+        """Le cas que ce test manquait, et qui est le plus vicieux.
+
+        Les deux etapes existent, donc rien ne signalait la faute. Or le
+        controleur n'accorde une derogation que si sa portee vaut `*` ou
+        `etape:<son propre nom>` : visant une autre, elle est MORTE PAR
+        CONSTRUCTION.
+
+        Et `Contrat.relachements` ecrivait quand meme « derogee » au journal,
+        sans consulter la portee — l'humain qui relit voyait une garde
+        relachee pendant qu'elle restait armee, et le lot tombait a l'endroit
+        meme ou il se croyait passe.
+        """
+        self._derogation("sauver", portee="etape:saisir")
+        with self.assertRaises(TableurInvalide) as capture:
+            convertir(self.racine)
+        message = str(capture.exception)
+        self.assertIn("saisir", message)
+        self.assertIn("sauver", message)
+
+    def test_la_portee_TOTALE_reste_permise(self):
+        """`*` relache la garde sur toute la pipeline : c'est explicite, tres
+        visible au recapitulatif, et ca doit rester possible."""
+        self._derogation("sauver", portee="*")
+        self.assertIn("sauver", convertir(self.racine))
 
     def test_un_motif_trop_court_est_refuse(self):
         self._poser(CSV_DEROGATIONS,
@@ -332,6 +357,52 @@ class TestColonnesEtProprietes(Base):
         with self.assertRaises(TableurInvalide) as capture:
             convertir(self.racine)
         self.assertIn("sauvgarde", str(capture.exception))
+
+    def test_une_colonne_SUPPRIMEE_est_refusee(self):
+        """La docstring promettait « EXACTEMENT celles attendues » ; le
+        controle ne verifiait que l'INCLUSION.
+
+        Mesure avant correction : `sauvegarde` retiree, l'etape `sauver`
+        chargeait avec `sauvegarde=False`. Le contrat n'annoncait plus la
+        sauvegarde imminente, donc l'etat `douteux` cessait d'exister — et un
+        item interrompu apres une sauvegarde repartait a la reprise. Double
+        ecriture, par une colonne absente.
+        """
+        sans = "\n".join(
+            ";".join(c for c in ligne.split(";")
+                     if not (ligne.startswith("rang") and c == "sauvegarde"))
+            for ligne in ETAPES.splitlines())
+        # On retire aussi la cellule correspondante de chaque ligne.
+        entete = ETAPES.splitlines()[0].split(";")
+        rang = entete.index("sauvegarde")
+        sans = "\n".join(
+            ";".join(c for i, c in enumerate(ligne.split(";")) if i != rang)
+            for ligne in ETAPES.splitlines()) + "\n"
+        self._poser(CSV_ETAPES, sans)
+
+        with self.assertRaises(TableurInvalide) as capture:
+            convertir(self.racine)
+        message = str(capture.exception)
+        self.assertIn("sauvegarde", message)
+        self.assertIn("absente", message)
+
+    def test_une_colonne_DUPLIQUEE_est_refusee(self):
+        """`DictReader` garde la DERNIERE : la valeur de la premiere est
+        perdue. Ici la valeur perdue est une CIBLE — la saisie partirait dans
+        un autre champ SAP que celui que la feuille montre en tete."""
+        entete = ETAPES.splitlines()[0].split(";")
+        rang = entete.index("cible")
+        double = []
+        for ligne in ETAPES.splitlines():
+            cellules = ligne.split(";")
+            cellules.insert(rang + 1, "cible" if ligne.startswith("rang")
+                            else "wnd[0]/usr/ctxtAUTRE")
+            double.append(";".join(cellules))
+        self._poser(CSV_ETAPES, "\n".join(double) + "\n")
+
+        with self.assertRaises(TableurInvalide) as capture:
+            convertir(self.racine)
+        self.assertIn("double", str(capture.exception))
 
     def test_une_propriete_declaree_DEUX_FOIS_est_refusee(self):
         self._poser(CSV_PIPELINE, PIPELINE + "plafond_items;100000\n")

@@ -517,3 +517,65 @@ class TestDump(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSortDeLItem(unittest.TestCase):
+    """`politique.item` n'etait valide NULLE PART.
+
+    `politique_brute.get("item")`, sans plus. Or `politique.appliquer` ne
+    compare qu'a « ko » : toute autre valeur laisse l'item CONTINUER, donc la
+    pipeline enchaine sur l'etape suivante — typiquement la sauvegarde — juste
+    apres un message d'erreur metier. Une valeur qui a l'air de classer l'item
+    et ne le classe pas est exactement la classe de defaut visee.
+    """
+
+    def _registre(self, item: str):
+        with tempfile.TemporaryDirectory() as dossier:
+            chemin = Path(dossier) / "s.yaml"
+            chemin.write_text(f"""version: 1
+entrees:
+  - nom: essai
+    categorie: connue_fautive
+    canal: garde
+    correspondance: {{garde: "relecture"}}
+    politique: {{poursuivre: true, item: {item}}}
+    origine: falcon_observe
+    justification: "Observe en recette, motif suffisamment long."
+""", encoding="utf-8")
+            return Registre.charger(chemin)
+
+    def test_une_valeur_hors_vocabulaire_est_refusee(self):
+        """« abandon », « KO », « perdu » : chacune a l'air de classer l'item,
+        et aucune ne le fait."""
+        for item in ("abandon", "KO", "perdu", "ignore"):
+            with self.subTest(item=item):
+                with self.assertRaises(RegistreInvalide) as capture:
+                    self._registre(item)
+                message = str(capture.exception)
+                self.assertIn("item", message)
+                self.assertIn("ko", message)
+
+    def test_les_deux_valeurs_du_vocabulaire_passent(self):
+        for item in ("ok", "ko"):
+            with self.subTest(item=item):
+                entree = self._registre(item).entrees[-1]
+                self.assertEqual(entree.politique.item, item)
+
+    def test_l_absence_vaut_ok(self):
+        """C'est deja ce que le moteur fait ; l'exiger ferait refuser les
+        entrees ecrites avant ce controle sans rien rendre plus sur."""
+        with tempfile.TemporaryDirectory() as dossier:
+            chemin = Path(dossier) / "s.yaml"
+            chemin.write_text("""version: 1
+entrees:
+  - nom: essai
+    categorie: connue_benigne
+    canal: garde
+    correspondance: {garde: "relecture"}
+    politique: {poursuivre: true}
+    origine: falcon_observe
+    justification: "Observe en recette, motif suffisamment long."
+""", encoding="utf-8")
+            self.assertEqual(
+                Registre.charger(chemin).entrees[-1].politique.item, "ok")
+

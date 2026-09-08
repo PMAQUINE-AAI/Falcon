@@ -221,9 +221,41 @@ class TestLeMarqueurProtege(unittest.TestCase):
 
         with self.assertRaises(RegistreInvalide) as capture:
             Registre.avec_surcouches(chemin)
-        # Le message nomme les valeurs acceptables : un refus qui n'indique
-        # pas quoi ecrire coute autant qu'une absence de message.
-        self.assertIn("connue_benigne", str(capture.exception))
+        self.assertIn(MARQUEUR, str(capture.exception))
+
+    def test_completer_les_marqueurs_TYPES_ne_suffit_pas(self):
+        """Le controle etait implicite : on comptait sur le typage de chaque
+        champ pour refuser le marqueur.
+
+        Il a tenu sur `categorie` et `poursuivre`, et laisse passer
+        `politique.item` — qui n'etait valide nulle part — et `justification`,
+        qui est du texte libre. Une surcouche a moitie completee chargeait
+        donc, et `politique.appliquer` ne comparant qu'a « ko », l'item
+        continuait : la pipeline enchainait sur l'etape suivante, typiquement
+        la sauvegarde, JUSTE APRES un message d'erreur metier.
+
+        Le marqueur est desormais cherche dans le TEXTE : ca ne demande de
+        n'oublier aucun champ, ni aujourd'hui ni a chaque champ ajoute.
+        """
+        inconnu = lire_dump(_dump(
+            self.racine, "b.json", horodatage="2026-09-08T10:00:00Z",
+            garde="statut",
+            signature={"canal": "statut", "id": "IW", "numero": "010"},
+            detail={}))
+        partiel = surcouche_proposee([inconnu])
+        for avant, apres in (
+                (f"categorie: {MARQUEUR}        # connue_benigne | connue_fautive",
+                 "categorie: connue_fautive"),
+                (f"poursuivre: {MARQUEUR}   # true : le lot continue",
+                 "poursuivre: true")):
+            self.assertIn(avant, partiel, "l'ancre du test n'a pas mordu")
+            partiel = partiel.replace(avant, apres)
+
+        chemin = self.racine / "partielle.yaml"
+        chemin.write_text(partiel, encoding="utf-8")
+        with self.assertRaises(RegistreInvalide) as capture:
+            Registre.avec_surcouches(chemin)
+        self.assertIn(MARQUEUR, str(capture.exception))
 
 
 class TestSurcouche(unittest.TestCase):

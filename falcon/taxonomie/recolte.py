@@ -250,7 +250,12 @@ def entree_proposee(inconnu: Inconnu) -> str:
     lignes += [
         "    politique:",
         f"      poursuivre: {MARQUEUR}   # true : le lot continue",
-        f"      item: {MARQUEUR}         # ok | ko | ignore",
+        # DEUX valeurs, pas trois. `politique.appliquer` ne compare qu'a
+        # « ko » : « ignore » n'avait aucun effet distinct, et l'annoncer
+        # etait une declaration qui n'arme rien — la classe de defaut que ce
+        # projet traque, sous forme de commentaire d'aide.
+        f"      item: {MARQUEUR}         # ko abandonne l'item, ok le laisse "
+        f"continuer",
         "    origine: falcon_observe",
     ]
     if inconnu.horodatage:

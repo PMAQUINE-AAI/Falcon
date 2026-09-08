@@ -621,3 +621,40 @@ class TestLeNeutraliseurCouvreToutesLesGardes(unittest.TestCase):
                 self.assertTrue(hasattr(porteur, attribut),
                                 f"{porteur} n'a pas {attribut!r}")
                 self.assertTrue(suite.startswith("tests."))
+
+
+class TestCeQuiEstTraceEstCeQuiSApplique(unittest.TestCase):
+    """`relachements` ecrivait « derogee » sans consulter `portee`.
+
+    `derogation_pour`, elle, la consulte. Les deux lectures divergeaient : une
+    derogation visant une AUTRE etape faisait ecrire au journal qu'une garde
+    etait relachee pendant qu'elle restait armee — le journal disait le
+    contraire de ce qui se passait, sur la ligne meme qu'un humain relit pour
+    savoir quelles gardes ont ete assouplies.
+
+    Le chargeur refuse desormais ce cas ; ceci est la seconde barriere, et
+    elle porte sur le `Contrat`, qu'on peut construire a la main.
+    """
+
+    def _contrat(self, portee: str) -> Contrat:
+        return Contrat(nom="sauver", navigation_libre=True,
+                       derogations=(Derogation(garde="relecture",
+                                               portee=portee,
+                                               motif="m" * 40),))
+
+    def test_une_derogation_qui_NE_S_APPLIQUE_PAS_n_est_pas_tracee(self):
+        contrat = self._contrat("etape:une_autre")
+        self.assertIsNone(contrat.derogation_pour("relecture"))
+        gardes_tracees = [g for g, _, _ in contrat.relachements]
+        self.assertNotIn("relecture", gardes_tracees,
+                         "le journal annonce une garde relachee qui est "
+                         "restee armee")
+
+    def test_une_derogation_qui_s_applique_reste_tracee(self):
+        for portee in ("etape:sauver", "*"):
+            with self.subTest(portee=portee):
+                contrat = self._contrat(portee)
+                self.assertIsNotNone(contrat.derogation_pour("relecture"))
+                self.assertIn("relecture",
+                              [g for g, _, _ in contrat.relachements])
+

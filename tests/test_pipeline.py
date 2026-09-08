@@ -92,6 +92,24 @@ class TestChargementValide(Base):
         pipeline = self._charger(VALIDE)
         self.assertEqual(pipeline.etapes[0].ecran, ("IA08", "RIPLKO10", "1000"))
 
+    def test_une_derogation_ne_peut_porter_que_sur_SON_etape(self):
+        """Le controleur n'en accorde une que si sa portee vaut `*` ou
+        `etape:<son propre nom>`. Visant une autre, elle est MORTE PAR
+        CONSTRUCTION — et elle etait pourtant acceptee, avec un journal qui
+        annoncait « derogee » pendant que la garde restait armee."""
+        # La derogation est portee par « executer » et vise « saisir_division ».
+        # Les deux etapes existent : rien ne signalait la faute.
+        avec = SOCLE + (
+            '        derogations:\n'
+            '          - garde: relecture\n'
+            '            portee: "etape:saisir_division"\n'
+            '            motif: "Un motif suffisamment long pour le seuil."\n')
+        with self.assertRaises(PipelineInvalide) as capture:
+            self._charger(avec)
+        message = str(capture.exception)
+        self.assertIn("SON etape", message)
+        self.assertIn("resterait armee", message)
+
     def test_les_TROIS_composantes_de_l_ecran_exigent_une_chaine(self):
         """Seul `dynpro` etait type ; les deux autres passaient par `str()`.
 

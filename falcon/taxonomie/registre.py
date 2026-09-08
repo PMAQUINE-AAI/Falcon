@@ -56,6 +56,28 @@ DECLARABLES = frozenset({BENIGNE, FAUTIVE})
 #: qu'il arrive par la barre de statut ou par une exception COM.
 CANAUX = frozenset({"statut", "com", "garde", "python"})
 
+#: Sorts possibles d'un item, et il n'y en a que DEUX.
+#:
+#: `politique.item` n'etait valide nulle part : `politique_brute.get("item")`,
+#: sans plus. Un `item: A COMPLETER` chargeait donc, et `politique.appliquer`
+#: — qui ne compare qu'a « ko » — laissait l'item continuer. La pipeline
+#: enchainait sur l'etape suivante, typiquement la sauvegarde, JUSTE APRES un
+#: message d'erreur metier.
+#:
+#: Et le vocabulaire annonce en etait un troisieme mensonge : les
+#: propositions de `recolte` disaient « ok | ko | ignore », alors que seul
+#: « ko » a un effet. Offrir trois valeurs dont deux sont synonymes est la
+#: meme classe de defaut que le reste — une declaration qui n'arme rien.
+ITEMS = frozenset({"ok", "ko"})
+
+#: Le marqueur que `taxonomie/recolte.py` pose la ou il faut DECIDER.
+#:
+#: Il est refuse ici, sur n'importe quel champ. Une proposition collee sans
+#: etre lue ne doit pas devenir une regle de securite, et le verifier
+#: champ par champ laissait passer ceux qu'on n'avait pas pense a typer —
+#: `politique.item` et `justification` sont passes ainsi.
+MARQUEUR_A_COMPLETER = "A COMPLETER"
+
 RACINE = Path(__file__).resolve().parent
 CHEMIN_REGISTRE_DEFAUT = RACINE / "registre.yaml"
 
@@ -452,12 +474,62 @@ def _lire_fichier(chemin: Path) -> list[Entree]:
     return _lire_texte(chemin.read_text(encoding="utf-8"), chemin)
 
 
+def _exiger_item(valeur: Any, chemin: Path, nom: str) -> str:
+    """Le sort de l'item : « ko » l'abandonne, « ok » le laisse continuer."""
+    # L'ABSENCE vaut « ok » : c'est deja ce que le moteur fait, et l'exiger
+    # ferait refuser les entrees ecrites avant ce controle sans rien rendre
+    # plus sur. Ce qui etait dangereux, c'est une valeur PRESENTE qui n'est
+    # pas « ko » : elle a l'air de classer l'item et le laisse continuer.
+    if valeur is None:
+        return "ok"
+    if valeur not in ITEMS:
+        raise RegistreInvalide(
+            f"{chemin} : {nom!r} a `politique.item` = {valeur!r}. "
+            f"Declarables : {sorted(ITEMS)} — « ko » abandonne l'item, « ok » "
+            f"le laisse continuer. Il n'y en a pas d'autre : toute autre "
+            f"valeur laisserait l'item continuer en ayant l'air de le classer")
+    return str(valeur)
+
+
+def _refuser_les_marqueurs(brut: str, chemin: Path) -> None:
+    """Aucun `A COMPLETER` ne subsiste, sur AUCUN champ.
+
+    Le controle etait implicite : on comptait sur le typage de chaque champ
+    pour refuser le marqueur. Il a tenu sur `categorie` et `poursuivre`, et
+    laisse passer `politique.item` — qui n'etait valide nulle part — ainsi que
+    `justification`, qui est du texte libre et le restera.
+
+    Le verifier champ par champ demande de n'en oublier aucun, aujourd'hui et
+    a chaque champ ajoute. Le chercher dans le TEXTE ne demande rien : une
+    proposition non completee ne charge pas, quel que soit le champ ou il
+    reste un marqueur.
+    """
+    lignes = [f"ligne {rang}" for rang, ligne in enumerate(brut.splitlines(), 1)
+              if MARQUEUR_A_COMPLETER in ligne]
+    if lignes:
+        raise RegistreInvalide(
+            f"{chemin} porte encore {len(lignes)} marqueur(s) "
+            f"« {MARQUEUR_A_COMPLETER} » ({', '.join(lignes[:5])}"
+            f"{'…' if len(lignes) > 5 else ''}). Une proposition de "
+            f"`falcon recolter` dit ce qui a ete OBSERVE ; ce qui se DECIDE "
+            f"reste a completer, parce que decider a ta place qu'un message "
+            f"est benin serait ecrire une regle de securite sur une seule "
+            f"observation")
+
+
 def _lire_texte(brut: str, chemin: Path) -> list[Entree]:
     """Le contenu, d'ou qu'il vienne. `chemin` ne sert qu'aux messages."""
+    _refuser_les_marqueurs(brut, chemin)
     try:
         contenu = lire_yaml(brut, str(chemin)) or {}
     except YamlAmbigu as erreur:
         raise RegistreInvalide(str(erreur)) from None
+    except yaml.YAMLError as erreur:
+        # Un YAML malforme sortait en exception PyYAML NUE — une trace de pile
+        # la ou l'utilisateur attend un refus situe. `charger()` enveloppe
+        # deja ce cas cote pipeline ; ici il ne l'etait pas, et c'est le
+        # chemin qu'emprunte une surcouche recoltee.
+        raise RegistreInvalide(f"{chemin} : YAML illisible — {erreur}") from None
     if not isinstance(contenu, dict):
         raise RegistreInvalide(f"{chemin} : un dictionnaire est attendu")
 
@@ -552,7 +624,7 @@ def _construire(brute: dict[str, Any], chemin: Path) -> Entree:
     politique = Politique(
         poursuivre=_exiger_booleen(politique_brute.get("poursuivre", ABSENT),
                                    "politique.poursuivre", chemin, nom),
-        item=politique_brute.get("item"),
+        item=_exiger_item(politique_brute.get("item"), chemin, nom),
         arreter_chaine=_exiger_booleen(politique_brute.get("arreter_chaine", ABSENT),
                                        "politique.arreter_chaine", chemin, nom),
     )
