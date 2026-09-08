@@ -76,8 +76,19 @@ Private Sub EcrireFeuille(nomFeuille As String, chemin As String, _
     End If
 
     derniereColonne = ws.Cells(ligneEntete, ws.Columns.Count).End(xlToLeft).Column
-    derniereLigne = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-    If derniereLigne < ligneEntete Then derniereLigne = ligneEntete
+
+    ' La derniere ligne sur TOUTES les colonnes, pas seulement la premiere.
+    '
+    ' `ws.Cells(Rows.Count, 1).End(xlUp)` s'arrete a la derniere cellule
+    ' remplie de la COLONNE A. Sur la feuille Donnees, la colonne A est une
+    ' colonne de donnees comme une autre et peut etre vide sur une ligne
+    ' legitime : les lignes suivantes auraient ete perdues en silence.
+    Dim colonne0 As Long, finColonne As Long
+    derniereLigne = ligneEntete
+    For colonne0 = 1 To derniereColonne
+        finColonne = ws.Cells(ws.Rows.Count, colonne0).End(xlUp).Row
+        If finColonne > derniereLigne Then derniereLigne = finColonne
+    Next colonne0
 
     ' ADODB.Stream plutot que `Print #` : c'est ce qui permet l'UTF-8. Sans
     ' lui, VBA ecrit dans la page de codes du poste, et un motif accentue
@@ -92,14 +103,14 @@ Private Sub EcrireFeuille(nomFeuille As String, chemin As String, _
         ReDim morceaux(1 To derniereColonne)
         vide = True
         For colonne = 1 To derniereColonne
-            morceaux(colonne) = Echapper(CStr(ws.Cells(ligne, colonne).Text))
-            If Len(Trim$(ws.Cells(ligne, colonne).Text)) > 0 Then vide = False
+            morceaux(colonne) = Echapper(Cellule(ws, ligne, colonne))
+            If Len(Trim$(Cellule(ws, ligne, colonne))) > 0 Then vide = False
         Next colonne
 
         ' Une ligne entierement vide au milieu du tableau est sautee : c'est
         ' ce qu'un tableur laisse trainer, et FALCON les ignore de toute
         ' facon. Une ligne de COMMENTAIRE (« # ... ») aussi.
-        If Not vide And Left$(Trim$(CStr(ws.Cells(ligne, 1).Text)), 1) <> "#" Then
+        If Not vide And Left$(Trim$(Cellule(ws, ligne, 1)), 1) <> "#" Then
             flux.WriteText Join(morceaux, DELIMITEUR) & vbCrLf
         End If
     Next ligne
@@ -107,6 +118,34 @@ Private Sub EcrireFeuille(nomFeuille As String, chemin As String, _
     EnregistrerUtf8 flux, chemin
     flux.Close
 End Sub
+
+
+' ---------------------------------------------------------------------
+' La valeur SOUS la cellule, pas ce que la cellule AFFICHE.
+'
+' `.Text` rend le texte affiche : il depend du format de nombre ET de la
+' largeur de colonne. Une colonne trop etroite affiche « ###### », un format
+' de date affiche la date formatee, un format personnalise affiche ce qu'il
+' veut — et c'est cela qui serait parti dans le CSV, donc dans SAP.
+'
+' `.Value2` rend la valeur sous-jacente, sans format et sans conversion de
+' date. C'est le seul endroit de ce module ou une valeur peut etre alteree
+' AVANT que le convertisseur ne la voie : la parade habituelle — « toute la
+' validation vit dans falcon/tableur » — ne couvre pas ce cas, puisque le
+' convertisseur recevrait une valeur deja fausse et parfaitement plausible.
+' ---------------------------------------------------------------------
+Private Function Cellule(ws As Worksheet, ligne As Long, _
+                         colonne As Long) As String
+    Dim v As Variant
+    v = ws.Cells(ligne, colonne).Value2
+    If IsError(v) Then
+        Cellule = CStr(ws.Cells(ligne, colonne).Text)
+    ElseIf IsEmpty(v) Then
+        Cellule = ""
+    Else
+        Cellule = CStr(v)
+    End If
+End Function
 
 
 ' ---------------------------------------------------------------------

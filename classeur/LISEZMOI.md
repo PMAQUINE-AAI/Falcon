@@ -104,6 +104,25 @@ et faux.
 Si le module faisait la moindre validation, une erreur dedans deviendrait une
 pipeline qui se charge et fait autre chose.
 
+**La limite de cette parade, et il faut la connaître :** elle ne couvre pas
+une valeur altérée *à la lecture de la cellule*. Le convertisseur recevrait
+alors une valeur déjà fausse et parfaitement plausible, et il n'aurait aucun
+moyen de le savoir.
+
+C'est pourquoi la macro lit `.Value2` — la valeur sous la cellule — et non
+`.Text`, qui rend le texte **affiché** : celui-ci dépend du format de nombre
+et de la largeur de colonne, si bien qu'une colonne trop étroite donnerait
+`######` et un format de date donnerait la date formatée. Elle calcule aussi
+la dernière ligne sur **toutes** les colonnes, et non sur la seule colonne A,
+qui peut légitimement être vide sur une ligne de données.
+
+Ces deux points sont les seuls du module où une erreur ne serait pas
+rattrapée en aval. Je ne peux ni exécuter ni tester ce code — aucune machine
+de ce projet n'a Excel — donc je le signale plutôt que de le passer sous
+silence : si le CSV produit te surprend, regarde d'abord ce que la cellule
+contient vraiment (`=CELLULE("format";A1)` ou la barre de formule) avant de
+soupçonner FALCON.
+
 ---
 
 ## Ensuite
