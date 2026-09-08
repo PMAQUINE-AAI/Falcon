@@ -16,8 +16,8 @@ from pathlib import Path
 
 from falcon.pipeline import charger
 from falcon.tableur import (
-    CSV_DEROGATIONS, CSV_ETAPES, CSV_PIPELINE, TableurInvalide, convertir,
-    convertir_fichiers,
+    COLONNES_DEROGATIONS, COLONNES_ETAPES, CSV_DEROGATIONS, CSV_ETAPES,
+    CSV_PIPELINE, TableurInvalide, convertir, convertir_fichiers,
 )
 
 PIPELINE = """propriete;valeur
@@ -426,6 +426,151 @@ class TestLExempleLivre(unittest.TestCase):
                         "ok': 3"):                # les trois items passent
             with self.subTest(attendu=attendu):
                 self.assertIn(attendu, rendu.stdout)
+
+
+class TestLeClasseurLivre(unittest.TestCase):
+    """La couture entre le classeur et le convertisseur.
+
+    C'est l'endroit qui derive : les colonnes vivent dans `falcon/tableur/`,
+    le classeur les recopie, et rien ne les faisait s'accorder. Un en-tete qui
+    prend un « s » d'un cote produit un CSV dont la colonne est INCONNUE — ou
+    pire, une colonne attendue et absente.
+
+    Le classeur est un binaire livre dans le depot : ces tests le lisent tel
+    qu'il est, pas tel qu'on le reconstruirait.
+    """
+
+    CLASSEUR = (Path(__file__).resolve().parent.parent
+                / "classeur" / "FALCON.xlsx")
+
+    def setUp(self):
+        if not self.CLASSEUR.exists():
+            self.skipTest("classeur/FALCON.xlsx absent")
+        try:
+            import openpyxl                              # noqa: F401
+        except ImportError:
+            # `openpyxl` est un outil de CONSTRUCTION, pas une dependance
+            # d'execution : la regle « PyYAML seule dependance » tient, et un
+            # poste qui ne l'a pas doit pouvoir lancer la suite. `verifier.py`
+            # liste ce qui n'a pas tourne.
+            self.skipTest("openpyxl absent : outil de construction, pas "
+                          "dependance d'execution")
+
+    def test_le_classeur_est_un_zip_dont_tout_le_XML_se_parse(self):
+        """Ce que je PEUX affirmer sans ouvrir Excel. Excel refuse le fichier
+        entier si une seule partie est mal formee."""
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        archive = zipfile.ZipFile(self.CLASSEUR)
+        self.assertIsNone(archive.testzip())
+        parties = [n for n in archive.namelist()
+                   if n.endswith((".xml", ".rels"))]
+        self.assertGreater(len(parties), 5, "archive suspecte")
+        for nom in parties:
+            with self.subTest(partie=nom):
+                ET.fromstring(archive.read(nom))
+
+    def _entete(self, feuille: str, ligne: int = 2) -> tuple[str, ...]:
+        from openpyxl import load_workbook
+        classeur = load_workbook(self.CLASSEUR, read_only=True)
+        valeurs = [c.value for c in classeur[feuille][ligne]]
+        classeur.close()
+        return tuple(v for v in valeurs if v is not None)
+
+    def test_les_en_tetes_sont_EXACTEMENT_ceux_du_convertisseur(self):
+        for feuille, attendues in (("Etapes", COLONNES_ETAPES),
+                                   ("Derogations", COLONNES_DEROGATIONS)):
+            with self.subTest(feuille=feuille):
+                self.assertEqual(self._entete(feuille), attendues)
+
+    def test_la_feuille_EXEMPLE_n_est_pas_exportee(self):
+        """Une ligne d'exemple laissee dans une feuille exportee deviendrait
+        une ETAPE, et la pipeline porterait une saisie que personne n'a
+        voulue."""
+        from openpyxl import load_workbook
+        classeur = load_workbook(self.CLASSEUR, read_only=True)
+        self.assertIn("Exemple", classeur.sheetnames)
+        classeur.close()
+
+        macro = (self.CLASSEUR.parent / "ExportFalcon.bas").read_text(
+            encoding="utf-8")
+        for feuille in ("Pipeline", "Etapes", "Derogations", "Donnees"):
+            self.assertIn(f'"{feuille}"', macro, f"{feuille} n'est pas exportee")
+        self.assertNotIn('"Exemple"', macro)
+        self.assertNotIn('"Dictionnaire"', macro)
+
+    def test_la_feuille_Etapes_est_VIDE_sous_son_en_tete(self):
+        """Meme raison : ce qui est sous l'en-tete part dans le CSV."""
+        from openpyxl import load_workbook
+        classeur = load_workbook(self.CLASSEUR, read_only=True)
+        premiere = [c.value for c in classeur["Etapes"][3]]
+        classeur.close()
+        self.assertTrue(all(v is None for v in premiere),
+                        f"la premiere ligne d'Etapes n'est pas vide : "
+                        f"{premiere}")
+
+    def test_l_EXEMPLE_du_classeur_produit_une_pipeline_QUI_CHARGE(self):
+        """La preuve la plus forte possible sans ouvrir Excel.
+
+        On lit le classeur, on ecrit les CSV comme la macro les ecrirait —
+        meme en-tete en ligne 2, memes colonnes, lignes vides et lignes « # »
+        sautees — et on convertit. Si le classeur et le convertisseur ne
+        s'accordent plus, ca tombe ici, avec le message du convertisseur.
+        """
+        from openpyxl import load_workbook
+
+        classeur = load_workbook(self.CLASSEUR)
+
+        def exporter(feuille: str, vers: Path, entete: int = 2) -> None:
+            lignes = []
+            for rang in classeur[feuille].iter_rows(min_row=entete,
+                                                    values_only=True):
+                cellules = ["" if v is None else str(v) for v in rang]
+                if not any(c.strip() for c in cellules):
+                    continue
+                if cellules[0].startswith("#"):
+                    continue
+                lignes.append(";".join(cellules))
+            vers.write_text("\n".join(lignes) + "\n", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as dossier:
+            racine = Path(dossier)
+            exporter("Pipeline", racine / CSV_PIPELINE)
+            # C'est la feuille EXEMPLE qui porte des etapes : `Etapes` est
+            # livree vide, justement pour ne rien exporter qu'on n'ait voulu.
+            exporter("Exemple", racine / CSV_ETAPES)
+
+            # Le classeur livre `Pipeline` sans valeurs — c'est a l'
+            # utilisateur de les mettre. On les fournit ici, pour que le test
+            # porte sur les ETAPES, qui sont ce que le classeur propose.
+            (racine / CSV_PIPELINE).write_text(
+                "propriete;valeur\nnom;depuis_le_classeur\n"
+                "classe;iterative\ncles;site\nplafond_items;50\n"
+                "plafond_sauvegardes;50\n", encoding="utf-8")
+
+            pipeline = charger(convertir_fichiers(racine,
+                                                  racine / "p.yaml"))
+
+        self.assertEqual([e.nom for e in pipeline.etapes],
+                         ["saisir_site", "saisir_variante",
+                          "saisir_equipement", "sauver"])
+        self.assertTrue(pipeline.etapes[-1].sauvegarde)
+
+    def test_la_macro_ne_VALIDE_rien(self):
+        """La parade au VBA non teste est architecturale : le garder bete.
+
+        Une macro fausse doit produire un CSV REFUSE avec un message situe,
+        pas un YAML plausible. Si elle validait, une erreur dedans deviendrait
+        une pipeline qui se charge et fait autre chose.
+        """
+        macro = (self.CLASSEUR.parent / "ExportFalcon.bas").read_text(
+            encoding="utf-8")
+        # Elle n'a aucune raison de connaitre le vocabulaire du domaine.
+        for mot in ("iterative", "navigation_libre", "connue_benigne",
+                    "plafond_items"):
+            with self.subTest(mot=mot):
+                self.assertNotIn(mot, macro)
 
 
 if __name__ == "__main__":
