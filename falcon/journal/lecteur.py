@@ -120,7 +120,8 @@ class Reprise:
     deja_faits: int = 0
 
 
-def garde_du_monde(origine: ExecutionDebut, pipeline_empreinte: str,
+def garde_du_monde(ouvertures: Sequence[ExecutionDebut],
+                   pipeline_empreinte: str,
                    jeu_empreinte: str, forcer: bool) -> None:
     """La garde d'identite, appliquee a la REPRISE.
 
@@ -134,6 +135,28 @@ def garde_du_monde(origine: ExecutionDebut, pipeline_empreinte: str,
     Deux refus, et le premier ne cede pas a `forcer` : forcer sert a passer
     outre un ecart CONSTATE, avec un motif trace. Il ne peut pas servir a
     passer outre une comparaison qui n'a pas eu lieu.
+
+    ELLE PORTE SUR TOUTES LES OUVERTURES, et c'est le coeur de la correction.
+
+    La version precedente comparait `ouvertures[0]` — la PREMIERE. Or le
+    journal est partage entre executions : c'est ce qui rend la reprise
+    possible. L'etat qu'on reprend a donc ete produit par la DERNIERE
+    ouverture, pas par la premiere, et `journal/rapport.py` le dit deja en
+    toutes lettres pour la provenance.
+
+    La garde etait donc exactement inversee. Sur un journal ou un premier run
+    (pipeline A, jeu J) precede un second run corrige (pipeline B, jeu K)
+    interrompu, elle REFUSAIT la reprise avec B/K — le monde qui a
+    reellement produit l'etat — et ACCEPTAIT la reprise avec A/J, c'est-a-dire
+    rejouer un item ouvert par B sous une pipeline et un jeu perimes. Une
+    garde qui autorise precisement ce qu'elle existe pour interdire.
+
+    Prendre la derniere aurait suffi a retourner le cas. On les compare
+    TOUTES, parce que c'est strictement plus sur et que ca ne coute rien : un
+    journal dont les ouvertures ne s'accordent pas a ete ecrit par plusieurs
+    mondes, et aucune des deux ne peut fonder une reprise coherente. Le cas
+    n'arrive que si quelqu'un est deja passe en `forcer` ; le lui redemander,
+    avec un motif trace, est le bon prix.
     """
     # `if empreinte and ...` traitait « je ne sais pas » comme « c'est
     # pareil ». Or ne pas savoir sur quoi on reprend est precisement le cas ou
@@ -150,11 +173,14 @@ def garde_du_monde(origine: ExecutionDebut, pipeline_empreinte: str,
         return
 
     ecarts = []
-    if origine.pipeline_empreinte != pipeline_empreinte:
-        ecarts.append(f"pipeline {origine.pipeline_empreinte!r} -> "
-                      f"{pipeline_empreinte!r}")
-    if origine.jeu_empreinte != jeu_empreinte:
-        ecarts.append(f"jeu {origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
+    for rang, origine in enumerate(ouvertures, start=1):
+        if origine.pipeline_empreinte != pipeline_empreinte:
+            ecarts.append(f"ouverture {rang} ({origine.mode}) : pipeline "
+                          f"{origine.pipeline_empreinte!r} -> "
+                          f"{pipeline_empreinte!r}")
+        if origine.jeu_empreinte != jeu_empreinte:
+            ecarts.append(f"ouverture {rang} ({origine.mode}) : jeu "
+                          f"{origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
     if ecarts:
         raise RepriseIncoherente(
             "reprise refusee, le monde a change depuis : " + " ; ".join(ecarts))
@@ -209,7 +235,7 @@ def preparer(chemin: str | Path,
             f"dit qu'on ne sait pas ce qui a ete fait. Pour lancer un lot "
             f"neuf, c'est le mode `run`")
 
-    garde_du_monde(ouvertures[0], pipeline_empreinte, jeu_empreinte, forcer)
+    garde_du_monde(ouvertures, pipeline_empreinte, jeu_empreinte, forcer)
 
     connus = etats(enregistrements)
     a_traiter = tuple(i for i in items

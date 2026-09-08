@@ -291,6 +291,72 @@ class TestReprise(unittest.TestCase):
             preparer(self.chemin, ["a1"],
                      pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
 
+    def test_la_garde_porte_sur_la_DERNIERE_ouverture_pas_la_premiere(self):
+        """Le defaut le plus grave trouve a l'audit : la garde etait inversee.
+
+        Le journal est partage entre executions — c'est ce qui rend la reprise
+        possible. L'etat qu'on reprend a donc ete produit par la DERNIERE
+        ouverture. La garde comparait la PREMIERE.
+
+        Consequence mesuree avant correction, sur ce journal exact : la reprise
+        avec la pipeline B (celle qui a reellement ouvert l'item I2) etait
+        REFUSEE, et la reprise avec la pipeline A, perimee, PASSAIT — elle
+        rendait `a_traiter = ('I2',)`. La garde autorisait precisement ce
+        qu'elle existe pour interdire : rejouer un item sous un autre monde.
+        """
+        self._journal(
+            _ouverture(pipeline_empreinte="A", jeu_empreinte="J"),
+            ItemDebut(run_id=RUN, item_id="i1"),
+            ItemFin(run_id=RUN, item_id="i1", etat=OK),
+            ExecutionFin(run_id=RUN, etat="termine"),
+            _ouverture(pipeline_empreinte="B", jeu_empreinte="K"),
+            ItemDebut(run_id=RUN, item_id="i2"))
+
+        # Le monde PERIME ne doit plus fonder de reprise. C'est le sens du
+        # test : avant correction, cette ligne passait.
+        with self.assertRaises(RepriseIncoherente):
+            preparer(self.chemin, ["i1", "i2"],
+                     pipeline_empreinte="A", jeu_empreinte="J")
+
+    def test_un_journal_ecrit_par_deux_mondes_ne_fonde_aucune_reprise(self):
+        """On compare TOUTES les ouvertures, pas seulement la derniere.
+
+        Prendre la derniere aurait suffi a retourner le cas ci-dessus. Les
+        comparer toutes est strictement plus sur : un journal dont les
+        ouvertures ne s'accordent pas a ete ecrit par plusieurs mondes, et
+        aucun des deux ne fonde une reprise coherente. Le message nomme
+        l'ouverture fautive, pour qu'on sache laquelle regarder.
+        """
+        self._journal(
+            _ouverture(pipeline_empreinte="A", jeu_empreinte="J"),
+            ExecutionFin(run_id=RUN, etat="termine"),
+            _ouverture(pipeline_empreinte="B", jeu_empreinte="K"),
+            ItemDebut(run_id=RUN, item_id="i2"))
+        with self.assertRaises(RepriseIncoherente) as capture:
+            preparer(self.chemin, ["i2"],
+                     pipeline_empreinte="B", jeu_empreinte="K")
+        self.assertIn("ouverture 1", str(capture.exception))
+
+    def test_le_parcours_NOMINAL_reste_repris(self):
+        """Le controle de non-regression de la correction ci-dessus.
+
+        Une repetition a blanc puis un run portent les MEMES empreintes — elles
+        sont celles du texte de la pipeline et du jeu, pas du mode. Le parcours
+        que la documentation recommande doit donc continuer de se reprendre,
+        sinon la garde ne serait pas plus sure, seulement plus bruyante.
+        """
+        self._journal(
+            _ouverture(mode="dry-run"),
+            ExecutionFin(run_id=RUN, etat="termine"),
+            _ouverture(mode="run"),
+            ItemDebut(run_id=RUN, item_id="i1"),
+            ItemFin(run_id=RUN, item_id="i1", etat=OK),
+            ItemDebut(run_id=RUN, item_id="i2"))
+        reprise = preparer(self.chemin, ["i1", "i2", "i3"],
+                           pipeline_empreinte="pipe1", jeu_empreinte="jeu1")
+        self.assertEqual(reprise.a_traiter, ("i2", "i3"))
+        self.assertEqual(reprise.deja_faits, 1)
+
     def test_les_items_termines_ne_sont_pas_repris(self):
         self._journal(_ouverture(),
                       ItemDebut(run_id=RUN, item_id="a1"),
