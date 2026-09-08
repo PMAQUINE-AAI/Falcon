@@ -57,7 +57,7 @@ Les modules livrés :
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
-| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon` — aucune n'écrit dans SAP |
+| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire` — aucune n'écrit dans SAP |
 | `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
@@ -105,7 +105,19 @@ Les mêmes choses en scriptable, hors terminal :
 python -m falcon inventaire tests/fixtures/traces/megatrace_2026-09.vbs
 python -m falcon brouillon tests/fixtures/traces/megatrace_2026-09.vbs
 python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
+python -m falcon dictionnaire <dossier-du-catalogue> -o dictionnaire.csv
 ```
+
+`dictionnaire` met le catalogue **à plat**, une ligne par champ, pour qu'un
+tableur puisse proposer les écrans et les champs disponibles — ce que la spec
+appelle au §4 « l'autocomplétion des `id` disponibles sur l'écran attendu ».
+Trois colonnes font le tri : `modifiable` (n'offrir que l'écrivable pour un
+`set`), `type` (un bouton n'est pas une case), `texte` (le libellé, seul nom
+qu'un humain reconnaît).
+
+Le fichier sort en UTF-8 **avec BOM** et délimité par `;` : c'est ce qu'un
+Excel français lit sans rien demander. Sans le BOM il lit en ANSI et massacre
+les accents ; sans le `;` il pose tout en colonne A.
 
 `brouillon` produit une ébauche de pipeline **inachevée à dessein** : tout ce
 que la trace ne dit pas — l'identité des écrans, avant tout — porte un

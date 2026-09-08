@@ -34,12 +34,13 @@ ERREURS_LISIBLES = (ErreurFalcon, TraceInvalide, PipelineInvalide,
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Quatre commandes, et aucune n'ecrit dans SAP :
+Cinq commandes, et aucune n'ecrit dans SAP :
 
   console         menus interactifs : tests, traces, catalogue, diagnostic
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
   brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
+  dictionnaire    le catalogue a plat, en CSV lisible par un tableur
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
 """
@@ -90,7 +91,51 @@ def analyseur() -> argparse.ArgumentParser:
     ebauche.add_argument("--nom", default="",
                          help="nom de la pipeline (defaut : un marqueur)")
 
+    dico = sous.add_parser(
+        "dictionnaire", help="le catalogue a plat, en CSV pour un tableur",
+        description="Une ligne par champ, pour qu'un tableur puisse proposer "
+                    "les ecrans et les champs disponibles. Ecrit en UTF-8 "
+                    "AVEC BOM et delimite par « ; » : c'est ce qu'un Excel "
+                    "francais lit sans rien demander.")
+    dico.add_argument("catalogue", metavar="DOSSIER",
+                      help="dossier du catalogue a recenser")
+    dico.add_argument("-o", "--sortie", metavar="DICTIONNAIRE.csv",
+                      default="dictionnaire.csv",
+                      help="fichier a ecrire (defaut : dictionnaire.csv)")
+    dico.add_argument("--quarantaine", action="store_true",
+                      help="recenser la quarantaine plutot que le catalogue "
+                           "cure — utile pour un ecran tout juste releve")
+
     return principal
+
+
+def _dictionnaire(options: argparse.Namespace) -> int:
+    from falcon.catalogue import Depot
+    from falcon.commandes.dictionnaire import exporter, recenser
+
+    racine = Path(options.catalogue)
+    if not racine.is_dir():
+        print(f"{racine} n'est pas un dossier", file=sys.stderr)
+        return 1
+
+    depot = Depot(racine)
+    if options.quarantaine:
+        depot = Depot(depot.quarantaine)
+
+    lignes = recenser(depot)
+    if not lignes:
+        # Un fichier vide serait pris pour un catalogue vide plutot que pour
+        # un dossier qui n'est pas celui qu'on croit. Le dire, et ne rien
+        # ecrire.
+        print(f"{racine} ne porte aucun champ a recenser. Un ecran entre au "
+              f"catalogue par `diagnostiquer --catalogue`.", file=sys.stderr)
+        return 1
+
+    chemin = exporter(depot, options.sortie)
+    ecrans = len({(l["transaction"], l["programme"], l["dynpro"],
+                   l["empreinte"]) for l in lignes})
+    print(f"{chemin}  —  {len(lignes)} champ(s) sur {ecrans} variante(s)")
+    return 0
 
 
 def _diagnostiquer(options: argparse.Namespace) -> int:
@@ -143,7 +188,8 @@ def _brouillon(options: argparse.Namespace) -> int:
 
 
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
-             "inventaire": _inventaire, "brouillon": _brouillon}
+             "inventaire": _inventaire, "brouillon": _brouillon,
+             "dictionnaire": _dictionnaire}
 
 
 def main(arguments: list[str] | None = None) -> int:
