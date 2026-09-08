@@ -66,6 +66,7 @@ Les modules livrés :
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
+| `falcon/exploration/` | cartographie : traduction d'un geste de trace en appel de couture, rejeu en observation, compte rendu |
 | `falcon/tableur/` | les trois CSV du classeur → une pipeline YAML, relue avant d'être écrite |
 | `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter` — seule `console` peut écrire dans SAP |
 | `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, taxonomie, diagnostic |
