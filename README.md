@@ -56,12 +56,12 @@ Les modules livrés :
 |---|---|
 | `falcon/noyau/` | types de la couture, hiérarchie d'erreurs, vocabulaire des gardes, **dialecte YAML strict** |
 | `falcon/couture/` | l'interface étroite par laquelle tout FALCON parle à SAP |
-| `falcon/controleur/` | les cinq gardes, les contrats d'étape, les dérogations |
+| `falcon/controleur/` | les cinq gardes, les contrats d'étape, les dérogations, la lecture d'une grille ALV |
 | `falcon/journal/` | JSONL append-only, repli des états, reprise, rapport |
 | `falcon/taxonomie/` | registre des erreurs connues, classement, dump d'inconnu |
 | `falcon/donnees/` | lecture des jeux, regroupement par unité de sauvegarde, réexport des KO |
 | `falcon/pipeline/` | modèle déclaratif, chargeur strict, échappatoire Python |
-| `falcon/moteur/` | la boucle itérative, la chaîne de pipelines, la reprise |
+| `falcon/moteur/` | la boucle itérative, la chaîne de pipelines, la reprise, l'extraction d'une grille vers un CSV |
 | `falcon/supervision/` | progression et ETA glissant, muets hors terminal |
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |

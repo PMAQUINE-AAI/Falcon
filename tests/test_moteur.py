@@ -1718,3 +1718,198 @@ class TestExtraire(Base):
         entete = texte.splitlines()[0].split(";")
         self.assertEqual(entete[:2], ["site", "VARIANT"])
         self.assertNotIn("TEXT", entete)
+
+
+class TestLesDeuxPasses(Base):
+    """Le point d'arret, de bout en bout, sans une retouche du fichier.
+
+    C'est le seul test qui prouve que le dispositif entier fonctionne :
+    la passe d'AUDIT extrait ce que SAP a trouve, le fichier s'ouvre dans
+    Excel et se relit, et la passe de REMEDIATION le consomme tel quel comme
+    jeu — en retrouvant chaque ligne par son CONTENU, jamais par son rang.
+
+    C'est aussi ce que le §1 decrit, mot pour mot : « passe d'audit -> fichier
+    de constats (relisible, editable) -> passe de remediation. L'humain valide
+    le fichier intermediaire avant toute ecriture. »
+    """
+
+    #: Une transaction par pipeline : `ecran:` est une CONSTANTE d'etape, et
+    #: le triplet change avec la transaction. Une pipeline unique qui iterait
+    #: sur six transactions devrait declarer `navigation_libre` partout,
+    #: c'est-a-dire neutraliser la garde 1 sur toute la passe.
+    #:
+    #: **L'etape qui OUVRE la modale doit la declarer**, et pas seulement
+    #: celles qui travaillent dedans : la garde des fenetres tourne APRES
+    #: l'action, donc sur l'ecran que le press vient de produire. Trouve en
+    #: ecrivant ce test, et c'est ce que la pipeline BCP reelle devra faire.
+    AUDIT = f"""
+        version: 1
+        nom: audit_bcp_ia08
+        classe: iterative
+        cles: [transaction]
+        plafond_items: 10
+        plafond_sauvegardes: 0
+        etapes:
+          - nom: ouvrir_la_boite
+            action: press
+            cible: "wnd[0]/tbar[1]/btn[17]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: chercher
+            action: set
+            cible: "wnd[1]/usr/txtV-LOW"
+            source: {{constante: "*BCP*"}}
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: executer_la_recherche
+            action: press
+            cible: "wnd[1]/tbar[0]/btn[8]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: variantes
+            action: extraire
+            cible: "{GRILLE_ALV}"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+        """
+
+    REMEDIATION = f"""
+        version: 1
+        nom: remediation_bcp_ia08
+        classe: iterative
+        cles: [transaction, VARIANT]
+        plafond_items: 10
+        plafond_sauvegardes: 10
+        etapes:
+          - nom: ouvrir_la_boite
+            action: press
+            cible: "wnd[0]/tbar[1]/btn[17]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: choisir_la_variante
+            action: choisir
+            cible: "{GRILLE_ALV}"
+            colonne: VARIANT
+            source: {{colonne: VARIANT}}
+            comparaison: exact
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: la_charger
+            action: ouvrir
+            cible: "{GRILLE_ALV}"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: sauver
+            action: press
+            cible: "wnd[0]/tbar[0]/btn[11]"
+            sauvegarde: true
+            {ECRAN}
+        """
+
+    def _sap(self) -> DriverScripte:
+        """La modale s'ouvre A CAUSE du press, pas avant lui.
+
+        Premiere redaction : `wnd[1]` ouverte des le depart. La garde des
+        fenetres l'a refusee sur la premiere etape, qui ne declare que
+        `wnd[0]` — et elle avait raison. Un double qui montre une modale que
+        rien n'a ouverte ne modelise pas le flux, il le contourne.
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = list(LIGNES_ALV)
+
+        def apres(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            if cible.endswith("tbar[1]/btn[17]"):
+                driver.fenetres = (
+                    Fenetre(id="wnd[0]", type="GuiMainWindow"),
+                    Fenetre(id="wnd[1]", type="GuiModalWindow"))
+            if geste == "grid_double_click":
+                # Le scenario que CE test declare : charger la variante ferme
+                # la boite. Ce n'est pas une affirmation sur SAP — le double
+                # « n'etablit aucune fidelite » — c'est le scenario dans
+                # lequel on veut voir le moteur se comporter. Sans lui, la
+                # sauvegarde qui suit verrait une modale que rien n'a fermee,
+                # et la garde des fenetres aurait raison de refuser.
+                driver.fenetres = (Fenetre(id="wnd[0]",
+                                           type="GuiMainWindow"),)
+
+        brut.apres_action = apres
+        return brut
+
+    def _lancer(self, texte, jeu, journal, brut, **options):
+        chemin = self.racine / f"{abs(hash(texte))}.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        return executer(charger(chemin), jeu, brut, journal=journal,
+                        registre=self.registre, **{**SANS_REPETITION, **options})
+
+    def test_l_audit_extrait_et_la_remediation_le_consomme_TEL_QUEL(self):
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "audit.jsonl",
+                             self._sap(), sortie_extraction=sortie)
+        self.assertEqual(audit.etat, TERMINE, audit.raison)
+        self.assertEqual(len(audit.extraits), 1)
+
+        # Le fichier n'est PAS retouche : il part tel quel comme jeu.
+        extrait = Path(audit.extraits[0])
+        self.assertEqual(extrait.name, "variantes_IA08.csv")
+
+        sap = self._sap()
+        remediation = self._lancer(self.REMEDIATION, extrait,
+                                   self.racine / "remediation.jsonl", sap)
+        self.assertEqual(remediation.etat, TERMINE, remediation.raison)
+        self.assertEqual(remediation.compteurs[OK], len(LIGNES_ALV))
+
+        # Chaque variante a ete retrouvee par son CONTENU : les rangs
+        # positionnes suivent l'ordre des lignes du fichier, pas un index fige.
+        positions = [int(g[2]) for g in sap.gestes
+                     if g[0] == "grid_set_current_row"]
+        self.assertEqual(positions, list(range(len(LIGNES_ALV))))
+
+    def test_l_humain_peut_supprimer_des_lignes_entre_les_deux(self):
+        """Le point d'arret sert a ca : une recherche qui ramene trop se
+        corrige AVANT d'ecrire dans SAP, pas apres."""
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "a.jsonl",
+                             self._sap(), sortie_extraction=sortie)
+
+        # Ce qu'un humain fait dans Excel : il garde deux lignes sur quatre.
+        extrait = Path(audit.extraits[0])
+        texte = extrait.read_bytes().decode("utf-8-sig")
+        lignes = texte.splitlines(keepends=True)
+        extrait.write_bytes("".join(lignes[:3]).encode("utf-8-sig"))
+
+        sap = self._sap()
+        remediation = self._lancer(self.REMEDIATION, extrait,
+                                   self.racine / "r.jsonl", sap)
+        self.assertEqual(remediation.compteurs[OK], 2)
+        self.assertEqual(
+            len([g for g in sap.gestes if g[1].endswith("tbar[0]/btn[11]")]), 2)
+
+    def test_la_provenance_survit_a_la_relecture_humaine(self):
+        """Elle est sur chaque ligne, donc une suppression de lignes ne la
+        perd pas — et un collage de deux extractions ne la falsifie pas."""
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\nIW39\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "a.jsonl",
+                             self._sap(), sortie_extraction=sortie,
+                             systeme="QAS", mandant="200", utilisateur="X")
+
+        self.assertEqual(len(audit.extraits), 2)
+        colle = []
+        for rang, chemin in enumerate(audit.extraits):
+            texte = Path(chemin).read_bytes().decode("utf-8-sig")
+            lignes = texte.splitlines()
+            colle += lignes if rang == 0 else lignes[1:]
+
+        # Chaque ligne dit de quelle transaction elle vient, meme melangees.
+        lues = list(csv.DictReader(io.StringIO("\n".join(colle)),
+                                   delimiter=";"))
+        self.assertEqual({l["transaction"] for l in lues}, {"IA08", "IW39"})
+        self.assertEqual({l["falcon_systeme"] for l in lues}, {"QAS"})

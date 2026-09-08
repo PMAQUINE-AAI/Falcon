@@ -47,10 +47,15 @@ JETON_LIBRE = "libre"
 
 #: Colonnes de `etapes.csv`. L'ordre est celui du classeur, et il compte pour
 #: la relecture humaine ; la lecture, elle, va par NOM.
+#: `colonne` et `colonnes` servent aux actions de grille : la premiere dit OU
+#: chercher (`choisir`), la seconde CE QU'ON LIT (`extraire`). Elles sont
+#: distinctes a dessein — le singulier designe une colonne, le pluriel une
+#: liste — et l'en-tete etant verifie a l'EGALITE, un CSV exporte avant leur
+#: arrivee est refuse bruyamment plutot que lu de travers.
 COLONNES_ETAPES = (
     "rang", "nom", "action", "cible", "ecran", "source_genre", "source_valeur",
     "format", "defaut", "statut_attendu", "sauvegarde", "comparaison",
-    "fenetres", "fonction",
+    "fenetres", "fonction", "colonne", "colonnes",
 )
 
 #: Colonnes de `derogations.csv`.

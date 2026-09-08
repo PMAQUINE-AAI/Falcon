@@ -27,9 +27,9 @@ from falcon.noyau.yaml_strict import citer as _citer
 #: L'ordre des clefs d'une etape. Fixe, et lisible : ce qu'on fait, sur quoi,
 #: avec quelle valeur, puis ce que les gardes verront.
 ORDRE_ETAPE = (
-    "nom", "action", "cible", "source", "format", "defaut", "ecran",
-    "navigation_libre", "fenetres", "statut_attendu", "sauvegarde",
-    "comparaison", "fonction", "derogations",
+    "nom", "action", "cible", "colonne", "colonnes", "source", "format",
+    "defaut", "ecran", "navigation_libre", "fenetres", "statut_attendu",
+    "sauvegarde", "comparaison", "fonction", "derogations",
 )
 
 

@@ -163,13 +163,39 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
                      "le rang de la ligne — et un fichier de KO reinjecte n'a "
                      "plus les memes rangs")
 
+    # Les deux plafonds sont OBLIGATOIRES, et leur plancher differe.
+    #
+    # `plafond_items: 0` reste refuse : un lot qui ne traite aucun item se
+    # termine en annoncant « termine », et « un lot qui semble passer et n'a
+    # rien fait est le pire des resultats » — la phrase est de ce depot.
+    #
+    # `plafond_sauvegardes: 0` est desormais ACCEPTE, et c'est un defaut
+    # corrige : zero est la declaration la plus FORTE que puisse faire une
+    # pipeline — « celle-ci n'ecrit rien ». Le refuser obligeait une passe
+    # d'AUDIT a se declarer le droit d'ecrire au moins une fois pour pouvoir
+    # se charger, c'est-a-dire a demander une permission dont tout son objet
+    # est de se passer. Le depot fait deja le contraire ailleurs :
+    # `volumique/se16n.py` et `exploration/parcours.py` posent tous deux
+    # `plafond_sauvegardes=0`, avec la meme justification — « un export LIT ;
+    # s'il declenchait une sauvegarde, ce serait qu'il n'est pas sur l'ecran
+    # qu'on croit ».
+    #
+    # La garde de rayon refuse a partir de la N-ieme sauvegarde : un plafond
+    # a zero refuse donc la premiere, ce qui est exactement voulu.
     plafonds = {}
-    for cle in ("plafond_items", "plafond_sauvegardes"):
+    for cle, plancher in (("plafond_items", 1), ("plafond_sauvegardes", 0)):
         valeur = contenu.get(cle)
-        if not isinstance(valeur, int) or isinstance(valeur, bool) or valeur < 1:
-            raise _refus(source, f"`{cle}` doit etre un entier positif "
+        if (not isinstance(valeur, int) or isinstance(valeur, bool)
+                or valeur < plancher):
+            precision = (
+                "Un lot qui ne traite aucun item se termine en annoncant "
+                "« termine » : c'est le pire des resultats"
+                if plancher else
+                "Zero est licite, et c'est la declaration la plus forte : "
+                "« cette pipeline n'ecrit rien »")
+            raise _refus(source, f"`{cle}` doit etre un entier >= {plancher} "
                                  f"(recu {valeur!r}). Le rayon d'action est "
-                                 f"obligatoire, pas optionnel")
+                                 f"obligatoire, pas optionnel. {precision}")
         plafonds[cle] = valeur
 
     brutes = contenu.get("etapes")

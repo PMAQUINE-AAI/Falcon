@@ -182,6 +182,62 @@ recharge sans rien refuser.
 Tu peux aussi écrire le YAML à la main : le classeur est un confort, pas un
 passage obligé. `exemple/` montre les deux.
 
+### Quand tu ne connais pas d'avance ce que SAP va trouver
+
+Trois actions travaillent sur une **grille de résultats**, et elles existent
+parce que sélectionner une ligne par son rang est un piège : l'index dépend du
+contenu de la base au moment où on regarde, et une pipeline qui le fige traite
+la mauvaise ligne dès que la liste change — **sans lever**.
+
+| action | ce qu'elle fait |
+|---|---|
+| `extraire` | relève toute la grille dans un CSV, et **s'arrête là** |
+| `choisir` | retrouve une ligne par le **contenu** d'une colonne, et la sélectionne |
+| `ouvrir` | double-clique la ligne que `choisir` vient de positionner |
+
+Elles se composent en **deux passes**, ce que la spec appelle au §1 « passe
+d'audit → fichier de constats → passe de remédiation » :
+
+```yaml
+# passe 1 — l'AUDIT. Elle ne sauvegarde rien : plafond_sauvegardes: 0.
+  - nom: ouvrir_la_boite
+    action: press
+    cible: "wnd[0]/tbar[1]/btn[17]"
+    ecran: {transaction: IH06, programme: "<relevé>", dynpro: "<relevé>"}
+    fenetres: ["wnd[0]", "wnd[1]"]      # l'étape qui OUVRE doit la déclarer
+  - nom: chercher
+    action: set
+    cible: "wnd[1]/usr/txtV-LOW"
+    source: {constante: "[*BCP*]"}
+    ...
+  - nom: variantes
+    action: extraire
+    cible: "wnd[1]/usr/cntlALV_CONTAINER_1/shellcont/shell"
+    ...
+```
+
+Elle écrit `variantes_IH06.csv` — **un fichier par item**, nommé depuis les
+valeurs de clef. Tu l'ouvres dans Excel, tu vérifies que la recherche a ramené
+ce que tu voulais, tu supprimes les lignes de trop. Puis tu le donnes **tel
+quel** comme jeu à la passe 2, qui `choisir` chaque ligne par son nom et la
+traite.
+
+**Le fichier ne s'écrase jamais.** Un second lancement est refusé au pré-vol,
+avant tout contact avec SAP : c'est le fichier que tu viens peut-être de
+corriger.
+
+**Ce que l'extraction refuse de conclure.** Si la grille est introuvable ou
+vide, elle abandonne l'item et **n'écrit aucun fichier**. Deux causes opposées
+produisent exactement ça — la recherche n'a rien ramené, *ou* elle n'a ramené
+qu'une ligne et SAP a ouvert l'objet directement au lieu d'afficher la liste.
+Un fichier vide affirmerait la première. Il n'y a rien à affirmer.
+
+**Une mise en garde sur Excel, et elle est assumée.** Le dictionnaire protège
+ses cellules contre l'interprétation en formule ; le fichier d'extraction, non
+— son apostrophe de protection partirait dans SAP au moment de retaper la
+valeur. Une variante nommée `-K75` s'affichera donc peut-être de travers dans
+Excel. Rien dans ce dépôt n'ouvre Excel : ce n'est pas vérifié.
+
 ---
 
 ## 4. Répéter à blanc — c'est une garde
@@ -274,13 +330,15 @@ Journaux ».
 - **Relever la carte `SE16N`** (lot 12b). `falcon/volumique/carte_se16n.yaml` est livrée vide,
   et l'export refuse tant qu'il y reste un marqueur. La remplir de mémoire
   produirait un module qui a l'air complet et qui échoue au premier appel réel.
-- **`action: python`** exige toujours d'éditer le dépôt. Corollaire : les 22
-  gestes non rejouables et les 7 sélections ALV par index que le brouillon
-  signale sur la trace réelle n'ont pas d'issue déclarative.
+- **`action: python`** exige toujours d'éditer le dépôt. Les 7 **sélections
+  ALV par index** ont maintenant une issue déclarative — `choisir` retrouve la
+  ligne par son contenu — mais ce qui reste sans issue le reste : les gestes
+  d'arbre, et tout ce que la couture n'expose pas.
 - **`Champ` ne porte ni longueur ni caractère obligatoire**, donc un
   `tronque: N` suppose que tu connaisses N. Le relever demanderait de toucher
   la couture, dont la surface est épinglée à dix-huit méthodes.
-- **Extraire des champs vers un fichier** (le V1.5 que tu annonçais).
-  `action: lire` existe, mais la valeur vit dans un dictionnaire local détruit
-  à la fin de l'item : elle ne ressort ni au journal, ni au `Resultat`, ni au
-  fichier de KO.
+- **Extraire un CHAMP vers un fichier.** `action: lire` existe, mais sa valeur
+  vit dans un dictionnaire local détruit à la fin de l'item : elle ne ressort
+  ni au journal, ni au `Resultat`, ni au fichier de KO. Ce qui sort désormais,
+  c'est une **grille** entière — voir `action: extraire` au §3 — pas une
+  valeur isolée.

@@ -151,6 +151,15 @@ def _etape(ligne: Ligne, feuille: Feuille) -> dict[str, Any]:
     if ligne.brute("cible"):
         etape["cible"] = ligne.brute("cible")
 
+    # `colonne` et `colonnes` ne passent PAS par `valeur_sap` : ce sont des
+    # noms de colonnes ALV, pas des valeurs tapees dans SAP. Les encadrer de
+    # crochets ferait chercher dans une colonne nommee « [VARIANT] ».
+    if ligne.brute("colonne"):
+        etape["colonne"] = ligne.brute("colonne")
+    colonnes = lire_liste(ligne.brute("colonnes"))
+    if colonnes:
+        etape["colonnes"] = colonnes
+
     source = _source(ligne, feuille)
     if source is not None:
         etape["source"] = source

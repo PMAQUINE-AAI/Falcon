@@ -29,13 +29,14 @@ plafond_sauvegardes;50
 """
 
 ENTETE = ("rang;nom;action;cible;ecran;source_genre;source_valeur;format;"
-          "defaut;statut_attendu;sauvegarde;comparaison;fenetres;fonction\n")
+          "defaut;statut_attendu;sauvegarde;comparaison;fenetres;fonction;"
+          "colonne;colonnes\n")
 
 ECRAN = "IA08::RIPLKO10::1000"
 
 ETAPES = ENTETE + (
-    f"10;saisir;set;wnd[0]/usr/ctxtWERKS-LOW;{ECRAN};colonne;site;;;;non;;;\n"
-    f"20;sauver;press;wnd[0]/tbar[0]/btn[11];{ECRAN};;;;;;oui;;;\n"
+    f"10;saisir;set;wnd[0]/usr/ctxtWERKS-LOW;{ECRAN};colonne;site;;;;non;;;;;\n"
+    f"20;sauver;press;wnd[0]/tbar[0]/btn[11];{ECRAN};;;;;;oui;;;;;\n"
 )
 
 

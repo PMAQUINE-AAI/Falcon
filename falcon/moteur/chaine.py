@@ -45,6 +45,16 @@ class Maillon:
     journal: str | Path
     sortie_ko: str | Path | None = None
 
+    #: Dossier ou verser les fichiers d'extraction de CE maillon.
+    #:
+    #: Un chemin, pose par l'appelant, comme `sortie_ko` — et surtout PAS un
+    #: canal entre maillons : ce que le maillon N extrait n'est pas donne au
+    #: maillon N+1. Le fichier circule par le disque et par un humain qui le
+    #: relit, ce qui est exactement le point d'arret du §1. Un maillon qui
+    #: consommerait l'extrait du precedent ferait de la chaine
+    #: l'orchestrateur que le §3.3 interdit.
+    sortie_extraction: str | Path | None = None
+
 
 def retour_accueil(brut: "Driver", registre: Registre) -> None:
     """Ramene la session a l'ecran d'accueil entre deux pipelines.
@@ -93,7 +103,9 @@ def enchainer(maillons: list[Maillon],
 
         resultat = executer(maillon.pipeline, maillon.jeu, brut,
                             journal=maillon.journal, registre=connu,
-                            sortie_ko=maillon.sortie_ko, **options)
+                            sortie_ko=maillon.sortie_ko,
+                            sortie_extraction=maillon.sortie_extraction,
+                            **options)
         rendus.append(resultat)
         if resultat.interrompu:
             # Un arret bloquant dit que le modele du monde est faux. Passer au

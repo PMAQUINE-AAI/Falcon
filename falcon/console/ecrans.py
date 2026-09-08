@@ -685,6 +685,18 @@ def _rendre_resultat(console: Console, resultat) -> None:
     console.ecrire(f"  journal     {resultat.journal}")
     if resultat.ko:
         console.ecrire(f"  KO          {resultat.ko}")
+    for chemin in resultat.extraits:
+        console.ecrire(f"  extrait     {chemin}")
+    if resultat.extraits:
+        console.ecrire()
+        console.ecrire("  RELIS CES FICHIERS avant de lancer la passe "
+                       "suivante. Ils s'ouvrent")
+        console.ecrire("  dans Excel, et ce que SAP a trouve n'est pas "
+                       "forcement ce que tu")
+        console.ecrire("  voulais : supprime les lignes de trop, puis donne "
+                       "le fichier comme")
+        console.ecrire("  jeu a la pipeline de remediation. Il se redonne tel "
+                       "quel.")
     if resultat.raison:
         console.ecrire(f"  raison      {resultat.raison}")
     if resultat.interrompu:
@@ -966,6 +978,8 @@ def ecran_pipelines(env: Environnement) -> Menu:
                 pipeline, jeu, driver, journal=journal, mode=mode,
                 registre=registre, **provenance,
                 sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                sortie_extraction=str(Path(journal).parent
+                                      / "extractions"),
                 observateur=observateur)
         except RepetitionManquante as erreur:
             # La garde a refuse AVANT toute action : rien n'a ete ecrit, et on
@@ -982,6 +996,8 @@ def ecran_pipelines(env: Environnement) -> Menu:
                     pipeline, jeu, driver, journal=journal, mode=mode,
                     registre=registre, **provenance, **forcage,
                     sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                sortie_extraction=str(Path(journal).parent
+                                      / "extractions"),
                     observateur=observateur)
             except ErreurFalcon as seconde:
                 console.ecrire(f"\n  {type(seconde).__name__} : {seconde}")
@@ -1001,6 +1017,8 @@ def ecran_pipelines(env: Environnement) -> Menu:
                     pipeline, jeu, driver, journal=journal, mode=mode,
                     registre=registre, **provenance, **forcage,
                     sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                sortie_extraction=str(Path(journal).parent
+                                      / "extractions"),
                     observateur=observateur)
             except ErreurFalcon as seconde:
                 console.ecrire(f"\n  {type(seconde).__name__} : {seconde}")
@@ -1063,7 +1081,9 @@ def ecran_pipelines(env: Environnement) -> Menu:
             pipeline, jeu, items, empreinte, journal, _ = prepare
             maillons.append(Maillon(
                 pipeline=pipeline, jeu=jeu, journal=journal,
-                sortie_ko=str(Path(journal).with_suffix(".ko.csv"))))
+                sortie_ko=str(Path(journal).with_suffix(".ko.csv")),
+                sortie_extraction=str(Path(journal).parent
+                                      / "extractions")))
             recaps.append((pipeline, items, jeu, empreinte))
             console.ecrire(f"\n  + {pipeline.nom}  ({len(items)} item(s))")
 

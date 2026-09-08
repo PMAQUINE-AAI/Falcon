@@ -230,9 +230,31 @@ class TestRefusSitues(Base):
                 message = self._refus(VALIDE.replace(f"    {cle}: 50\n", ""))
                 self.assertIn(cle, message)
 
-    def test_un_plafond_nul_est_refuse(self):
-        self.assertIn("positif", self._refus(VALIDE.replace("plafond_items: 50",
-                                                            "plafond_items: 0")))
+    def test_un_plafond_d_items_nul_est_refuse(self):
+        """Un lot qui ne traite aucun item se termine en annoncant
+        « termine » : c'est le pire des resultats."""
+        message = self._refus(
+            VALIDE.replace("plafond_items: 50", "plafond_items: 0"))
+        self.assertIn("plafond_items", message)
+        self.assertIn("pire des resultats", message)
+
+    def test_un_plafond_de_sauvegardes_NUL_est_licite(self):
+        """Zero est la declaration la plus FORTE : « je n'ecris rien ».
+
+        Le refuser obligeait une passe d'AUDIT a se declarer le droit
+        d'ecrire au moins une fois pour pouvoir se charger — c'est-a-dire a
+        demander la permission dont tout son objet est de se passer. Le depot
+        fait deja le contraire ailleurs : `volumique/se16n.py` et
+        `exploration/parcours.py` posent tous deux `plafond_sauvegardes=0`.
+        """
+        pipeline = self._charger(
+            VALIDE.replace("plafond_sauvegardes: 50", "plafond_sauvegardes: 0"))
+        self.assertEqual(pipeline.plafond_sauvegardes, 0)
+
+    def test_un_plafond_de_sauvegardes_negatif_reste_refuse(self):
+        message = self._refus(VALIDE.replace("plafond_sauvegardes: 50",
+                                             "plafond_sauvegardes: -1"))
+        self.assertIn("plafond_sauvegardes", message)
 
     def test_etapes_vides(self):
         self.assertIn("etapes", self._refus(
