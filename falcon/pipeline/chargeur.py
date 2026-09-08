@@ -183,7 +183,17 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
     if not isinstance(brute, dict):
         raise _refus(source, "une etape doit etre un dictionnaire", rang)
 
-    nom = brute.get("nom") or ""
+    # `nom`, `action` et `cible` sont du TEXTE, et le controle n'est pas
+    # decoratif : `.get(...) or ""` laissait passer un `cible: on`, que YAML
+    # lit comme le booleen True. True est « truthy », donc il franchissait le
+    # test d'existence ci-dessous, et partait tel quel dans `poste.press(True)`.
+    # Meme piege sur `nom` : une etape nommee `True` n'est designable par
+    # aucune derogation, qui s'y refere par son nom.
+    try:
+        nom = texte(brute.get("nom"), "nom", source=source, defaut="")
+    except YamlAmbigu as erreur:
+        raise _refus(source, str(erreur).split(" : ", 1)[-1], rang) from None
+
     inconnues = sorted(set(brute) - CLES_ETAPE)
     if inconnues:
         raise _refus(source, f"cle(s) inconnue(s) {inconnues}", rang, nom)
@@ -195,7 +205,10 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         raise _refus(source, f"action {action!r}, attendu {sorted(ACTIONS)}",
                      rang, nom)
 
-    cible = brute.get("cible") or ""
+    try:
+        cible = texte(brute.get("cible"), "cible", source=source, defaut="")
+    except YamlAmbigu as erreur:
+        raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
     if action in AVEC_CIBLE and not cible:
         raise _refus(source, f"l'action {action!r} exige une `cible`", rang, nom)
 
@@ -238,7 +251,21 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
                          f"entier est attendu", rang, nom) from None
 
     ecran = _ecran(brute.get("ecran"), source, rang, nom)
-    libre = bool(brute.get("navigation_libre", False))
+
+    # Lu UNE fois, et strictement, AVANT le XOR.
+    #
+    # Il etait lu deux fois : un `bool()` permissif ici pour le XOR, un
+    # `booleen()` strict plus bas pour ce qui est stocke. Consequence : un
+    # `navigation_libre: "non"` accompagne d'un `ecran` rendait « `ecran` et
+    # `navigation_libre` ensemble n'ont pas de sens » — un message qui envoie
+    # supprimer l'ecran, alors que la faute est le « non ». Le refus doit
+    # nommer la vraie faute, sinon il envoie corriger la mauvaise.
+    try:
+        libre = booleen(brute.get("navigation_libre"), "navigation_libre",
+                        source=source, defaut=False)
+    except YamlAmbigu as erreur:
+        raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
+
     if ecran is None and not libre:
         raise _refus(source,
                      "declarer `ecran`, ou `navigation_libre: true` si "
@@ -272,8 +299,6 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         repli = brute.get("defaut")
         if "defaut" in brute:
             repli = texte(repli, "defaut", source=source)
-        libre_verifie = booleen(brute.get("navigation_libre"),
-                                "navigation_libre", source=source, defaut=False)
     except YamlAmbigu as erreur:
         raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
 
@@ -295,7 +320,7 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
     return Etape(
         nom=nom, action=action, cible=cible, source=source_valeur,
         format=formats, defaut=repli,
-        fonction=fonction, ecran=ecran, navigation_libre=libre_verifie,
+        fonction=fonction, ecran=ecran, navigation_libre=libre,
         fenetres=fenetres,
         statut_attendu=statut,
         sauvegarde=sauvegarde,

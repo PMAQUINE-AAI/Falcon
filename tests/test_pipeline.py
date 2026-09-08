@@ -254,6 +254,32 @@ class TestRefusSitues(Base):
         self.assertIn("etape 1", message)
         self.assertIn("saisir_division", message)
 
+    def test_une_cible_booleenne_est_refusee(self):
+        message = self._refus(VALIDE.replace(
+            '        cible: "wnd[0]/usr/ctxtWERKS-LOW"', "        cible: on"))
+        self.assertIn("cible", message)
+        self.assertIn("CHAINE", message)
+
+    def test_un_nom_d_etape_booleen_est_refuse(self):
+        message = self._refus(VALIDE.replace("      - nom: saisir_division",
+                                             "      - nom: on"))
+        self.assertIn("nom", message)
+        self.assertIn("CHAINE", message)
+
+    def test_une_navigation_libre_non_booleenne_nomme_LA_VRAIE_faute(self):
+        """Elle etait lue deux fois : un `bool()` permissif pour le XOR, un
+        `booleen()` strict pour ce qui est stocke. Un `navigation_libre: "non"`
+        accompagne d'un `ecran` rendait donc « ensemble n'ont pas de sens » —
+        un message qui envoie SUPPRIMER L'ECRAN, alors que la faute est le
+        « non ». Un refus qui nomme la mauvaise faute envoie corriger au
+        mauvais endroit."""
+        message = self._refus(VALIDE.replace(
+            "        statut_attendu: \"S\"",
+            "        navigation_libre: \"non\""))
+        self.assertIn("navigation_libre", message)
+        self.assertIn("true", message)
+        self.assertNotIn("ensemble n'ont pas de sens", message)
+
     def test_comparaison_inconnue(self):
         self.assertIn("comparaison", self._refus(
             VALIDE.replace("        action: press",
