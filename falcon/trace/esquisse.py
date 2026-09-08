@@ -66,6 +66,38 @@ _CODE = re.compile(r"^/n(?P<transaction>\S+)$")
 _FENETRE_NUE = re.compile(r"^wnd\[\d+\]$")
 
 
+def vise_le_champ_de_commande(geste: Geste) -> bool:
+    """Ce geste ecrit-il dans le champ de commande.
+
+    Reconnu par le SUFFIXE, parce que c'est ce qu'une trace porte. Pour y
+    ECRIRE, c'est l'identifiant complet `CHAMP_DE_COMMANDE` qu'il faut — la
+    distinction est ecrite au vocabulaire du noyau, et la confondre ferait
+    ecrire dans un champ qui n'existe pas.
+    """
+    return geste.cible.endswith(CHAMP_DE_COMMANDE) and isinstance(
+        geste.valeur, str)
+
+
+def code_transaction(geste: Geste) -> str:
+    """La transaction que ce geste nomme dans le champ de commande, ou "".
+
+    `/nIH06` → `IH06`. `/n` seul → `""` : il ramene au menu et ne nomme
+    aucune transaction. Un geste qui ne vise pas le champ de commande → `""`.
+
+    **Public, et lu par deux modules.** `visites()` s'en sert pour etiqueter
+    l'esquisse SUIVANTE — jamais celle ou le code est tape, le piege que ce
+    module documente plus bas — et `exploration/parcours.py` pour savoir sur
+    quel code transaction une branche interrompue peut reprendre. Deux
+    expressions regulieres finiraient par diverger, et le jour ou l'une
+    accepterait `/o` sans l'autre, une reprise ouvrirait une seconde session
+    SAP pendant que le driver continuerait de parler a la premiere.
+    """
+    if not vise_le_champ_de_commande(geste):
+        return ""
+    trouve = _CODE.match(geste.valeur)                  # type: ignore[arg-type]
+    return trouve.group("transaction") if trouve else ""
+
+
 @dataclass(frozen=True)
 class Visite:
     """Un passage sur un ecran, tel que la trace permet de le decouper.
@@ -134,10 +166,9 @@ def visites(trace: Trace) -> tuple[Visite, ...]:
         if courants and geste.fenetre != courants[0].fenetre:
             clore()
         courants.append(geste)
-        if geste.cible.endswith(CHAMP_DE_COMMANDE) and isinstance(geste.valeur, str):
-            trouve = _CODE.match(geste.valeur)
+        if vise_le_champ_de_commande(geste):
             # `/n` seul ramene au menu : la transaction redevient inconnue.
-            prochaine = trouve.group("transaction") if trouve else ""
+            prochaine = code_transaction(geste)
         if geste.verbe in NAVIGATION:
             clore()
     clore()

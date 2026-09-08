@@ -14,10 +14,20 @@ from .gestes import (
     VERBE_INCONNU, Appel, Regle, TableIncoherente, Traduction, traduire,
     traduire_tous,
 )
+from .parcours import (
+    CODES_DE_SESSION, ETATS, INTERROMPUE, MODE, MOTIFS, PLAFOND,
+    PLAFOND_SAUVEGARDES, TERMINEE, TOUCHE_AVEUGLE, Branche, Exploration,
+    ExplorationImpossible, Previsualisation, Reprise, SauvegardeRefusee,
+    explorer, previsualiser,
+)
 
 __all__ = [
     "TABLE", "Regle", "Appel", "Traduction", "TableIncoherente",
     "traduire", "traduire_tous",
     "TRADUIT", "ECARTE_CONFORT", "SANS_COUTURE", "ARGUMENT_REFUSE",
     "VERBE_INCONNU",
+    "explorer", "previsualiser", "Exploration", "Previsualisation",
+    "Branche", "Reprise", "SauvegardeRefusee", "ExplorationImpossible",
+    "MODE", "PLAFOND_SAUVEGARDES", "ETATS", "TERMINEE", "INTERROMPUE",
+    "PLAFOND", "MOTIFS", "CODES_DE_SESSION", "TOUCHE_AVEUGLE",
 ]

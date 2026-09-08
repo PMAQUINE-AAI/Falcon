@@ -422,6 +422,24 @@ def _arguments(regle: Regle, geste: Geste) -> tuple[object, ...]:
         return (_entier(geste, "numero de touche"), fenetre)
     if regle.signature == TOUCHE_FIXE:
         fenetre = _fenetre(geste)
+        if fenetre == "wnd[0]":
+            # La substitution n°14 vaut pour une MODALE, et la raison portee
+            # par la regle le dit : « vkey(12) — F12, Annuler — ferme une
+            # modale ». `wnd[0]` n'en est pas une : `close` y termine la
+            # session, la ou F12 ne fait qu'annuler l'ecran courant. Traduire
+            # quand meme rendrait un appel dont la justification, servie telle
+            # quelle au compte rendu, decrirait un autre cas que le sien.
+            #
+            # Ce refus est exige par symetrie : ce module refuse deja
+            # `selectedRows = ""` au motif qu'aucune trace observee ne la
+            # contient. La trace de reference ne porte qu'un `close`, sur
+            # `wnd[1]`. Le cas `wnd[0]` n'est pas plus observe que l'autre.
+            raise _Refus(
+                f"{geste.verbe} vise wnd[0] : la substitution de la decision "
+                f"n°14 vaut pour une MODALE. Sur la fenetre principale, "
+                f"`close` termine la session quand vkey({VKEY_ANNULER}) ne "
+                f"fait qu'annuler l'ecran — ce depot ne peut pas prouver "
+                f"l'equivalence, et aucune trace observee ne la contient")
         if geste.valeur is not None:
             raise _Refus(
                 f"{geste.verbe} est un appel nu, et ce geste porte la valeur "

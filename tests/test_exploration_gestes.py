@@ -284,6 +284,26 @@ class TestFenetreEtSubstitution(unittest.TestCase):
         self.assertTrue(traduction.appel.substitue)
         self.assertIn("n°14", traduction.raison)
 
+    def test_close_sur_la_fenetre_principale_est_refuse(self):
+        """Sur wnd[0], `close` termine la session ; F12 annule l'ecran.
+
+        La regle rendait l'appel quand meme, avec une raison qui dit « ferme
+        une modale » — vraie de wnd[1], fausse de wnd[0], et servie telle
+        quelle au compte rendu. Ce module refuse deja `selectedRows = ""` au
+        motif qu'aucune trace observee ne la contient ; le `close` sur wnd[0]
+        n'est pas plus observe. Retirer le refus fait tomber ce test.
+        """
+        traduction = _un('session.findById("wnd[0]").close')
+        self.assertEqual(traduction.genre, G.ARGUMENT_REFUSE)
+        self.assertIsNone(traduction.appel)
+        self.assertIn("wnd[0]", traduction.raison)
+        self.assertIn("session", traduction.raison)
+
+    def test_close_sur_une_modale_reste_traduit(self):
+        """Le seul `close` de la trace de reference vise `wnd[1]`."""
+        traduction = _un('session.findById("wnd[1]").close')
+        self.assertEqual(traduction.appel.arguments, (G.VKEY_ANNULER, "wnd[1]"))
+
     def test_la_touche_d_annulation_est_la_meme_que_dans_le_brouillon(self):
         """Deux traductions independantes, une seule decision. Ce test est ce
         qui les empeche de diverger en silence."""
