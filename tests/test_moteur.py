@@ -701,6 +701,34 @@ class TestColonneAbsente(Base):
         self.assertIn("libelle", str(capture.exception))
         self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
 
+    def test_le_defaut_tire_sur_une_cellule_d_ESPACES(self):
+        """Le test etait `not brut`, donc « ne tire jamais sur des espaces ».
+
+        Combine a `sans_espaces_autour` — dont la docstring dit elle-meme
+        qu'« un export en laisse souvent » — le cas nominal tombait a cote :
+
+            colonne = "   ", defaut = "K75", format = [sans_espaces_autour]
+                -> ''    le defaut ne tirait pas, l'elagage vidait ensuite
+
+        Le champ SAP etait VIDE au lieu de recevoir la valeur de repli,
+        c'est-a-dire l'inverse exact de ce que `defaut` sert a garantir.
+        """
+        self.jeu.write_text("site,libelle\n1000,   \n", encoding="utf-8")
+        brut = self._driver()
+        executer(self._pipeline(SOCLE + etape(
+                     "- nom: saisir_libelle",
+                     "  action: set",
+                     '  cible: "wnd[0]/usr/ctxtWERKS-LOW"',
+                     "  source: {colonne: libelle}",
+                     '  defaut: "K75"',
+                     "  format: [sans_espaces_autour]",
+                     f"  {ECRAN}")),
+                 self.jeu, brut, journal=self.journal, registre=self.registre)
+        ecrits = [g for g in brut.gestes if g[0] == "write"]
+        self.assertTrue(ecrits, "aucune saisie")
+        self.assertEqual(ecrits[-1][-1], "K75",
+                         "le champ a ete VIDE au lieu de recevoir le repli")
+
     def test_une_case_a_cocher_sur_colonne_absente_ne_decoche_plus_en_silence(self):
         """Le cas le plus couteux : "" appartient a FAUX, donc chaque item
         etait decoche, sur tout le lot, sans un mot."""

@@ -51,7 +51,7 @@ from falcon.noyau import (
 )
 from falcon.pipeline import Etape, Pipeline, resoudre
 from falcon.pipeline.composition import appliquer as appliquer_format
-from falcon.pipeline.composition import appliquer_gabarit
+from falcon.pipeline.composition import CompositionInvalide, appliquer_gabarit
 from falcon.supervision import Progres
 from falcon.taxonomie import Registre, Signature, appliquer
 
@@ -136,7 +136,19 @@ def _valeur(etape: Etape, item: Item, lues: dict[str, str]) -> str:
     else:
         brut = str(item.brut[0].get(source.valeur, ""))
 
-    if not brut and etape.defaut is not None:
+    # `.strip()`, et pas `not brut`. Une cellule d'espaces est vide au sens ou
+    # `defaut` l'entend, et un export en laisse souvent — la docstring de
+    # `sans_espaces_autour` le dit elle-meme. Sans l'elagage, le cas nominal
+    # tombait a cote :
+    #
+    #     colonne = "   ", defaut = "K75", format = [sans_espaces_autour]
+    #         -> ''     le defaut ne tirait pas, l'elagage vidait ensuite
+    #     colonne = "  X ", meme etape
+    #         -> 'X'    (correct, pour comparaison)
+    #
+    # Le champ SAP etait donc VIDE au lieu de recevoir la valeur de repli,
+    # c'est-a-dire l'inverse exact de ce que `defaut` sert a garantir.
+    if not brut.strip() and etape.defaut is not None:
         brut = etape.defaut
     return appliquer_format(brut, etape.format)
 
@@ -237,15 +249,27 @@ def _verifier_coherence(pipeline: Pipeline, items: list[Item],
                     f"revoir `cles`, ou la colonne")
 
     for etape in pipeline.etapes:
-        if etape.action != "cocher" or etape.source is None:
-            continue
-        if etape.source.genre == "lue":
+        if etape.source is None or etape.source.genre == "lue":
             continue            # valeur inconnue avant l'execution
         for item in items:
-            # Une case dont la valeur n'est ni vraie ni fausse serait cochee
-            # ou decochee au hasard. Le savoir maintenant vaut mieux que de
-            # l'apprendre a l'item quarante, apres trente-neuf sauvegardes.
-            _booleen(_valeur(etape, item, {}), etape.nom)
+            # On CALCULE la valeur de chaque etape, pour chaque item, avant la
+            # premiere action. Toute composition qui refuse — un `zeros` sur
+            # une case vide, un gabarit dont une colonne manque — tombe donc
+            # ici plutot qu'a l'item quarante, apres trente-neuf sauvegardes.
+            #
+            # C'est possible parce qu'une source qui n'est pas `lue` ne depend
+            # que du jeu : le calcul est deterministe et rend exactement ce
+            # que l'execution taperait.
+            try:
+                valeur = _valeur(etape, item, {})
+            except CompositionInvalide as erreur:
+                raise PreparationImpossible(
+                    f"item {item.item_id}, etape {etape.nom!r} : "
+                    f"{erreur}") from None
+            if etape.action == "cocher":
+                # Une case dont la valeur n'est ni vraie ni fausse serait
+                # cochee ou decochee au hasard.
+                _booleen(valeur, etape.nom)
 
 
 # ---------------------------------------------------------------------------

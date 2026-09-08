@@ -311,3 +311,72 @@ class TestRegistreFerme(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestZerosSurVide(unittest.TestCase):
+    """`"".rjust(12, "0")` rend douze zeros, sans une exception.
+
+    Un numero d'article parfaitement plausible, fabrique a partir de rien. La
+    signature exacte de la classe de defaut que ce projet traque — et une
+    cellule vide du jeu y menait toute seule.
+    """
+
+    def test_une_valeur_vide_est_refusee(self):
+        with self.assertRaises(CompositionInvalide) as capture:
+            appliquer("", (Transformation("zeros", 12),))
+        self.assertIn("vide", str(capture.exception))
+
+    def test_une_valeur_d_espaces_aussi(self):
+        """Un export en laisse souvent, et `" ".rjust(12, "0")` rendait
+        « 00000000000 » suivi d'une espace."""
+        with self.assertRaises(CompositionInvalide):
+            appliquer("   ", (Transformation("zeros", 12),))
+
+    def test_une_vraie_valeur_est_cadree(self):
+        self.assertEqual(appliquer("42", (Transformation("zeros", 12),)),
+                         "000000000042")
+
+    def test_douze_zeros_restent_ecrivables_mais_se_declarent(self):
+        """Le refus ne retire aucun cas legitime : il oblige a l'ecrire."""
+        self.assertEqual(
+            appliquer("000000000000", (Transformation("zeros", 12),)),
+            "000000000000")
+
+    def test_le_refus_tombe_AVANT_la_premiere_action(self):
+        """Un refus a l'item quarante arrive apres trente-neuf sauvegardes.
+
+        Le pre-vol calcule desormais la valeur de chaque etape pour chaque
+        item : une source qui n'est pas `lue` ne depend que du jeu, donc le
+        calcul est deterministe et rend exactement ce que l'execution
+        taperait.
+        """
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        racine = Path(dossier.name)
+        jeu = racine / "jeu.csv"
+        jeu.write_text("site,numero\n1000,42\n2000,\n", encoding="utf-8")
+
+        chemin = racine / "p.yaml"
+        chemin.write_text(textwrap.dedent("""\
+            version: 1
+            nom: cadrage
+            classe: iterative
+            cles: [site]
+            plafond_items: 50
+            plafond_sauvegardes: 50
+            etapes:
+              - nom: saisir
+                action: set
+                cible: "wnd[0]/usr/ctxtMATNR"
+                source: {colonne: numero}
+                format: [{zeros: 12}]
+                ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}
+            """), encoding="utf-8")
+
+        driver = DriverScripte(Identite("IA08", "RIPLKO10", "1000"))
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(charger(chemin), jeu, driver,
+                     journal=racine / "j.jsonl")
+        self.assertIn("zeros", str(capture.exception))
+        self.assertEqual(driver.gestes, [], "refuse AVANT la premiere action")
+

@@ -166,7 +166,26 @@ def _zeros(valeur: str, largeur: Any) -> str:
     Une valeur plus longue que la largeur n'est pas tronquee ici. Tronquer
     silencieusement un numero produirait une reference valide et fausse ;
     `tronque` existe et se declare.
+
+    UNE VALEUR VIDE EST REFUSEE, et c'est le point important.
+
+    `"".rjust(12, "0")` rend « 000000000000 » : douze caracteres, aucune
+    exception, et un numero d'article parfaitement plausible fabrique a partir
+    de rien. C'est la signature exacte de la classe de defaut que ce projet
+    traque — et le chemin y menait tout seul, puisqu'une cellule vide du jeu
+    donne la chaine vide.
+
+    Cadrer, c'est completer une valeur. Il n'y a rien a completer ici : le
+    refus dit que la donnee manque, la ou le zero disait qu'elle valait zero.
+    Pour ecrire reellement douze zeros, il faut le declarer — `defaut:
+    "000000000000"`, qui se lit pour ce qu'il est.
     """
+    if not valeur.strip():
+        raise CompositionInvalide(
+            f"`zeros: {largeur}` sur une valeur vide fabriquerait "
+            f"« {'0' * int(largeur)} » — un numero d'aspect parfaitement "
+            f"normal, a partir de rien. Cadrer, c'est completer une valeur ; "
+            f"il n'y en a pas. Verifie la colonne, ou declare un `defaut`")
     return valeur.rjust(int(largeur), "0")
 
 
