@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from falcon.controleur import Constat, DriverGarde, Poste, contrat_pour
+from falcon.controleur.grille import GrilleIllisible, chercher
 from falcon.donnees import (
     Dialecte, Item, empreinte_jeu, ecrire_items, lire_items,
 )
@@ -299,11 +300,62 @@ def _jouer_etape(etape: Etape, item: Item, garde: DriverGarde, poste: Poste,
             # L'etape lie sa lecture SOUS SON PROPRE NOM : c'est ce que le
             # chargeur a valide pour les sources « lue ».
             lues[etape.nom] = poste.read(etape.cible)
+        elif action == "choisir":
+            _choisir(etape, poste, _valeur(etape, item, lues))
+        elif action == "ouvrir":
+            # Le chargeur a verifie qu'un `choisir` de meme cible precede
+            # IMMEDIATEMENT : la cellule courante est donc celle qu'il a
+            # posee. Sans ce controle, le double-clic porterait sur la ligne
+            # que SAP a laissee — la 0 le plus souvent, sans erreur.
+            poste.grid_double_click(etape.cible)
         elif action == "python":
             resoudre(etape.fonction)(poste, item, lues)
         else:                                       # pragma: no cover
             raise PreparationImpossible(
                 f"etape {etape.nom!r} : action {action!r} sans execution")
+
+
+def _choisir(etape: Etape, poste: Poste, valeur: str) -> None:
+    """Positionne la grille sur la ligne dont `colonne` porte `valeur`.
+
+    **Par le contenu, jamais par le rang.** C'est la regle que
+    `couture/interface.py` enonce depuis toujours — « l'index depend du
+    contenu de la base au moment ou on regarde » — et que rien n'appliquait,
+    faute d'une action pour l'ecrire.
+
+    Deux refus, et tous deux abandonnent l'ITEM sans tuer le lot : un site
+    dont la variante manque ne doit pas emporter les quarante-neuf autres.
+
+    - **aucune ligne** : selectionner quand meme, ce serait en traiter une
+      autre ;
+    - **plusieurs** : prendre la premiere, ce serait choisir au hasard la
+      ligne qu'on va modifier — et rien dans le journal ne dirait qu'elles
+      etaient trois.
+
+    Ne double-clique PAS. `ouvrir` est une action separee parce que
+    selectionner sans ouvrir est un cas reel : selectionner N lignes puis
+    presser un bouton de barre.
+    """
+    rangs = chercher(poste, etape.cible, etape.colonne, valeur,
+                     comparaison=etape.comparaison)
+    if not rangs:
+        raise ItemAbandonne(
+            f"etape {etape.nom!r} : aucune ligne de la grille ne porte "
+            f"{valeur!r} en colonne {etape.colonne!r} "
+            f"({poste.grid_rows(etape.cible)} ligne(s) lue(s)). Selectionner "
+            f"une ligne quand meme, ce serait en traiter une autre")
+    if len(rangs) > 1:
+        raise ItemAbandonne(
+            f"etape {etape.nom!r} : {len(rangs)} lignes portent {valeur!r} en "
+            f"colonne {etape.colonne!r} (rangs {list(rangs)}). Prendre la "
+            f"premiere serait choisir au hasard la ligne a modifier. Affiner "
+            f"la colonne, ou passer `comparaison: exact`")
+
+    # L'ORDRE compte, et c'est un piege releve sur une trace reelle :
+    # `grid_double_click` agit sur la cellule COURANTE, pas sur la selection.
+    # Omettre le positionnement double-cliquerait la ligne 0 sans lever.
+    poste.grid_set_current_row(etape.cible, rangs[0])
+    poste.grid_select_rows(etape.cible, rangs)
 
 
 def _classer_echec(erreur: Exception, canal: str, registre: Registre,
@@ -350,12 +402,27 @@ def _jouer_item(pipeline: Pipeline, item: Item, garde: DriverGarde,
             # RefusDryRun, ItemAbandonne, ArretBloquant : deja typés par la
             # doctrine. Un repli n'a pas le droit de les rattraper.
             raise
-        except PreparationImpossible:
+        except (PreparationImpossible, GrilleIllisible):
             # Un defaut de la pipeline ou du jeu, pas un comportement de SAP.
             # Le faire classer par la taxonomie le deguiserait en incident
             # metier, et l'auteur de la pipeline chercherait au mauvais
             # endroit. La plupart de ces cas tombent deja au pre-vol ; celui-ci
             # est la ceinture pour ceux qui n'y sont pas verifiables.
+            #
+            # `GrilleIllisible` y a rejoint `PreparationImpossible` apres
+            # mesure : sans cette ligne, une colonne mal orthographiee tombait
+            # dans le `except Exception` du bas, etait classee sur le canal
+            # « python » — celui des etapes maison — et ressortait `inconnue`
+            # donc bloquante. Le lot s'arretait bien, mais un dump partait, et
+            # `falcon recolter` aurait propose d'ecrire une entree de registre
+            # pour une FAUTE DE FRAPPE dans le YAML. Declarer « colonne
+            # VARIANTE absente » connue_benigne, c'est rendre un defaut de
+            # pipeline tolerable pour toujours.
+            #
+            # Le lot s'arrete, et c'est voulu : une colonne mal nommee echoue
+            # identiquement sur chaque item. Cinquante KO identiques noieraient
+            # le fichier de KO d'un defaut qui n'a rien a voir avec les
+            # donnees.
             raise
         except Echec as erreur:
             _classer_echec(erreur, "com", registre, etape.nom, adapter)
@@ -536,9 +603,17 @@ def executer(pipeline: Pipeline,
                 _diagnostiquer(diagnostics, perdus, item, "item", erreur,
                                adapter, garde.sauvegardes - avant)
                 continue
-            except (ArretBloquant, PlafondAtteint) as erreur:
+            except (ArretBloquant, PlafondAtteint, GrilleIllisible) as erreur:
                 # Regle 3 : PAS de fin d'item. Il reste ouvert, et le repli
                 # decidera s'il est rejouable ou douteux.
+                #
+                # `GrilleIllisible` est rattrapee ICI, et pas laissee remonter,
+                # pour une raison qui n'est pas de confort : une execution qui
+                # s'echappe par une exception ne pose PAS d'`ExecutionFin` au
+                # journal. Le repli des etats verrait un run jamais termine, et
+                # `garde_de_la_repetition` chercherait une repetition a blanc
+                # aboutie qu'elle ne trouverait pas. Un defaut de pipeline
+                # doit arreter le lot proprement, pas casser le journal.
                 etat = PLAFOND if isinstance(erreur, PlafondAtteint) \
                     else INTERROMPU
                 raison = str(erreur)

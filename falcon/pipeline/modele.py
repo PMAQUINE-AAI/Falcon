@@ -26,11 +26,22 @@ from typing import Any
 #: `cocher`, on ne peut pas positionner explicitement les trois cases de
 #: selection que le terrain impose ; sans `vkey`, aucune touche de fonction ;
 #: et `python` est l'echappatoire que la specification rend obligatoire.
+#: Les trois dernieres sont celles de la GRILLE, et elles referment un piege
+#: que la couture documente depuis toujours sans que rien ne l'applique :
+#: « selectionner par index est un piege, pas une commodite […] la regle : lire
+#: la grille pour retrouver la ligne voulue par son CONTENU »
+#: (`couture/interface.py`). Faute d'action, la regle etait une phrase.
 ACTIONS = frozenset({"set", "cocher", "press", "select", "vkey", "lire",
-                     "python"})
+                     "python", "extraire", "choisir", "ouvrir"})
+
+#: Actions de grille. Elles partagent la meme `cible` — l'identifiant du shell
+#: ALV — et c'est ce qui permet au chargeur de verifier qu'un `ouvrir` porte
+#: bien sur la grille que le `choisir` qui le precede vient de positionner.
+GRILLE = frozenset({"extraire", "choisir", "ouvrir"})
 
 #: Actions qui exigent une cible.
-AVEC_CIBLE = frozenset({"set", "cocher", "press", "select", "lire"})
+AVEC_CIBLE = frozenset({"set", "cocher", "press", "select", "lire",
+                        "extraire", "choisir", "ouvrir"})
 
 #: Actions qui exigent une source de valeur.
 #:
@@ -38,7 +49,38 @@ AVEC_CIBLE = frozenset({"set", "cocher", "press", "select", "lire"})
 #: L'action etait declarable et chargeable, et une etape `vkey` chargee etait
 #: muette sur ce qu'elle devait envoyer : le moteur ne pouvait pas l'executer.
 #: Le trou n'a ete visible qu'au moment d'ecrire le moteur, ce qui est tard.
-AVEC_SOURCE = frozenset({"set", "cocher", "vkey"})
+#: `choisir` y figure parce que la valeur cherchee est ce qui distingue une
+#: ligne d'une autre : sans source, on ne chercherait rien.
+AVEC_SOURCE = frozenset({"set", "cocher", "vkey", "choisir"})
+
+#: Actions qui exigent le nom d'UNE colonne — celle ou l'on cherche.
+#:
+#: Obligatoire, et pas defaillable sur « la premiere colonne » : la premiere
+#: colonne est celle de la mise en page ALV du poste, donc elle change d'un
+#: utilisateur a l'autre. Chercher dans une colonne qu'on n'a pas nommee, c'est
+#: chercher ailleurs que la ou on croit.
+AVEC_COLONNE = frozenset({"choisir"})
+
+#: Actions qui acceptent une LISTE de colonnes a lire.
+#:
+#: Facultative, a la difference de `AVEC_COLONNE`, et l'omission ne relache
+#: aucune garde : elle elargit un perimetre de LECTURE. L'exiger rendrait
+#: impossible la premiere extraction, qui est justement celle ou l'on ne
+#: connait pas encore les noms de colonnes.
+AVEC_COLONNES = frozenset({"extraire"})
+
+#: Actions pour lesquelles `navigation_libre` est INTERDIT.
+#:
+#: `extraire` en fait partie, et c'est ce qui referme le piege du resultat
+#: unique : quand la recherche ne remonte qu'une ligne, SAP ouvre l'objet
+#: directement au lieu d'afficher la liste. La grille est alors introuvable —
+#: exactement comme si la recherche n'avait rien remonte. Deux conclusions
+#: opposees, qu'aucune observation de la grille ne separe.
+#:
+#: Avec un `ecran` declare, la garde d'identite leve `EcartIdentite` AVANT tout
+#: `ObjetIntrouvable`, et les deux cas se distinguent. `navigation_libre`
+#: desarmerait la seule chose qui les distingue.
+SANS_NAVIGATION_LIBRE = frozenset({"extraire"})
 
 #: Actions dont la source doit etre une constante, pas une donnee du jeu.
 #:
@@ -102,6 +144,13 @@ class Etape:
     cible: str = ""
     source: Source | None = None
     fonction: str = ""                       # action « python »
+
+    #: Colonne ou l'on cherche — action « choisir ». Obligatoire pour elle.
+    colonne: str = ""
+
+    #: Colonnes a lire — action « extraire ». Vide = celles que la grille
+    #: expose, c'est-a-dire la mise en page ALV du poste qui execute.
+    colonnes: tuple[str, ...] = ()
 
     # Ce que l'etape declare aux gardes.
     #: Transformations appliquees a la valeur, DANS L'ORDRE DECLARE, avant

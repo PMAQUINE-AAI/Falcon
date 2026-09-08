@@ -669,3 +669,273 @@ class TestModele(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GRILLE = "wnd[1]/usr/cntlALV_CONTAINER_1/shellcont/shell"
+
+ECRAN = 'ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}'
+
+
+class TestActionsDeGrille(Base):
+    """Les trois actions qui referment le piege de la selection par index.
+
+    `couture/interface.py` porte la regle depuis toujours — « lire la grille
+    pour retrouver la ligne voulue par son CONTENU » — et personne ne
+    l'appliquait, faute d'une action qui le permette. La regle etait une
+    phrase ; elle devient un vocabulaire.
+    """
+
+    def _avec(self, etape: str):
+        return self._charger(SOCLE + textwrap.indent(
+            textwrap.dedent(etape), "      "))
+
+    def test_les_trois_actions_se_chargent(self):
+        pipeline = self._avec(f"""
+            - nom: lister
+              action: extraire
+              cible: "{GRILLE}"
+              {ECRAN}
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              source: {{colonne: site}}
+              {ECRAN}
+            - nom: l_ouvrir
+              action: ouvrir
+              cible: "{GRILLE}"
+              {ECRAN}
+        """)
+        actions = [e.action for e in pipeline.etapes[-3:]]
+        self.assertEqual(actions, ["extraire", "choisir", "ouvrir"])
+        self.assertEqual(pipeline.etapes[-2].colonne, "VARIANT")
+
+    # -- `ouvrir` ne peut pas partir seul --------------------------------
+
+    def test_ouvrir_sans_choisir_qui_precede_est_refuse(self):
+        """CONTROLE NEGATIF : retirer le controle fait tomber ce test.
+
+        `grid_double_click` agit sur la cellule COURANTE. Sans positionnement,
+        c'est la ligne 0 qui s'ouvre — **sans erreur**. Une autre variante,
+        en silence.
+        """
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: l_ouvrir
+              action: ouvrir
+              cible: "{GRILLE}"
+              {ECRAN}
+        """), "      "))
+        self.assertIn("cellule COURANTE", message)
+        self.assertIn("ligne 0", message)
+
+    def test_ouvrir_apres_une_etape_intercalee_est_refuse(self):
+        """« Immediatement », et non « quelque part avant ».
+
+        Rien ici ne prouve qu'une etape intercalee laisse la cellule courante
+        en place. La megatrace montre les trois gestes consecutifs ; on s'en
+        tient a ce qu'elle montre.
+        """
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              source: {{colonne: site}}
+              {ECRAN}
+            - nom: souffler
+              action: press
+              cible: "wnd[0]/tbar[0]/btn[3]"
+              {ECRAN}
+            - nom: l_ouvrir
+              action: ouvrir
+              cible: "{GRILLE}"
+              {ECRAN}
+        """), "      "))
+        self.assertIn("cellule COURANTE", message)
+
+    def test_ouvrir_sur_une_AUTRE_grille_que_le_choisir_est_refuse(self):
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              source: {{colonne: site}}
+              {ECRAN}
+            - nom: l_ouvrir
+              action: ouvrir
+              cible: "wnd[0]/usr/cntlAUTRE/shellcont/shell"
+              {ECRAN}
+        """), "      "))
+        self.assertIn("dont personne n'a positionne la cellule courante",
+                      message)
+
+    # -- `colonne` --------------------------------------------------------
+
+    def test_choisir_sans_colonne_est_refuse(self):
+        """Se rabattre sur la premiere colonne chercherait dans la premiere
+        colonne de la MISE EN PAGE du poste, qui change d'un poste a l'autre."""
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              source: {{colonne: site}}
+              {ECRAN}
+        """), "      "))
+        self.assertIn("exige une `colonne`", message)
+        self.assertIn("MISE EN PAGE", message)
+
+    def test_choisir_sans_source_est_refuse(self):
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              {ECRAN}
+        """), "      "))
+        self.assertIn("exige une `source`", message)
+
+    def test_colonne_sur_une_action_qui_n_en_veut_pas_est_refusee(self):
+        """Une clef acceptee et lue nulle part est une intention qui n'arme
+        rien — le defaut que `CLES_REFUSEES` traque deja ailleurs."""
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: presser
+              action: press
+              cible: "wnd[0]/tbar[0]/btn[8]"
+              colonne: VARIANT
+              {ECRAN}
+        """), "      "))
+        self.assertIn("`colonne` n'a pas de sens", message)
+
+    def test_colonnes_sur_une_action_qui_n_en_veut_pas_est_refusee(self):
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              colonnes: [VARIANT, TEXT]
+              source: {{colonne: site}}
+              {ECRAN}
+        """), "      "))
+        self.assertIn("`colonnes` n'a pas de sens", message)
+
+    # -- `extraire` exige son ecran ---------------------------------------
+
+    def test_extraire_en_navigation_libre_est_refuse(self):
+        """CONTROLE NEGATIF : autoriser `navigation_libre` fait tomber ce test.
+
+        C'est la garde d'identite qui distingue « la recherche n'a rien
+        remonte » de « SAP a ouvert l'objet directement parce qu'il n'y en
+        avait qu'un » — deux conclusions OPPOSEES qui produisent la meme
+        grille introuvable. La desarmer, c'est perdre la seule chose qui les
+        separe.
+        """
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: lister
+              action: extraire
+              cible: "{GRILLE}"
+              navigation_libre: true
+        """), "      "))
+        self.assertIn("`navigation_libre` y est interdit", message)
+        self.assertIn("deux conclusions opposees", message)
+
+    def test_choisir_et_ouvrir_acceptent_la_navigation_libre(self):
+        """Le refus porte sur `extraire` SEULE, et il faut que ce soit visible.
+
+        Un refus trop large se relacherait globalement le jour ou il generait.
+        """
+        pipeline = self._avec(f"""
+            - nom: choisir_la_variante
+              action: choisir
+              cible: "{GRILLE}"
+              colonne: VARIANT
+              source: {{colonne: site}}
+              navigation_libre: true
+            - nom: l_ouvrir
+              action: ouvrir
+              cible: "{GRILLE}"
+              navigation_libre: true
+        """)
+        self.assertTrue(pipeline.etapes[-1].navigation_libre)
+
+    # -- les colonnes d'extraction ----------------------------------------
+
+    def test_les_colonnes_declarees_sont_conservees_dans_l_ordre(self):
+        pipeline = self._avec(f"""
+            - nom: lister
+              action: extraire
+              cible: "{GRILLE}"
+              colonnes: [VARIANT, TEXT, ENAME]
+              {ECRAN}
+        """)
+        self.assertEqual(pipeline.etapes[-1].colonnes,
+                         ("VARIANT", "TEXT", "ENAME"))
+
+    def test_colonnes_en_scalaire_est_refuse(self):
+        """Le piege de `fenetres` : « VARIANT » en scalaire donnerait sept
+        colonnes nommees V, A, R, I, A, N, T."""
+        message = self._refus(SOCLE + textwrap.indent(textwrap.dedent(f"""
+            - nom: lister
+              action: extraire
+              cible: "{GRILLE}"
+              colonnes: VARIANT
+              {ECRAN}
+        """), "      "))
+        self.assertIn("colonnes", message)
+
+    def test_extraire_sans_colonnes_est_licite(self):
+        """La premiere extraction est justement celle ou l'on ne connait pas
+        encore les noms de colonnes. Les exiger la rendrait impossible."""
+        pipeline = self._avec(f"""
+            - nom: lister
+              action: extraire
+              cible: "{GRILLE}"
+              {ECRAN}
+        """)
+        self.assertEqual(pipeline.etapes[-1].colonnes, ())
+
+    # -- les trois exigent une cible --------------------------------------
+
+    def test_les_trois_actions_exigent_une_cible(self):
+        """Une action de grille sans grille n'a rien a nommer."""
+        corps = {
+            "extraire": f"""
+            - nom: sans_cible
+              action: extraire
+              {ECRAN}
+        """,
+            "choisir": f"""
+            - nom: sans_cible
+              action: choisir
+              colonne: VARIANT
+              source: {{colonne: site}}
+              {ECRAN}
+        """,
+            "ouvrir": f"""
+            - nom: sans_cible
+              action: ouvrir
+              {ECRAN}
+        """,
+        }
+        for action, texte in corps.items():
+            with self.subTest(action):
+                message = self._refus(
+                    SOCLE + textwrap.indent(textwrap.dedent(texte), "      "))
+                self.assertIn("exige une `cible`", message)
+
+
+class TestCeQuOnNAJoutePas(unittest.TestCase):
+    """Trois actions absentes, et leur absence est une decision."""
+
+    def test_aucune_action_ne_selectionne_par_index(self):
+        """Ce serait rendre declaratif exactement ce que la couture demande de
+        ne pas faire : « l'index depend du contenu de la base au moment ou on
+        regarde »."""
+        for nom in ACTIONS:
+            with self.subTest(nom):
+                self.assertNotIn("index", nom)
+                self.assertNotIn("rang", nom)
+
+    def test_aucune_action_ne_compte_les_lignes(self):
+        """Piege 7 : « ne jamais piloter une boucle par un compteur ». Une
+        action qui exposerait le compte inviterait a le piloter."""
+        self.assertNotIn("compter", ACTIONS)

@@ -32,7 +32,8 @@ from .composition import (
     CompositionInvalide, lire_transformation, verifier_gabarit,
 )
 from .modele import (
-    ACTIONS, AVEC_CIBLE, AVEC_SOURCE, CLASSES, GENRES_SOURCE, SOURCE_CONSTANTE,
+    ACTIONS, AVEC_CIBLE, AVEC_COLONNE, AVEC_COLONNES, AVEC_SOURCE, CLASSES,
+    GENRES_SOURCE, SANS_NAVIGATION_LIBRE, SOURCE_CONSTANTE,
     DerogationDeclaree, Etape, Pipeline, Source,
 )
 
@@ -68,6 +69,7 @@ CLES_ETAPE = frozenset({
     "nom", "action", "cible", "source", "fonction", "ecran",
     "navigation_libre", "fenetres", "statut_attendu", "sauvegarde",
     "comparaison", "derogations", "format", "defaut",
+    "colonne", "colonnes",
 })
 
 VERSION = 1
@@ -177,6 +179,7 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
     etapes: list[Etape] = []
     vus: set[str] = set()
     lues: set[str] = set()          # noms des etapes `lire` deja rencontrees
+    precedente: Etape | None = None
     for rang, brute in enumerate(brutes, start=1):
         etape = _etape(brute, source, rang, brouillon=brouillon)
         if etape.nom in vus:
@@ -194,10 +197,38 @@ def charger(chemin: str | Path, *, brouillon: bool = False) -> Pipeline:
                     f"source « lue: {etape.source.valeur} » : aucune etape "
                     f"`lire` de ce nom ne precede. Connues a ce rang : "
                     f"{sorted(lues) or 'aucune'}", rang, etape.nom)
+        # `ouvrir` double-clique la cellule COURANTE, pas la selection —
+        # `couture/interface.py` le dit, et precise qu'omettre le
+        # positionnement double-clique la ligne 0 SANS ERREUR. C'est donc une
+        # autre ligne qui s'ouvrirait, en silence.
+        #
+        # Le controle est ici, au chargement, et par le meme mecanisme que
+        # celui des sources « lue » quelques lignes plus haut : meme endroit,
+        # meme raison. « Immediatement » et non « quelque part avant », parce
+        # que la megatrace montre les trois gestes consecutifs et que rien ici
+        # ne prouve qu'une etape intercalee laisse la cellule courante en
+        # place. A relacher le jour ou une trace reelle le montrera.
+        if etape.action == "ouvrir":
+            if precedente is None or precedente.action != "choisir":
+                raise _refus(
+                    source,
+                    "`ouvrir` double-clique la cellule COURANTE. L'etape qui "
+                    "precede doit etre un `choisir`, sinon la cellule courante "
+                    "est celle que SAP a laissee — la ligne 0 le plus souvent. "
+                    "Aucune erreur ne serait levee : c'est une autre ligne qui "
+                    "serait ouverte", rang, etape.nom)
+            if precedente.cible != etape.cible:
+                raise _refus(
+                    source,
+                    f"`ouvrir` porte sur {etape.cible!r} et le `choisir` qui "
+                    f"le precede sur {precedente.cible!r}. Le double-clic irait "
+                    f"sur une grille dont personne n'a positionne la cellule "
+                    f"courante", rang, etape.nom)
         if etape.action == "lire":
             lues.add(etape.nom)
         vus.add(etape.nom)
         etapes.append(etape)
+        precedente = etape
 
     return Pipeline(
         nom=nom, classe=classe, etapes=tuple(etapes), cles=cles,
@@ -306,6 +337,38 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
         raise _refus(source, "`ecran` et `navigation_libre` ensemble n'ont pas "
                              "de sens", rang, nom)
 
+    if action in SANS_NAVIGATION_LIBRE and libre:
+        raise _refus(
+            source,
+            f"l'action {action!r} exige un `ecran` : `navigation_libre` y est "
+            f"interdit. C'est la garde d'identite qui distingue « la recherche "
+            f"n'a rien remonte » de « SAP a ouvert l'objet directement parce "
+            f"qu'il n'y en avait qu'un » — deux conclusions opposees qui "
+            f"produisent la meme grille introuvable. Sans ecran declare, rien "
+            f"ne les separe", rang, nom)
+
+    try:
+        colonne = texte(brute.get("colonne", ABSENT), "colonne", source=source,
+                        defaut="")
+        colonnes = liste_de_texte(brute.get("colonnes", ABSENT), "colonnes",
+                                  source=source, defaut=())
+    except YamlAmbigu as erreur:
+        raise _refus(source, str(erreur).split(" : ", 1)[-1], rang, nom) from None
+
+    if action in AVEC_COLONNE and not colonne:
+        raise _refus(
+            source,
+            f"l'action {action!r} exige une `colonne` — celle ou chercher. "
+            f"Se rabattre sur la premiere chercherait dans la premiere colonne "
+            f"de la MISE EN PAGE ALV du poste, qui change d'un utilisateur a "
+            f"l'autre", rang, nom)
+    if colonne and action not in AVEC_COLONNE:
+        raise _refus(source, f"`colonne` n'a pas de sens pour l'action "
+                             f"{action!r}", rang, nom)
+    if colonnes and action not in AVEC_COLONNES:
+        raise _refus(source, f"`colonnes` n'a pas de sens pour l'action "
+                             f"{action!r}", rang, nom)
+
     comparaison = brute.get("comparaison") or "casse"
     if comparaison not in COMPARAISONS:
         raise _refus(source, f"comparaison {comparaison!r}, attendu "
@@ -350,7 +413,8 @@ def _etape(brute: Any, source: str, rang: int, *, brouillon: bool = False
     return Etape(
         nom=nom, action=action, cible=cible, source=source_valeur,
         format=formats, defaut=repli,
-        fonction=fonction, ecran=ecran, navigation_libre=libre,
+        fonction=fonction, colonne=colonne, colonnes=colonnes,
+        ecran=ecran, navigation_libre=libre,
         fenetres=fenetres,
         statut_attendu=statut,
         sauvegarde=sauvegarde,

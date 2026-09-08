@@ -1273,3 +1273,170 @@ class TestGardeDeLaRepetition(Base):
         """Sinon aucune ne pourrait jamais avoir lieu."""
         self.assertEqual(self._blanc().etat, TERMINE)
 
+
+
+GRILLE_ALV = "wnd[1]/usr/cntlALV_CONTAINER_1/shellcont/shell"
+
+#: Trois variantes, dont deux homonymes a la casse pres.
+LIGNES_ALV = [
+    {"VARIANT": "/BCP01_1000", "TEXT": "BCP Paris"},
+    {"VARIANT": "/BCP01_2000", "TEXT": "BCP Lyon"},
+    {"VARIANT": "/bcp01_1000", "TEXT": "doublon de casse"},
+    {"VARIANT": "/BCP01_3000", "TEXT": "BCP Lille"},
+]
+
+
+class TestChoisirEtOuvrir(Base):
+    """La ligne par son CONTENU, jamais par son rang.
+
+    `couture/interface.py` porte la regle depuis toujours : « l'index depend
+    du contenu de la base au moment ou on regarde. Une pipeline qui fige un
+    index traite la mauvaise ligne des que la liste change, et ne leve pas. »
+    Ces tests sont ce qui la rend executable.
+    """
+
+    def _pipeline_grille(self, *, comparaison: str = "exact",
+                         ouvrir: bool = True) -> str:
+        etapes = etape(
+            "- nom: choisir_la_variante",
+            "  action: choisir",
+            f'  cible: "{GRILLE_ALV}"',
+            "  colonne: VARIANT",
+            "  source: {gabarit: '/BCP01_{site}'}",
+            f"  comparaison: {comparaison}",
+            f"  {ECRAN}",
+        )
+        if ouvrir:
+            etapes += etape(
+                "- nom: l_ouvrir",
+                "  action: ouvrir",
+                f'  cible: "{GRILLE_ALV}"',
+                f"  {ECRAN}",
+            )
+        return SOCLE + etapes
+
+    def _driver_grille(self) -> DriverScripte:
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = list(LIGNES_ALV)
+        return brut
+
+    def _lancer(self, texte: str, brut=None):
+        chemin = self.racine / "p.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        return executer(charger(chemin), self.jeu, brut or self._driver_grille(),
+                        journal=self.journal, registre=self.registre,
+                        **SANS_REPETITION)
+
+    def test_la_ligne_est_trouvee_par_son_contenu(self):
+        brut = self._driver_grille()
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.compteurs[OK], 3)
+        # Le site 1000 -> /BCP01_1000, rang 0 ; le site 2000 -> rang 1.
+        positions = [g for g in brut.gestes if g[0] == "grid_set_current_row"]
+        self.assertEqual([p[2] for p in positions[:2]], ["0", "1"])
+
+    def test_l_ordre_des_gestes_est_celui_que_le_piege_impose(self):
+        """CONTROLE NEGATIF : retirer `grid_set_current_row` fait tomber ce test.
+
+        `grid_double_click` agit sur la cellule COURANTE. Sans positionnement,
+        c'est la ligne 0 qui s'ouvre — sans erreur, sur une autre variante.
+        Rien d'autre que ce test ne s'en apercevrait.
+        """
+        brut = self._driver_grille()
+        self._lancer(self._pipeline_grille(), brut)
+        sur_grille = [g[0] for g in brut.gestes if g[1] == GRILLE_ALV]
+        self.assertEqual(
+            sur_grille[:3],
+            ["grid_set_current_row", "grid_select_rows", "grid_double_click"])
+
+    def test_choisir_ne_double_clique_JAMAIS(self):
+        """`choisir` selectionne, `ouvrir` ouvre. Selectionner N lignes puis
+        presser un bouton de barre est un cas reel."""
+        brut = self._driver_grille()
+        self._lancer(self._pipeline_grille(ouvrir=False), brut)
+        self.assertFalse([g for g in brut.gestes
+                          if g[0] == "grid_double_click"])
+
+    def test_aucune_ligne_abandonne_l_item_et_le_lot_continue(self):
+        """CONTROLE NEGATIF : rendre `choisir` tolerant a zero ligne.
+
+        Un site dont la variante manque ne doit pas emporter les autres — mais
+        il ne doit pas non plus passer pour traite.
+        """
+        brut = self._driver_grille()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP01_2000", "TEXT": "Lyon"}]
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.compteurs[OK], 1)
+        self.assertEqual(resultat.compteurs[KO], 2)     # 1000 et 3000
+        self.assertEqual(resultat.etat, TERMINE)
+        # Rien n'a ete selectionne pour les items perdus.
+        self.assertEqual(
+            len([g for g in brut.gestes if g[0] == "grid_select_rows"]), 1)
+
+    def test_plusieurs_lignes_abandonnent_l_item_et_nomment_les_rangs(self):
+        """CONTROLE NEGATIF : prendre le premier rang fait tomber ce test.
+
+        Prendre la premiere, c'est choisir au hasard la ligne qu'on va
+        modifier. Le refus nomme les rangs pour qu'on puisse aller voir.
+        """
+        resultat = self._lancer(self._pipeline_grille(comparaison="casse"))
+        self.assertEqual(resultat.compteurs[KO], 1)     # le site 1000
+        self.assertEqual(resultat.compteurs[OK], 2)     # 2000 et 3000
+        # `ItemAbandonne` ne produit pas d'incident : il clot l'item en KO et
+        # son motif part au fichier de KO, qui est ce qu'un humain relit.
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ItemFin" and e.etat == KO]
+        self.assertEqual(len(fins), 1)
+        self.assertIn("2 lignes portent", fins[0].incident)
+        self.assertIn("[0, 2]", fins[0].incident)
+
+    def test_une_colonne_mal_orthographiee_arrete_LE_LOT(self):
+        """Et elle ne passe PAS par la taxonomie. Defaut trouve en executant.
+
+        Sans la clause qui la fait remonter, `GrilleIllisible` tombait dans le
+        `except Exception` du bas, etait classee sur le canal « python » —
+        celui des etapes maison — et ressortait `inconnue` donc bloquante. Le
+        lot s'arretait bien, mais un dump partait, et `falcon recolter` aurait
+        propose d'ecrire une entree de registre pour une FAUTE DE FRAPPE dans
+        le YAML. Declarer « colonne VARIANTE absente » connue_benigne, c'est
+        rendre un defaut de pipeline tolerable pour toujours.
+
+        Le lot s'arrete, et c'est le bon resultat : la faute echoue
+        identiquement sur chaque item.
+        """
+        texte = SOCLE + etape(
+            "- nom: choisir_la_variante",
+            "  action: choisir",
+            f'  cible: "{GRILLE_ALV}"',
+            "  colonne: VARIANTE",
+            "  source: {colonne: site}",
+            f"  {ECRAN}",
+        )
+        brut = self._driver_grille()
+        resultat = self._lancer(texte, brut)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("VARIANTE", resultat.raison)
+        self.assertIn("VARIANT", resultat.raison)       # ce qu'elle expose
+        self.assertFalse([g for g in brut.gestes
+                          if g[0] == "grid_select_rows"])
+        # Aucun incident classe : ce n'est pas un comportement de SAP, donc
+        # rien a proposer au registre.
+        incidents = [e for e in lire(self.journal)
+                     if getattr(e, "categorie", None) is not None]
+        self.assertEqual(incidents, [])
+        # Mais l'execution s'est TERMINEE proprement : sans `ExecutionFin`,
+        # le repli des etats verrait un run jamais clos et la garde de
+        # repetition chercherait une repetition aboutie qu'elle ne trouverait
+        # pas.
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ExecutionFin"]
+        self.assertEqual(len(fins), 1)
+
+    def test_le_choix_passe_par_le_contrat_de_l_etape(self):
+        """La lecture n'echappe pas a la garde d'identite : c'est elle qui
+        distinguera un atterrissage sur la liste d'un atterrissage ailleurs."""
+        brut = self._driver_grille()
+        brut.identite = AUTRE
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertFalse([g for g in brut.gestes if g[1] == GRILLE_ALV])
