@@ -28,12 +28,16 @@ MODULES_SAP = {"win32com", "pythoncom", "comtypes", "win32api", "win32gui"}
 
 # Ces couches passent par le controleur, jamais par la couture nue (5.2) :
 # une pipeline declare une intention, le controleur applique les gardes.
-COUCHES_SANS_COUTURE = ("moteur", "pipeline")
+# `tableur` y figure pour la meme raison que les deux autres, et pour une de
+# plus : il traduit un classeur en TEXTE, et n'a aucune raison de toucher un
+# driver. S'il pouvait en nommer un, il pourrait produire une pipeline qui
+# agit au lieu d'une qui declare.
+COUCHES_SANS_COUTURE = ("moteur", "pipeline", "tableur")
 
 # Une pipeline ne peut nommer aucun type de driver, gardé ou non. Ne pouvant
 # pas en manipuler un, elle ne peut pas non plus desactiver une garde : la
 # regle du 5.2 devient une contrainte d'import plutot qu'une convention.
-COUCHES_SANS_CONTROLEUR = ("pipeline", "trace")
+COUCHES_SANS_CONTROLEUR = ("pipeline", "trace", "tableur")
 
 
 def modules_python(base: Path) -> list[Path]:

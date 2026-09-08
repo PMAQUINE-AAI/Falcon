@@ -57,8 +57,9 @@ Les modules livrés :
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
-| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire` — aucune n'écrit dans SAP |
-| `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, diagnostic |
+| `falcon/tableur/` | les trois CSV du classeur → une pipeline YAML, relue avant d'être écrite |
+| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter` — seule `console` peut écrire dans SAP |
+| `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, taxonomie, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
@@ -163,19 +164,36 @@ Une pipeline sait **composer** la valeur qu'elle tape, sans qu'une ligne de
 Python soit écrite ni relue :
 
 ```yaml
-- nom: saisir_variante
-  action: set
-  cible: "wnd[0]/usr/ctxtV-LOW"
-  source: {gabarit: "/BCP01_{site}"}     # le nom porte le site
-  format: [majuscules]
+version: 1
+nom: "corriger_variantes"
+classe: "iterative"
+cles: ["site"]
+plafond_items: 50
+plafond_sauvegardes: 50
+etapes:
+  - nom: "saisir_variante"
+    action: "set"
+    cible: "wnd[0]/usr/ctxtV-LOW"
+    source: {gabarit: "/BCP01_{site}"}     # le nom porte le site
+    format: [majuscules]
+    ecran: {transaction: "IA08", programme: "RIPLKO10", dynpro: "1000"}
 
-- nom: saisir_equipement
-  action: set
-  cible: "wnd[0]/usr/ctxtEQUNR"
-  source: {colonne: equipement}
-  defaut: "0"                            # si la case est vide
-  format: [sans_espaces_autour, {zeros: 18}]   # cadrage SAP, largeur déclarée
+  - nom: "saisir_equipement"
+    action: "set"
+    cible: "wnd[0]/usr/ctxtEQUNR"
+    source: {colonne: equipement}
+    defaut: "1"                            # si la case est vide
+    format: [sans_espaces_autour, {zeros: 18}]   # cadrage SAP, largeur déclarée
+    ecran: {transaction: "IA08", programme: "RIPLKO10", dynpro: "1000"}
 ```
+
+**Chaque étape déclare son `ecran`**, et ce n'est pas du remplissage : c'est ce
+que la garde d'identité compare avant d'agir. Une étape qui ne le déclare pas
+est refusée au chargement — sauf à écrire `navigation_libre: true`, qui dit
+explicitement « je ne sais pas encore où j'atterris ». L'exemple ci-dessus est
+chargé par la suite de tests à chaque exécution : un exemple que rien ne
+vérifie se périme, et celui-ci enseignait précisément l'omission qui désarme
+la garde.
 
 `gabarit` compose depuis plusieurs colonnes ; `format` applique des
 transformations **dans l'ordre déclaré** ; `defaut` remplace une valeur vide.

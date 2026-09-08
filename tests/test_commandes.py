@@ -190,7 +190,7 @@ class TestLigneDeCommande(unittest.TestCase):
         durable.
         """
         aide = analyseur().format_help()
-        self.assertIn("Une seule peut ecrire dans SAP", aide)
+        self.assertIn("Une seule commande peut ecrire dans SAP", aide)
         self.assertIn("console", aide)
         self.assertNotIn("aucune n'ecrit dans SAP", aide)
 

@@ -34,15 +34,16 @@ ERREURS_LISIBLES = (ErreurFalcon, TraceInvalide, PipelineInvalide,
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Six commandes. Une seule peut ecrire dans SAP — `console` — et elle ne le
-fait que sur trois de ses ecrans, apres confirmation du nom de la pipeline
-en toutes lettres. Les cinq autres sont en lecture seule.
+Une seule commande peut ecrire dans SAP — `console` — et seulement sur trois
+de ses ecrans, apres confirmation du nom de la pipeline en toutes lettres.
+Toutes les autres sont en lecture seule.
 
   console         menus interactifs : tests, traces, catalogue, EXECUTION
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
   brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
   dictionnaire    le catalogue a plat, en CSV lisible par un tableur
+  composer        les CSV du classeur -> une pipeline YAML
   recolter        les entrees de registre a ecrire, d'apres les dumps
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
@@ -127,7 +128,46 @@ def analyseur() -> argparse.ArgumentParser:
                          default=None,
                          help="fichier a ecrire (defaut : sortie standard)")
 
+    composer = sous.add_parser(
+        "composer", help="convertit les CSV du classeur en pipeline YAML",
+        description="Trois CSV — pipeline.csv, etapes.csv, derogations.csv — "
+                    "produits par le classeur, convertis en une pipeline "
+                    "YAML. Le fichier n'est ecrit QUE si FALCON le recharge "
+                    "sans rien refuser : un YAML casse a cote d'un YAML "
+                    "valide plus ancien, c'est le mauvais fichier lance un "
+                    "jour de fatigue.")
+    composer.add_argument("dossier", metavar="DOSSIER",
+                          help="dossier portant les trois CSV")
+    composer.add_argument("-o", "--sortie", metavar="PIPELINE.yaml",
+                          default=None,
+                          help="fichier a ecrire (defaut : sortie standard, "
+                               "sans rien ecrire)")
+
     return principal
+
+
+def _composer(options: argparse.Namespace) -> int:
+    from falcon.tableur import TableurInvalide, convertir, convertir_fichiers
+
+    dossier = Path(options.dossier)
+    if not dossier.is_dir():
+        print(f"{dossier} n'est pas un dossier", file=sys.stderr)
+        return 1
+
+    try:
+        if not options.sortie:
+            # Sans `-o`, on MONTRE sans ecrire. La relecture par `charger()`
+            # n'a pas lieu : elle exige un fichier, et ecrire pour verifier
+            # irait contre l'objet meme du mode sans sortie.
+            print(convertir(dossier), end="")
+            return 0
+        chemin = convertir_fichiers(dossier, options.sortie)
+    except TableurInvalide as erreur:
+        print(str(erreur), file=sys.stderr)
+        return 1
+
+    print(f"{chemin}")
+    return 0
 
 
 def _recolter(options: argparse.Namespace) -> int:
@@ -239,7 +279,8 @@ def _brouillon(options: argparse.Namespace) -> int:
 
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
              "inventaire": _inventaire, "brouillon": _brouillon,
-             "dictionnaire": _dictionnaire, "recolter": _recolter}
+             "dictionnaire": _dictionnaire, "recolter": _recolter,
+             "composer": _composer}
 
 
 def main(arguments: list[str] | None = None) -> int:

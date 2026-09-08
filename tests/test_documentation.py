@@ -13,8 +13,11 @@ pas re-verifiee ici.
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
+
+from falcon.pipeline import PipelineInvalide, charger
 
 RACINE = Path(__file__).resolve().parent.parent
 
@@ -46,6 +49,29 @@ def documents() -> list[Path]:
 
 def blocs(texte: str, langage: str) -> list[str]:
     return [corps for lang, corps in BLOC.findall(texte) if lang == langage]
+
+
+def _blocs_yaml(markdown: str) -> list[str]:
+    """Les blocs ```yaml d'un document, dans l'ordre.
+
+    On ne se sert pas d'une bibliotheque markdown : le README est le SEUL
+    document lu ici, sa syntaxe de bloc est celle-ci, et ajouter une
+    dependance d'execution pour un test irait contre la regle « PyYAML seule
+    dependance ».
+    """
+    blocs: list[str] = []
+    courant: list[str] | None = None
+    for ligne in markdown.splitlines():
+        if courant is None:
+            if ligne.strip() in ("```yaml", "```yml"):
+                courant = []
+            continue
+        if ligne.strip() == "```":
+            blocs.append("\n".join(courant) + "\n")
+            courant = None
+            continue
+        courant.append(ligne)
+    return blocs
 
 
 class TestReferencesDeFichiers(unittest.TestCase):
@@ -101,6 +127,36 @@ class TestReferencesDeFichiers(unittest.TestCase):
                 self.assertIn(f"falcon/{nom}/", readme,
                               f"le module falcon/{nom}/ existe mais le README "
                               f"ne le mentionne pas")
+
+    def test_CHAQUE_exemple_de_pipeline_du_README_se_CHARGE(self):
+        """Le seul exemple YAML du README ne chargeait pas.
+
+        Ses deux etapes ne declaraient ni `ecran:` ni `navigation_libre:`, que
+        le chargeur EXIGE. Il n'etait donc pas seulement inexact : il
+        enseignait l'omission exacte qui neutralise la garde d'identite, dans
+        le document ou quelqu'un vient chercher comment ecrire sa premiere
+        pipeline.
+
+        Verifier qu'il charge est la seule facon de l'empecher de se perimer a
+        nouveau — c'est l'argument du neutraliseur, applique a la
+        documentation.
+        """
+        blocs = _blocs_yaml((RACINE / "README.md").read_text(encoding="utf-8"))
+        pipelines = [b for b in blocs if "etapes:" in b]
+        self.assertTrue(pipelines,
+                        "aucun exemple de pipeline : le detecteur ne mord pas")
+
+        for rang, bloc in enumerate(pipelines, start=1):
+            with self.subTest(exemple=rang):
+                with tempfile.TemporaryDirectory() as dossier:
+                    chemin = Path(dossier) / "exemple.yaml"
+                    chemin.write_text(bloc, encoding="utf-8")
+                    try:
+                        charger(chemin)
+                    except PipelineInvalide as erreur:
+                        self.fail(
+                            f"l'exemple {rang} du README ne charge pas : "
+                            f"{str(erreur).replace(str(chemin), 'README')}")
 
     def test_specification_presente(self):
         self.assertTrue((RACINE / "SPEC_FALCON.md").exists(),
