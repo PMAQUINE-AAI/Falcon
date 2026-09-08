@@ -132,6 +132,23 @@ class TestLectureDUnDump(unittest.TestCase):
         self.assertIn("#   transaction: \"IA08\"", texte)
         self.assertNotIn("contexte:\n      transaction", texte)
 
+    def test_le_canal_PYTHON_apparie_sur_l_exception_comme_com(self):
+        """`_apparie` traite `com` et `python` de la meme facon : le nom
+        d'exception. Les separer produisait, pour une `action: python` qui
+        leve, une correspondance batie sur `garde` — que le comparateur ne
+        regarde jamais sur ce canal."""
+        chemin = _dump(self.racine, "a.json", garde="python",
+                       signature={"canal": "python",
+                                  "exception": "RuntimeError",
+                                  "texte": "champ introuvable"},
+                       detail={"etape": "maison",
+                               "exception": "RuntimeError"})
+        inconnu = lire_dump(chemin)
+        self.assertEqual(inconnu.canal, "python")
+        self.assertEqual(inconnu.correspondance, {"exception": "RuntimeError"})
+        self.assertNotIn("garde", inconnu.correspondance)
+        self.assertEqual(inconnu.nom_propose, "runtimeerror")
+
     def test_une_exception_COM(self):
         chemin = _dump(self.racine, "a.json", garde="",
                        detail={"exception": "SessionPerdue"})
@@ -345,6 +362,81 @@ entrees:
         self.assertEqual(resultat.etat, "termine")
         self.assertEqual(resultat.compteurs["ko"], 2,
                          "le lot n'est pas alle au bout")
+
+
+class TestParcoursCanalPython(unittest.TestCase):
+    """Le meme parcours, par le chemin du MOTEUR plutot que des gardes.
+
+    `_classer_echec` construisait la signature et la JETAIT : le dump portait
+    `signature: null`, et `recolte` retombait sur une deduction du canal a
+    partir du champ `garde` — qui vaut « python » et n'est pas un canal. La
+    surcouche proposee annoncait donc `canal: com`, et l'entree ecrite d'apres
+    elle n'appariait RIEN. Le lot serait retombe au meme endroit
+    indefiniment : la seule sortie offerte a un inconnu bloquant produisait
+    une entree inerte.
+    """
+
+    def setUp(self):
+        from falcon.pipeline import oublier_tout
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        self.addCleanup(oublier_tout)
+        self.racine = Path(dossier.name)
+        (self.racine / "jeu.csv").write_text("site\nK75\n", encoding="utf-8")
+        (self.racine / "p.yaml").write_text("""version: 1
+nom: "essai_python"
+classe: "iterative"
+cles: ["site"]
+plafond_items: 5
+plafond_sauvegardes: 5
+etapes:
+  - nom: "maison"
+    action: "python"
+    fonction: "leve_pour_le_test"
+    ecran: {transaction: "IA08", programme: "RIPLKO10", dynpro: "1000"}
+""", encoding="utf-8")
+
+    def test_le_parcours_entier_sur_le_canal_python(self):
+        from falcon.pipeline import etape_python
+
+        @etape_python("leve_pour_le_test")
+        def _leve(poste, item, contexte):
+            raise RuntimeError("champ de texte long introuvable")
+
+        pilote = DriverScripte(identite=IA08, valeurs={})
+        resultat = executer(charger(self.racine / "p.yaml"),
+                            self.racine / "jeu.csv", pilote,
+                            journal=self.racine / "j.jsonl", mode="dry-run")
+        self.assertEqual(resultat.etat, "interrompu")
+
+        chemins = dumps_de(self.racine / "dumps")
+        self.assertEqual(len(chemins), 1)
+        inconnu = lire_dump(chemins[0])
+
+        # Le dump porte la signature, donc le canal est LU et non deduit.
+        self.assertIsNotNone(inconnu.signature)
+        self.assertEqual(inconnu.canal, "python")
+        self.assertEqual(inconnu.correspondance, {"exception": "RuntimeError"})
+
+        # Et l'entree, completee, apparie REELLEMENT l'incident dont elle vient.
+        complete = self.racine / "s.yaml"
+        complete.write_text("""version: 1
+entrees:
+  - nom: runtimeerror
+    categorie: connue_fautive
+    canal: python
+    correspondance: {exception: "RuntimeError"}
+    politique: {poursuivre: true, item: ko}
+    origine: falcon_observe
+    justification: "Champ absent de cet ecran, observe en recette."
+""", encoding="utf-8")
+        from falcon.taxonomie import Signature
+        verdict = Registre.avec_surcouches(complete).classer(
+            Signature(canal="python", exception="RuntimeError",
+                      texte="champ de texte long introuvable"))
+        self.assertEqual(verdict.categorie, "connue_fautive")
+        self.assertFalse(verdict.bloquant,
+                         "l'entree recoltee n'apparie pas son propre incident")
 
 
 if __name__ == "__main__":

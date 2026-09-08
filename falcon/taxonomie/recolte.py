@@ -78,6 +78,12 @@ class Inconnu:
         """
         if self.signature and self.signature.get("canal"):
             return str(self.signature["canal"])
+        # Sans signature — un dump ecrit par une version anterieure — on
+        # DEDUIT, et on ne peut pas faire mieux : le champ `garde` du dump
+        # porte le nom de la garde, qui vaut le canal pour `com` et `python`
+        # mais pas pour les autres.
+        if self.garde in ("com", "python"):
+            return self.garde
         if self.detail.get("exception"):
             return "com"
         return "statut" if not self.garde else "garde"
@@ -98,7 +104,11 @@ class Inconnu:
         """
         statut = self.statut
         signature = self.signature or {}
-        if self.canal == "com":
+        # `com` ET `python` apparient sur le nom d'exception — c'est ce que
+        # `_apparie` fait pour les deux. Les traiter separement produisait,
+        # pour une `action: python` qui leve, une correspondance batie sur
+        # `garde`, que le comparateur ne regarde jamais sur ce canal.
+        if self.canal in ("com", "python"):
             return {"exception": str(signature.get("exception")
                                      or self.detail.get("exception") or "")}
 
@@ -142,6 +152,10 @@ class Inconnu:
         elif signature.get("exception") or self.detail.get("exception"):
             morceaux.append(str(signature.get("exception")
                                 or self.detail["exception"]))
+        # Sur `com` et `python`, le nom de la garde ne dit rien d'utile — il
+        # vaut le canal. C'est l'exception qui nomme l'entree.
+        if self.canal in ("com", "python") and len(morceaux) > 1:
+            morceaux = morceaux[1:]
         elif self.detail.get("observe"):
             morceaux.append(f"observe_{self.detail['observe']}")
         brut = "_".join(m for m in morceaux if m)

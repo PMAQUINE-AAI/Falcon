@@ -34,6 +34,7 @@ from falcon.journal import (
 from falcon.moteur import (
     DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
     PreparationImpossible, RepetitionManquante, enchainer, executer,
+    garde_de_la_repetition,
 )
 from falcon.noyau import CHAMP_DE_COMMANDE, Fenetre, Identite, Statut
 from falcon.pipeline import charger, etape_python, oublier_tout
@@ -1110,6 +1111,35 @@ class TestGardeDeLaRepetition(Base):
             executer(pipeline, self.jeu, self._driver(),
                      journal=self.journal, registre=self.registre).etat,
             PLAFOND)
+
+    def test_une_repetition_TUEE_n_est_pas_terminee_par_une_AUTRE(self):
+        """Une repetition tuee — Ctrl-C, poste eteint — n'ecrit aucune
+        `ExecutionFin`.
+
+        La garde prenait la premiere cloture qui SUIVAIT, sans regarder a qui
+        elle appartenait : celle d'une execution ulterieure, portant une autre
+        pipeline et un autre jeu, « terminait » la repetition avortee. Le run
+        de production partait donc sans qu'aucune repetition n'ait jamais
+        abouti sur ces empreintes.
+        """
+        from falcon.journal import Ecrivain, ExecutionFin
+
+        with Ecrivain(self.journal) as ecrivain:
+            # La repetition qu'on cherche : ouverte, jamais close.
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="tuee", mode=DRY_RUN, classe="iterative", pipeline="p",
+                pipeline_empreinte="AAAA", jeu="j.csv",
+                jeu_empreinte="JJJJ", plafond_items=3))
+            # Une execution SANS RAPPORT, close proprement.
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="autre", mode=DRY_RUN, classe="iterative",
+                pipeline="autre", pipeline_empreinte="BBBB", jeu="k.csv",
+                jeu_empreinte="KKKK", plafond_items=3))
+            ecrivain.ecrire(ExecutionFin(run_id="autre", etat="termine"))
+
+        with self.assertRaises(RepetitionManquante):
+            garde_de_la_repetition(self.journal, "AAAA", "JJJJ", RUN,
+                                   False, "")
 
     def test_forcer_EXIGE_un_motif(self):
         with self.assertRaises(PreparationImpossible) as capture:

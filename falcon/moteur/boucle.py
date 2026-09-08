@@ -312,13 +312,27 @@ def _classer_echec(erreur: Exception, canal: str, registre: Registre,
     Les canaux `com` et `python` du registre existaient depuis le lot 3 sans
     que rien ne les alimente ; c'est ici qu'ils prennent vie.
     """
-    verdict = registre.classer(Signature(canal=canal,
-                                         exception=type(erreur).__name__,
-                                         texte=str(erreur)))
+    signature = Signature(canal=canal, exception=type(erreur).__name__,
+                          texte=str(erreur))
+    verdict = registre.classer(signature)
+    # La SIGNATURE, comme sur le chemin des gardes. Elle etait construite ici
+    # et jetee : le dump portait `signature: null`, et `recolte` retombait sur
+    # une DEDUCTION du canal a partir du champ `garde` du dump — qui vaut
+    # « python » et n'est pas un canal.
+    #
+    # Mesure avant correction, cycle complet sur une `action: python` qui
+    # leve : le registre classait sur le canal `python`, et la surcouche
+    # proposee annoncait `canal: com`. L'entree ecrite d'apres elle
+    # n'appariait donc RIEN, et le lot retombait au meme endroit
+    # indefiniment — la seule sortie offerte a un inconnu bloquant produisait
+    # une entree inerte.
+    #
+    # C'est le defaut que le commit precedent declare avoir corrige : il
+    # l'etait pour les gardes, et pas ici.
     adapter(Constat(garde=canal, verdict="violation",
                     detail={"etape": etape, "exception": type(erreur).__name__,
                             "message": str(erreur)},
-                    taxonomie=verdict))
+                    taxonomie=verdict, signature=signature))
     appliquer(verdict, f"etape {etape!r} : {type(erreur).__name__} — {erreur}")
 
 
@@ -623,9 +637,23 @@ def garde_de_la_repetition(chemin: Path, pipeline_empreinte: str,
                       if isinstance(e, ExecutionDebut) and e.mode == DRY_RUN
                       and e.pipeline_empreinte == pipeline_empreinte
                       and e.jeu_empreinte == jeu_empreinte]
-        for rang, _ in ouvertures:
+        for rang, ouverture in ouvertures:
+            # La cloture DE CETTE EXECUTION, appariee par `run_id`.
+            #
+            # La version precedente prenait la premiere `ExecutionFin` qui
+            # suivait, sans regarder a qui elle appartenait. Une repetition
+            # TUEE — Ctrl-C, poste eteint — n'en ecrit aucune ; la premiere
+            # cloture rencontree etait alors celle d'une execution ULTERIEURE,
+            # portant une autre pipeline et un autre jeu, et elle « terminait »
+            # la repetition avortee. Le run de production partait donc sans
+            # qu'aucune repetition n'ait jamais abouti sur ces empreintes.
+            #
+            # Le journal est partage entre executions : c'est ce qui rend la
+            # reprise possible, et c'est aussi ce qui rend l'appariement par
+            # `run_id` obligatoire partout ou l'on relit une execution.
             fin = next((e for e in enregistrements[rang + 1:]
-                        if isinstance(e, ExecutionFin)), None)
+                        if isinstance(e, ExecutionFin)
+                        and e.run_id == ouverture.run_id), None)
             if fin is not None and fin.etat != INTERROMPU:
                 repetitions.append(fin)
 

@@ -10,6 +10,7 @@ from .adaptateur import Adaptateur
 from .boucle import (
     DRY_RUN, INTERROMPU, MODES, PLAFOND, REPRISE, RUN, TERMINE,
     PreparationImpossible, RepetitionManquante, Resultat, executer,
+    garde_de_la_repetition,
 )
 from .chaine import Maillon, enchainer, retour_accueil
 
