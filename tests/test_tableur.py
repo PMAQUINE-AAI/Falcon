@@ -8,6 +8,8 @@ c'est ce que ces tests surveillent en premier.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -380,6 +382,50 @@ class TestColonnesEtProprietes(Base):
         with self.assertRaises(TableurInvalide) as capture:
             convertir(self.racine)
         self.assertIn("garde d'identite", str(capture.exception))
+
+
+class TestLExempleLivre(unittest.TestCase):
+    """`exemple/` doit rester convertible, chargeable et executable.
+
+    C'est de la documentation qui TOURNE. Un exemple que rien ne verifie se
+    perime — et celui-la est le premier fichier que quelqu'un copie pour
+    ecrire son propre automatisme : s'il derive, il enseigne la derive.
+    """
+
+    RACINE = Path(__file__).resolve().parent.parent / "exemple"
+
+    def test_les_CSV_livres_donnent_une_pipeline_qui_charge(self):
+        with tempfile.TemporaryDirectory() as dossier:
+            chemin = convertir_fichiers(self.RACINE,
+                                        Path(dossier) / "exemple.yaml")
+            pipeline = charger(chemin)
+        self.assertEqual(pipeline.nom, "exemple_variantes")
+        self.assertEqual(len(pipeline.etapes), 5)
+        self.assertTrue(any(e.sauvegarde for e in pipeline.etapes),
+                        "une pipeline qui ne sauvegarde nulle part n'ecrit "
+                        "rien dans SAP")
+
+    def test_le_jeu_livre_se_lit_avec_les_cles_de_la_pipeline(self):
+        from falcon.donnees import lire_items
+        with tempfile.TemporaryDirectory() as dossier:
+            pipeline = charger(convertir_fichiers(
+                self.RACINE, Path(dossier) / "exemple.yaml"))
+        items, _ = lire_items(self.RACINE / "jeu.csv", pipeline.cles)
+        self.assertEqual(len(items), 3)
+
+    def test_le_script_de_demonstration_va_AU_BOUT(self):
+        """Il ne suffit pas qu'il existe : il doit tourner, ici, sans SAP."""
+        import subprocess
+        rendu = subprocess.run(
+            [sys.executable, str(self.RACINE / "rejouer.py")],
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(rendu.returncode, 0, rendu.stderr)
+        # Ce que la demonstration promet de montrer.
+        for attendu in ("000000000010023456",     # zeros: 18 apres elagage
+                        "/BCP01_K75",             # gabarit + majuscules
+                        "ok': 3"):                # les trois items passent
+            with self.subTest(attendu=attendu):
+                self.assertIn(attendu, rendu.stdout)
 
 
 if __name__ == "__main__":
