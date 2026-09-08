@@ -74,11 +74,52 @@ class TestLecture(unittest.TestCase):
     def test_jsonl(self):
         chemin = self._poser(
             "j.jsonl",
-            b'{"site":"FR12","variante":"/BCP01"}\n{"site":"FR13"}\n')
+            b'{"site":"FR12","variante":"/BCP01"}\n'
+            b'{"site":"FR13","variante":"/BCP02"}\n')
         lignes, dialecte = lire(chemin)
         self.assertEqual(dialecte.format, "jsonl")
         self.assertEqual(dialecte.colonnes, ("site", "variante"))
         self.assertEqual(len(lignes), 2)
+        self.assertEqual(lignes[1], {"site": "FR13", "variante": "/BCP02"})
+
+    def test_une_valeur_JSONL_doit_etre_une_chaine(self):
+        """Le chemin JSONL ne convertissait ni ne verifiait rien.
+
+        Le chemin CSV rend toujours du texte — un CSV n'a pas de types. Le
+        JSONL gardait le type JSON jusqu'au `str()` du moteur, si bien que la
+        barriere etait posee du cote qu'on ecrit a la main et grande ouverte
+        du cote qui vient de l'ERP. Mesure de bout en bout avant correction :
+
+            "site": null -> « None » tape dans le champ SAP
+            "site": 1.50 -> « 1.5 », le cadrage perdu
+            "site": true -> « True »
+        """
+        for brut in (b'{"site":null}\n', b'{"site":1.50}\n',
+                     b'{"site":true}\n', b'{"site":12}\n'):
+            with self.subTest(valeur=brut):
+                with self.assertRaises(JeuInvalide) as capture:
+                    lire(self._poser("j.jsonl", brut))
+                self.assertIn("CHAINE", str(capture.exception))
+
+    def test_une_clef_JSON_ecrite_deux_fois_est_refusee(self):
+        """`json.loads` garde la DERNIERE, comme PyYAML et comme DictReader
+        sur deux colonnes homonymes. Les deux autres etaient deja refuses."""
+        with self.assertRaises(JeuInvalide) as capture:
+            lire(self._poser("j.jsonl", b'{"site":"FR12","site":"FR13"}\n'))
+        self.assertIn("deux fois", str(capture.exception))
+
+    def test_une_ligne_JSONL_doit_etre_un_objet(self):
+        with self.assertRaises(JeuInvalide) as capture:
+            lire(self._poser("j.jsonl", b'["FR12"]\n'))
+        self.assertIn("OBJET", str(capture.exception))
+
+    def test_jsonl_heterogene_garde_l_absence(self):
+        """L'absence porte du sens et n'est PAS comblee par une chaine vide :
+        « ne touche pas a ce champ » n'est pas « vide ce champ »."""
+        lignes, dialecte = lire(self._poser(
+            "j.jsonl", b'{"site":"FR12","variante":"B"}\n{"site":"FR13"}\n'))
+        self.assertEqual(dialecte.colonnes, ("site", "variante"))
+        self.assertNotIn("variante", lignes[1])
 
     def test_colonne_dupliquee_refusee(self):
         """Constat de revue : DictReader garde la DERNIERE valeur, donc la

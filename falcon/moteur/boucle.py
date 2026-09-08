@@ -198,6 +198,29 @@ def _verifier_coherence(pipeline: Pipeline, items: list[Item],
                 f"colonne absente vaudrait la chaine vide — ce qui decoche "
                 f"une case et vide un champ, sans jamais lever")
 
+    # Controle 0 bis : la colonne existe dans le jeu, mais pas dans CETTE
+    # ligne.
+    #
+    # Le controle ci-dessus compare aux colonnes du dialecte. En CSV elles
+    # valent pour toutes les lignes. En JSONL, `colonnes` est l'UNION des
+    # clefs rencontrees : une ligne a laquelle il manque une clef passait donc
+    # le controle 0, puis valait la chaine vide a l'ecriture — le meme defaut,
+    # au meme prix, une ligne plus loin.
+    #
+    # L'absence est conservee a la lecture parce qu'elle porte du sens (voir
+    # `donnees/entree.py`). C'est ici, et seulement ici, qu'on sait que la
+    # pipeline VEUT ecrire cette colonne — donc qu'une absence n'est plus un
+    # silence a respecter mais une donnee manquante.
+    for colonne in _colonnes_lues(pipeline):
+        for item in items:
+            if item.brut and colonne not in item.brut[0]:
+                raise PreparationImpossible(
+                    f"item {item.item_id} : la pipeline {pipeline.nom!r} lit "
+                    f"la colonne {colonne!r}, que cette ligne ne porte pas "
+                    f"(d'autres lignes du jeu la portent). Elle vaudrait la "
+                    f"chaine vide — ce qui decoche une case et vide un champ, "
+                    f"sans jamais lever")
+
     for colonne in _colonnes_lues(pipeline):
         for item in items:
             # Une source `colonne` lit la PREMIERE ligne de l'item. Si les

@@ -675,6 +675,32 @@ class TestColonneAbsente(Base):
             registre=self.registre)
         self.assertEqual(resultat.etat, TERMINE)
 
+    def test_une_colonne_absente_de_CETTE_LIGNE_seulement_est_refusee(self):
+        """Le meme defaut, une ligne plus loin, par le chemin JSONL.
+
+        `Dialecte.colonnes` est l'UNION des clefs de toutes les lignes d'un
+        JSONL. Une ligne a laquelle il manque une clef passait donc le
+        controle qui compare aux colonnes du jeu, puis valait la chaine vide
+        a l'ecriture : champ vide, case decochee, aucune exception.
+
+        L'absence reste conservee a la LECTURE, parce qu'elle porte du sens.
+        C'est ici qu'on sait que la pipeline veut ecrire cette colonne — donc
+        qu'une absence n'est plus un silence a respecter.
+        """
+        # La colonne manquante n'est PAS une colonne de clef : celles-la sont
+        # deja refusees au regroupement, par une autre garde. Ici la clef est
+        # partout, et c'est la colonne ECRITE qui manque a une ligne.
+        jeu = self.jeu.with_suffix(".jsonl")
+        jeu.write_text('{"site":"1000","libelle":"A"}\n{"site":"2000"}\n',
+                       encoding="utf-8")
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(PIPELINE.replace("colonne: site",
+                                                     "colonne: libelle")),
+                     jeu, brut, journal=self.journal, registre=self.registre)
+        self.assertIn("libelle", str(capture.exception))
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
     def test_une_case_a_cocher_sur_colonne_absente_ne_decoche_plus_en_silence(self):
         """Le cas le plus couteux : "" appartient a FAUX, donc chaque item
         etait decoche, sur tout le lot, sans un mot."""

@@ -183,23 +183,107 @@ def _lire_csv(chemin: Path) -> tuple[list[dict[str, Any]], Dialecte]:
                             colonnes=retenues, format="csv")
 
 
+def _paires_sans_doublon(chemin: Path, rang: int):
+    """`object_pairs_hook` : refuse une clef ecrite deux fois dans un objet.
+
+    `json.loads` garde la DERNIERE, exactement comme PyYAML et comme
+    `csv.DictReader` sur deux colonnes homonymes — les deux cas que ce module
+    et `yaml_strict` refusent deja. Le troisieme membre de la famille passait.
+    """
+    def hook(paires):
+        vues: set[str] = set()
+        for cle, _ in paires:
+            if cle in vues:
+                raise JeuInvalide(
+                    f"{chemin}, ligne {rang} : clef {cle!r} ecrite deux fois. "
+                    f"JSON garde la DERNIERE, et la premiere valeur serait "
+                    f"perdue sans une erreur")
+            vues.add(cle)
+        return dict(paires)
+    return hook
+
+
+def _texte_de_json(chemin: Path, rang: int, cle: str, valeur: Any) -> str:
+    """La valeur doit etre une CHAINE JSON. On ne convertit rien.
+
+    C'est la meme regle que `yaml_strict` applique au fichier de pipeline, et
+    elle vaut a plus forte raison ici : le jeu de donnees vient de l'ERP, et
+    c'est lui qu'on retape dans l'ERP.
+
+    Le chemin CSV rend toujours du texte — un CSV n'a pas de types. Le chemin
+    JSONL, lui, ne convertissait ni ne verifiait rien, et les valeurs
+    gardaient leur type JSON jusqu'au `str()` du moteur. Mesure de bout en
+    bout, jeu JSONL -> `lire_items` -> saisie :
+
+        "site": null   -> le texte « None » tape dans le champ SAP
+        "site": 1.50   -> « 1.5 », le zero de cadrage perdu
+        "site": true   -> « True »
+
+    C'est mot pour mot ce que le chargeur de pipeline declare bloquer, et la
+    barriere etait posee du cote qu'on ecrit a la main plutot que du cote qui
+    vient du systeme.
+
+    Convertir serait pire que refuser : `str(None)` rend une valeur d'aspect
+    parfaitement normal. Un refus nomme la ligne et la colonne.
+    """
+    if isinstance(valeur, str):
+        return valeur
+    raise JeuInvalide(
+        f"{chemin}, ligne {rang}, colonne {cle!r} : la valeur doit etre une "
+        f"CHAINE JSON, entre guillemets (recu {valeur!r}). Un nombre perd son "
+        f"cadrage — 1.50 se relit « 1.5 » — et `null` deviendrait le texte "
+        f"« None », tape tel quel dans SAP")
+
+
 def _lire_jsonl(chemin: Path) -> tuple[list[dict[str, Any]], Dialecte]:
     texte, encodage, bom = _decoder(chemin.read_bytes())
     fin_de_ligne = "\r\n" if "\r\n" in texte else "\n"
 
-    lignes = [json.loads(ligne) for ligne in texte.splitlines() if ligne.strip()]
+    lignes = []
+    for rang, brute in enumerate(texte.splitlines(), start=1):
+        if not brute.strip():
+            continue
+        try:
+            lue = json.loads(brute,
+                             object_pairs_hook=_paires_sans_doublon(chemin, rang))
+        except json.JSONDecodeError as erreur:
+            raise JeuInvalide(f"{chemin}, ligne {rang} : {erreur}") from None
+        if not isinstance(lue, dict):
+            raise JeuInvalide(
+                f"{chemin}, ligne {rang} : chaque ligne doit etre un OBJET "
+                f"JSON — « {{\"site\": \"K75\"}} » — pas {type(lue).__name__}")
+        lignes.append((rang, lue))
+
     vues: dict[str, None] = {}
-    for ligne in lignes:
+    for _, ligne in lignes:
         for cle in ligne:
             if not cle.startswith(PREFIXE_DIAGNOSTIC):
                 vues.setdefault(cle, None)
     colonnes = tuple(vues)
-    lignes = [{c: v for c, v in ligne.items()
-               if not c.startswith(PREFIXE_DIAGNOSTIC)} for ligne in lignes]
 
-    return lignes, Dialecte(encodage=encodage, bom=bom,
-                            fin_de_ligne=fin_de_ligne, colonnes=colonnes,
-                            format="jsonl")
+    # Une clef ABSENTE n'est PAS comblee par une chaine vide, et ce n'est pas
+    # un oubli : en JSONL l'absence porte du sens. « ne touche pas a ce
+    # champ » et « vide ce champ » ne sont pas les memes instructions pour une
+    # injection SAP, et le fichier de KO doit pouvoir refaire l'aller-retour
+    # sans que la seconde soit fabriquee a partir de la premiere.
+    #
+    # Le CSV n'a pas ce choix — une cellule manquante y est une ligne courte,
+    # donc un fichier malforme — d'ou le refus de `_verifier_ligne`. Ce n'est
+    # pas un precedent applicable ici.
+    #
+    # Le trou que l'absence ouvrait vraiment est ailleurs : le pre-vol du
+    # moteur compare aux colonnes du DIALECTE, c'est-a-dire a l'union des
+    # clefs de toutes les lignes, si bien qu'une ligne incomplete produisait
+    # une chaine vide au milieu du lot. Il est bouche la, dans
+    # `moteur/boucle.py`, ou l'on sait quelles colonnes la pipeline lit
+    # vraiment — ici, on ne le sait pas.
+    retenues = [{c: _texte_de_json(chemin, rang, c, ligne[c])
+                 for c in colonnes if c in ligne}
+                for rang, ligne in lignes]
+
+    return retenues, Dialecte(encodage=encodage, bom=bom,
+                              fin_de_ligne=fin_de_ligne, colonnes=colonnes,
+                              format="jsonl")
 
 
 # =====================================================================
