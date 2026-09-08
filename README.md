@@ -66,9 +66,9 @@ Les modules livrés :
 | `falcon/volumique/` | export de table, provenance obligatoire, delta contre le précédent |
 | `falcon/catalogue/` | écrans, variantes, dépôt YAML, quarantaine |
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
-| `falcon/exploration/` | cartographie : traduction d'un geste de trace en appel de couture, rejeu en observation, compte rendu |
+| `falcon/exploration/` | cartographie (§4.3, étape 2) : traduction d'un geste de trace en appel de couture, rejeu en observation sous dry-run, relevé de chaque écran traversé, compte rendu |
 | `falcon/tableur/` | les trois CSV du classeur → une pipeline YAML, relue avant d'être écrite |
-| `falcon/commandes/` | ligne de commande : `console`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter` — seule `console` peut écrire dans SAP |
+| `falcon/commandes/` | ligne de commande : `console`, `explorer`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter` — seule `console` peut **écrire** dans SAP, et `explorer` y **agit** sans y écrire |
 | `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, taxonomie, diagnostic |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
@@ -135,6 +135,8 @@ python -m falcon inventaire tests/fixtures/traces/megatrace_2026-09.vbs
 python -m falcon brouillon tests/fixtures/traces/megatrace_2026-09.vbs
 python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
 python -m falcon dictionnaire <dossier-du-catalogue> -o dictionnaire.csv
+python -m falcon explorer trace.vbs --catalogue <dossier-du-catalogue> \
+    --plafond-gestes 200 --plafond-ecrans 50
 ```
 
 `dictionnaire` met le catalogue **à plat**, une ligne par champ, pour qu'un
@@ -156,6 +158,34 @@ d'identité sur toute pipeline née d'une trace, sans que personne l'ait décid�
 
 `inventaire` est la première chose à passer sur toute nouvelle trace : il dit
 ce que le parseur sait en lire, et ce qu'il n'en sait pas.
+
+`explorer` est l'**étape 2 du cycle de vie** : elle rejoue une trace en
+observation et verse en quarantaine chaque écran traversé — trente-cinq
+relevés en une commande, là où `diagnostiquer` en fait un à la fois.
+
+Elle **ne sauvegarde rien** : le mode est figé en `dry-run` et le plafond de
+sauvegardes vaut zéro *dans le code*, ni l'un ni l'autre n'étant une option de
+la ligne de commande. Une option est une chose que quelqu'un finit par régler.
+
+Mais elle **agit**, et le dire est la moitié du travail : elle saisit des
+valeurs dans les champs — un `write` en dry-run tape bel et bien dans SAP, il
+n'est simplement jamais validé — elle navigue, presse des boutons, lance des
+sélections longues, et peut poser des verrous. Le dry-run ne reconnaît que
+deux gestes de sauvegarde, `vkey(11)` et `press` sur `tbar[0]/btn[11]` : une
+sauvegarde par un chemin de **menu** passerait au travers. C'est pourquoi
+l'exploration refuse en plus d'*activer* quoi que ce soit dans une fenêtre
+dont elle n'a pas identifié un champ juste avant — le « Oui » d'une popup
+générique s'appelle `usr/btnBUTTON_1` sur toutes les popups à la fois, et un
+`press` y réussirait sur la mauvaise boîte.
+
+Elle ne repart **que** sur un code transaction qu'elle a tapé elle-même,
+validé par Entrée, et vérifié contre l'écran obtenu : `okcd.text = "/nIW39"`
+seul ne démarre rien, et une reprise non vérifiée rejouerait toute la suite de
+la trace sur l'écran précédent en annonçant « IW39 exploré ».
+
+Les deux plafonds sont **obligatoires**. La commande montre le système et le
+mandant avant de demander le nom du fichier de trace en toutes lettres, et
+rend `0` seulement si la trace a été parcourue de bout en bout.
 
 `diagnostiquer` est le **premier contact réel** — il se greffe sur une session
 SAP que vous avez ouverte et sur laquelle vous vous êtes authentifié

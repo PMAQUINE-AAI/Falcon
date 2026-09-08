@@ -89,11 +89,24 @@ Ce que la trace a appris, et qui n'était pas déductible :
 Les cinq sont épinglés par des tests dans `tests/test_trace.py`, sur la trace
 elle-même — pas sur une reformulation.
 
-**Ce que le parseur ne fera jamais.** Le recorder enregistre des actions : ni
-l'identité des écrans traversés, ni les champs présents. Une trace ne peut
-donc pas peupler le catalogue — elle produit une *esquisse*, que
-`Depot.pour_garde` refuse déjà de servir (lot 9). Le raccordement était prêt
-avant le producteur.
+**Ce que le parseur ne fera jamais** — et la nuance qui a changé depuis.
+
+Le recorder enregistre des actions : ni l'identité des écrans traversés, ni
+les champs présents. Une trace **lue** ne peut donc pas peupler le catalogue :
+elle produit une *esquisse*, que `Depot.pour_garde` refuse déjà de servir
+(lot 9). Cela reste vrai de la lecture, mot pour mot.
+
+Ce qui a changé, c'est qu'une trace **rejouée** le peut. `falcon explorer`
+(`falcon/exploration/`) la rejoue en observation, relève chaque écran traversé
+sur le système réel et le verse en **quarantaine**. Ce ne sont plus des
+conjectures : ce sont des relevés, avec leur vrai triplet et tous leurs champs
+présents.
+
+La distinction tient toujours, et elle est visible à l'œil nu dans le YAML :
+`programme: "?"` d'un côté, le programme réel de l'autre. Ce qui vient de la
+lecture reste une esquisse ; ce qui vient du rejeu est un relevé. Le catalogue
+**curé**, lui, ne se peuple toujours que par une promotion, c'est-à-dire par
+un humain qui dit avoir relu l'écran.
 
 ~~Reste demandé : la **convention de nommage des variantes**. Trois ou quatre
 noms réels suffisent. Ça bloquera la pipeline d'audit.~~

@@ -67,7 +67,72 @@ demande jamais.
 ## 2. Relever les écrans
 
 C'est le seul geste qui exige SAP, et rien ne le remplace : les cibles ne
-s'inventent pas.
+s'inventent pas. Deux chemins, et **le premier est celui à prendre si tu as
+une trace du recorder**.
+
+### 2a. Rejouer une trace — la cartographie
+
+```bash
+python -m falcon explorer <ma-trace>.vbs \
+    --catalogue <dossier-catalogue> \
+    --plafond-gestes 200 --plafond-ecrans 50
+```
+
+FALCON rejoue la trace geste par geste, relève **toutes les fenêtres
+ouvertes** après chaque action et verse en quarantaine chaque écran distinct.
+Trente-cinq écrans relevés en une commande au lieu de trente-cinq allers-
+retours à la main.
+
+**Les deux plafonds sont obligatoires et sans défaut** : le premier borne ce
+qu'on fait au système, le second ce qu'on ajoute à ta file de relecture. Un
+rayon d'action que personne n'a choisi n'en est pas un (§5.5).
+
+**Lis ceci avant de lancer, une fois.** L'exploration **ne sauvegarde rien** :
+toute sauvegarde reconnue est refusée, le mode est figé en `dry-run` et le
+plafond de sauvegardes vaut zéro dans le code — ni l'un ni l'autre n'est une
+option de la ligne de commande. Mais elle **agit** :
+
+- elle **saisit des valeurs dans les champs**. Un `write` en dry-run tape bel
+  et bien dans SAP ; il n'est simplement jamais validé ;
+- elle navigue, presse des boutons, et lance des sélections qui peuvent
+  tourner longtemps et charger le système ;
+- elle peut **poser des verrous** en ouvrant une transaction en modification.
+
+Le dry-run reconnaît deux gestes de sauvegarde : `vkey(11)` et un `press` sur
+`tbar[0]/btn[11]`. Une sauvegarde déclenchée par un **chemin de menu** passe
+au travers, faute de catalogue des menus. C'est pour cela que l'exploration
+refuse en plus d'*activer* quoi que ce soit dans une fenêtre dont elle n'a pas
+identifié un champ juste avant.
+
+**À lancer sur un mandant de qualité avant la production.** Ce n'est pas une
+formalité : c'est la première fois que FALCON enchaîne des gestes sans qu'un
+humain les ait validés un par un. La commande te montre le système, le mandant
+et la langue **avant** de demander confirmation, et la confirmation est le nom
+du fichier de trace en toutes lettres.
+
+La commande rend `0` **seulement** si la trace a été parcourue de bout en
+bout. Sur une trace qui sauvegarde — c'est le cas de la trace de référence —
+elle rend `1`, et le compte rendu dit où chaque branche est tombée et sur quel
+code transaction elle a repris.
+
+Ajoute `--esquisses` pour verser aussi, en quarantaine, les esquisses des
+visites **non atteintes** : une liste de courses de ce qu'il reste à aller
+relever à la main. Elles portent `programme: "?"` et `dynpro: "?"`, se
+distinguent donc à l'œil nu d'un relevé, et `pour_garde` les refuse même
+promues.
+
+Depuis la console : « 8 → Cartographier une trace ».
+
+**Ce que la cartographie ne fera pas pour toi.** Elle ne suit pas la trace :
+elle dit quels écrans ont été **vus**. Un index de grille rejoué tel quel peut
+ouvrir le détail d'un autre objet qu'à l'enregistrement — sans erreur — et la
+suite du parcours diverge alors en silence. Et le relevé d'une **modale**
+porte le programme et le dynpro de l'écran de dessous : avant de promouvoir
+deux variantes du même triplet, vérifie laquelle était la boîte.
+
+### 2b. Un écran à la fois — le chemin de rattrapage
+
+Pour ce que la cartographie n'a pas atteint, et quand tu n'as pas de trace.
 
 ```bash
 python -m falcon diagnostiquer
@@ -79,6 +144,8 @@ relevé des champs. Avec `--catalogue`, il verse le relevé en **quarantaine**.
 
 Va sur l'écran voulu dans SAP, lance la commande, recommence pour chaque écran
 de ton parcours.
+
+### Puis, dans les deux cas : promouvoir
 
 ```bash
 python -m falcon promouvoir <dossier-catalogue>                     # liste
@@ -186,8 +253,20 @@ Journaux ».
 
 ## Ce qui reste ouvert, et que rien ici ne débloque
 
-- **Peupler le catalogue.** `diagnostiquer` en est le seul producteur, et il
-  exige Windows + pywin32 + une session ouverte.
+- **Peupler le catalogue exige toujours SAP.** Ce n'est plus « un écran à la
+  fois » — `explorer` en relève trente-cinq d'un coup depuis une trace — mais
+  les deux producteurs, `explorer` et `diagnostiquer`, exigent Windows +
+  pywin32 + une session ouverte. Rien ne relève un écran sans le regarder.
+- **Aucune ligne du module de cartographie n'a parlé à un SAP réel.** Ses
+  tests tournent contre un double : ils établissent l'orchestration — l'ordre
+  des gestes, les refus, le dédoublonnage, la reprise vérifiée — et **zéro**
+  du dialogue avec l'ERP. C'est la limite de tout le dépôt, mais elle compte
+  plus ici, puisque c'est le premier module dont le métier est d'agir en
+  rafale.
+- **Les gestes d'ARBRE restent hors de portée.** La couture n'a aucune méthode
+  d'arbre, délibérément : l'arbre de menu dépend des favoris de chacun, on
+  navigue par code transaction (décision n°14). Les écrans que seuls ces
+  gestes atteignent sont à relever à la main.
 - **Compléter les `ecran:` d'un brouillon issu d'une trace.** Sur la trace de
   référence : 198 marqueurs pour 75 étapes, et `charger()` refuse tant qu'il en
   reste un. Ni la trace, ni le catalogue, ni le dictionnaire ne donnent

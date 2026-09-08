@@ -158,6 +158,47 @@ class TestReferencesDeFichiers(unittest.TestCase):
                             f"l'exemple {rang} du README ne charge pas : "
                             f"{str(erreur).replace(str(chemin), 'README')}")
 
+    def test_toute_commande_citee_dans_un_document_existe(self):
+        """Un document qui cite une commande absente envoie dans le mur.
+
+        Meme mecanisme que pour les chemins de fichiers : la documentation
+        n'est verifiee par personne d'autre. `python -m falcon exploerr` se
+        lit tres bien et ne marche pas — et c'est le lecteur qui le decouvre,
+        au moment ou il a besoin de la commande.
+        """
+        from falcon.commandes.principal import COMMANDES
+
+        appel = re.compile(r"python -m falcon (\w[\w-]*)")
+        citees = set()
+        for chemin in [*documents(), RACINE / "docs" / "BACKLOG_V1.md"]:
+            if not chemin.exists():
+                continue
+            for nom in appel.findall(chemin.read_text(encoding="utf-8")):
+                citees.add((str(chemin.relative_to(RACINE)), nom))
+        self.assertTrue(citees, "aucune commande citee : le test passe a vide")
+        for document, nom in sorted(citees):
+            with self.subTest(document=document, commande=nom):
+                self.assertIn(nom, COMMANDES)
+
+    def test_la_documentation_connait_la_cartographie(self):
+        """L'etape 2 du cycle de vie a existe six mois sans exister.
+
+        `SPEC_FALCON.md` la decrit ; rien ne l'implementait, et la
+        documentation de demarrage envoyait relever trente-cinq ecrans a la
+        main. Ce test epingle le raccordement : si `explorer` disparait de
+        `DEMARRAGE.md`, le chemin principal redevient invisible.
+        """
+        demarrage = (RACINE / "docs" / "DEMARRAGE.md").read_text(
+            encoding="utf-8")
+        self.assertIn("python -m falcon explorer", demarrage)
+        self.assertIn("--plafond-gestes", demarrage)
+        self.assertIn("--esquisses", demarrage)
+        # Et ce qu'elle doit dire de ce qu'une exploration fait vraiment.
+        self.assertIn("ne sauvegarde rien", demarrage)
+        self.assertIn("saisit des valeurs dans les champs", demarrage)
+        self.assertIn("chemin de menu", demarrage)
+        self.assertIn("mandant de qualité", demarrage)
+
     def test_specification_presente(self):
         self.assertTrue((RACINE / "SPEC_FALCON.md").exists(),
                         "la specification est le document qui fait foi")
