@@ -204,6 +204,34 @@ class TestLesCrochets(Base):
                                               self.racine / "p.yaml"))
         self.assertEqual(pipeline.etapes[0].source.valeur, "[site]")
 
+    def test_un_caractere_qui_est_un_SAUT_DE_LIGNE_pour_YAML_survit(self):
+        """U+0085 (NEL) n'etait pas echappe, et PyYAML le replie en ESPACE a
+        l'interieur d'un scalaire entre guillemets.
+
+        Mesure avant correction, sur une constante destinee a SAP :
+
+            cellule  'K75\x85B'   ->   tape dans SAP  'K75 B'
+
+        La valeur entre crochets — la seule forme censee survivre a tout —
+        etait donc tapee alteree. Et la garde de relecture ne voyait rien :
+        elle compare la valeur TRANSFORMEE a ce que SAP rend.
+        """
+        for nom, caractere in (("U+0085 NEL", "\u0085"),
+                               ("U+2028 LS", "\u2028"),
+                               ("U+2029 PS", "\u2029"),
+                               ("U+00A0 NBSP", "\u00a0")):
+            with self.subTest(caractere=nom):
+                valeur = "K75" + caractere + "B"
+                self._etapes(
+                    f"10;a;set;wnd[0]/usr/c;{ECRAN};constante;[{valeur}];"
+                    f";;;non;;;",
+                    f"99;sauver;press;wnd[0]/tbar[0]/btn[11];{ECRAN};;;;;;"
+                    f"oui;;;")
+                pipeline = charger(convertir_fichiers(self.racine,
+                                                      self.racine / "p.yaml"))
+                self.assertEqual(pipeline.etapes[0].source.valeur, valeur,
+                                 f"{nom} altere entre la cellule et SAP")
+
     def test_un_statut_attendu_sans_crochets_est_refuse(self):
         self._etapes(
             f"10;saisir;press;wnd[0]/tbar[0]/btn[8];{ECRAN};;;;;S;non;;;")

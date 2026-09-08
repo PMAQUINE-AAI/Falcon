@@ -45,6 +45,21 @@ etapes:
 """
 
 
+def _complete(propose: str) -> str:
+    """Une proposition, completee comme un humain la completerait.
+
+    Les marqueurs sont refuses au chargement — c'est le sujet d'un autre test
+    — donc tout test qui veut CHARGER une proposition doit d'abord les lever.
+    """
+    texte = (propose
+             .replace(f"categorie: {MARQUEUR}        # connue_benigne | "
+                      f"connue_fautive", "categorie: connue_fautive")
+             .replace(f"poursuivre: {MARQUEUR}   # true : le lot continue",
+                      "poursuivre: true"))
+    texte = "\n".join(l for l in texte.splitlines() if MARQUEUR not in l)
+    return texte + "\n      Observe en recette, hors perimetre.\n"
+
+
 def _dump(dossier: Path, nom: str, **charge) -> Path:
     dossier.mkdir(parents=True, exist_ok=True)
     chemin = dossier / nom
@@ -197,6 +212,52 @@ class TestEntreeProposee(unittest.TestCase):
                 ligne = next(l for l in texte.splitlines()
                              if l.strip().startswith(f"{decision}:"))
                 self.assertIn(MARQUEUR, ligne)
+
+    def test_un_libelle_SAP_multi_lignes_ne_casse_pas_la_surcouche(self):
+        """Le texte etait interpole BRUT dans un bloc `>`.
+
+        Un message SAP contenant un retour a la ligne — le cas frequent, les
+        libelles sont longs — rendait donc la surcouche entiere illisible, et
+        `falcon recolter` inutilisable au moment precis ou l'on en a besoin.
+        """
+        inconnu = lire_dump(_dump(
+            self.racine, "a.json", horodatage="2026-09-08T10:00:00Z",
+            garde="statut",
+            signature={"canal": "statut", "id": "IW", "numero": "010",
+                       "texte": "Equipement inexistant\ndans ce perimetre"},
+            detail={}))
+        chemin = self.racine / "s.yaml"
+        chemin.write_text(_complete(surcouche_proposee([inconnu])),
+                          encoding="utf-8")
+        registre = Registre.avec_surcouches(chemin)
+        self.assertIn("statut_iw_010", [e.nom for e in registre.entrees])
+
+    def test_un_libelle_SAP_ne_peut_pas_INJECTER_une_entree(self):
+        """Un message soigneusement forme pouvait ouvrir une SECONDE entree
+        de registre — sans clef dupliquee, donc sans que le lecteur strict n'y
+        voie rien — et blanchir une erreur sans rapport.
+
+        Un texte qui vient de l'ERP est une DONNEE : il se cite, il ne se
+        recopie pas.
+        """
+        injection = ('X\n  - nom: blanchit_tout\n'
+                     '    categorie: connue_benigne\n'
+                     '    canal: statut\n'
+                     '    correspondance: {id: "CP", numero: "999"}\n'
+                     '    politique: {poursuivre: true, item: ok}\n'
+                     '    origine: falcon_observe\n'
+                     '    justification: "injecte"')
+        inconnu = lire_dump(_dump(
+            self.racine, "b.json", horodatage="2026-09-08T10:00:00Z",
+            garde="statut",
+            signature={"canal": "statut", "id": "IW", "numero": "010",
+                       "texte": injection},
+            detail={}))
+        chemin = self.racine / "s.yaml"
+        chemin.write_text(_complete(surcouche_proposee([inconnu])),
+                          encoding="utf-8")
+        noms = [e.nom for e in Registre.avec_surcouches(chemin).entrees]
+        self.assertNotIn("blanchit_tout", noms)
 
     def test_l_origine_dit_d_ou_vient_l_entree(self):
         self.assertIn("origine: falcon_observe",

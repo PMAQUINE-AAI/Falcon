@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from falcon.noyau.yaml_strict import citer as _citer
+
 #: L'ordre des clefs d'une etape. Fixe, et lisible : ce qu'on fait, sur quoi,
 #: avec quelle valeur, puis ce que les gardes verront.
 ORDRE_ETAPE = (
@@ -31,17 +33,11 @@ ORDRE_ETAPE = (
 )
 
 
-def citer(valeur: str) -> str:
-    """Toujours entre guillemets doubles. Jamais de decision au cas par cas.
-
-    Citer « quand c'est necessaire » demande de savoir ce que YAML resoudrait,
-    c'est-a-dire exactement la connaissance que `yaml_strict` existe pour ne
-    pas exiger de l'utilisateur. Citer toujours coute deux caracteres et ne se
-    trompe jamais : `0100` reste `0100`, `on` reste `on`, `1.50` reste `1.50`.
-    """
-    echappe = (str(valeur).replace("\\", "\\\\").replace('"', '\\"')
-               .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
-    return f'"{echappe}"'
+#: Le quoteur vit dans `noyau/yaml_strict` : c'est le module de la surete
+#: YAML, et `taxonomie/recolte` en a besoin aussi. En garder une copie ici
+#: garantissait qu'une des deux se perime — celle-ci n'echappait pas U+0085,
+#: que PyYAML replie en ESPACE a l'interieur d'un scalaire entre guillemets.
+citer = _citer
 
 
 def _scalaire(valeur: Any) -> str:

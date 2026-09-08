@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from falcon.noyau.yaml_strict import citer
+
 #: Ce qu'une entree proposee porte en clair a la place d'une decision.
 MARQUEUR = "A COMPLETER"
 
@@ -209,15 +211,9 @@ def dumps_de(dossier: str | Path) -> list[Path]:
     return sorted(dossier.glob("*.json"), reverse=True)
 
 
-def _valeur_yaml(valeur: Any) -> str:
-    """Toujours entre guillemets. C'est le sujet meme de `yaml_strict`.
-
-    Un numero de message `010` sans guillemets se relit 8, un `id` valant `on`
-    se relit `True` : une proposition qui se colle dans un fichier doit etre
-    ecrite comme ce fichier doit etre ecrit.
-    """
-    texte = str(valeur).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{texte}"'
+#: Le quoteur du noyau. Il echappe les sauts de ligne — y compris U+0085,
+#: que PyYAML replie en espace — et les caracteres non imprimables.
+_valeur_yaml = citer
 
 
 def entree_proposee(inconnu: Inconnu) -> str:
@@ -260,13 +256,18 @@ def entree_proposee(inconnu: Inconnu) -> str:
     ]
     if inconnu.horodatage:
         lignes.append(f"    rencontree_le: {_valeur_yaml(inconnu.horodatage[:10])}")
-    lignes.append("    justification: >")
+    # Le libelle observe, sur SA propre clef et CITE.
+    #
+    # Il etait interpole brut dans un bloc `>`. Un message SAP contenant un
+    # retour a la ligne — le cas frequent, les libelles sont longs — cassait
+    # donc la surcouche entiere ; et un message soigneusement forme pouvait y
+    # OUVRIR une seconde entree de registre, sans clef dupliquee, donc sans
+    # que le lecteur strict n'y voie rien. Un texte qui vient de l'ERP est une
+    # donnee : il se cite, il ne se recopie pas.
     if inconnu.texte_du_message:
-        # Le libelle observe, en clair, parce qu'il est ce qui permet de
-        # DECIDER — et en commentaire de justification, jamais dans
-        # l'appariement : un libelle porte souvent la valeur de l'item.
-        lignes.append(f"      SAP a repondu : « {inconnu.texte_du_message} ».")
+        lignes.append(f"    observe: {_valeur_yaml(inconnu.texte_du_message)}")
     lignes += [
+        "    justification: >",
         f"      {MARQUEUR} — pourquoi cette categorie et cette politique.",
         "      Une entree sans justification lisible est une regle de securite",
         "      que personne ne pourra reexaminer.",

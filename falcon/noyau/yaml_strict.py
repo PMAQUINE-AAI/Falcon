@@ -302,3 +302,56 @@ def liste_de_texte(valeur: Any, quoi: str, *, source: str = "",
             f"caractere : « site » donnerait quatre entrees s, i, t, e")
     return tuple(texte(element, f"{quoi}[{rang}]", source=source)
                  for rang, element in enumerate(valeur))
+
+
+# ---------------------------------------------------------------------------
+# Ecriture
+#
+# Le pendant des accesseurs : eux refusent ce qui est ambigu a la LECTURE,
+# celui-ci produit ce qui ne peut pas le devenir a l'ECRITURE.
+# ---------------------------------------------------------------------------
+
+#: Caracteres qu'un scalaire YAML entre guillemets ne peut pas porter tels
+#: quels — ou qu'il porterait en changeant de sens.
+#:
+#: Les evidents d'abord : l'antislash et le guillemet, qui delimitent.
+#:
+#: Puis les SAUTS DE LIGNE, et c'est la que se cachait le defaut. `\n`, `\r`
+#: et `\t` etaient echappes ; U+0085 (NEL) ne l'etait pas, et PyYAML le traite
+#: comme un saut de ligne A L'INTERIEUR d'un scalaire entre guillemets — donc
+#: le replie en ESPACE. Mesure, sur une constante destinee a SAP :
+#:
+#:     cellule  'K75\x85B'   ->   tape dans SAP  'K75 B'
+#:
+#: La valeur entre crochets — la seule forme censee survivre a tout — etait
+#: donc tapee alteree, et la garde de relecture ne voyait rien puisqu'elle
+#: compare la valeur transformee.
+#:
+#: On echappe donc TOUT ce qui n'est pas imprimable, plus les separateurs de
+#: ligne et de paragraphe d'Unicode. Enumerer ce qu'on laisse passer plutot
+#: que ce qu'on echappe ferme la famille au lieu d'un membre.
+_LITTERAUX = {
+    "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t",
+}
+
+
+def citer(valeur: Any) -> str:
+    """Un scalaire YAML entre guillemets doubles, qui se relit A L'IDENTIQUE.
+
+    Toujours entre guillemets, jamais « quand c'est necessaire » : decider au
+    cas par cas demande de savoir ce que YAML resoudrait, c'est-a-dire
+    exactement la connaissance que ce module existe pour ne pas exiger. Citer
+    toujours coute deux caracteres et ne se trompe jamais.
+    """
+    morceaux: list[str] = []
+    for caractere in str(valeur):
+        if caractere in _LITTERAUX:
+            morceaux.append(_LITTERAUX[caractere])
+        elif caractere in ("\u2028", "\u2029") or not caractere.isprintable():
+            # `\uXXXX` est la forme qu'un scalaire entre guillemets accepte,
+            # et elle se relit exactement.
+            morceaux.append(f"\\u{ord(caractere):04x}")
+        else:
+            morceaux.append(caractere)
+    return '"' + "".join(morceaux) + '"'
+
