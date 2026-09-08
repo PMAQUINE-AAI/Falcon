@@ -117,7 +117,7 @@ class TestLeRapprochementParPosition(unittest.TestCase):
         # Et pourtant, par position, la cartographie a bien couvert du terrain.
         atteintes = [v for v, e in R.etat_des_visites(resultat, self.trace)
                      if e == R.ATTEINTE]
-        self.assertGreater(len(atteintes), 20)
+        self.assertGreater(len(atteintes), 15)
 
     def test_le_rapport_ecrit_la_phrase_qui_evite_le_contresens(self):
         """« Atteinte » sans explication se lit « meme clef des deux cotes »."""
@@ -132,16 +132,51 @@ class TestLeRapprochementParPosition(unittest.TestCase):
         self.assertIn("ce que ce rapport ne dit pas", texte)
         self.assertIn("que la trace a ete SUIVIE : elle ne l'a pas ete", texte)
         self.assertIn("QUARANTAINE", texte)
+        # « aucune sauvegarde » n'est pas « aucun effet », et le dry-run ne
+        # reconnait que DEUX gestes : une sauvegarde par un chemin de menu
+        # passerait au travers. Taire l'un ou l'autre serait rassurant a
+        # l'endroit exact ou quelqu'un decide de lancer sur la production.
+        self.assertIn("chemin de menu", texte)
+        self.assertIn("saisi des valeurs dans les champs", texte)
 
-    def test_le_rapport_compte_les_sauvegardes_atteintes_ET_contenues(self):
-        """3 refusees sur 8 : les cinq autres n'ont pas ete atteintes.
+    def test_le_rapport_nomme_le_systeme_et_le_mandant(self):
+        """Un compte rendu qui ne dit pas SUR QUOI il a agi ne vaut rien."""
+        from falcon.noyau import Identite
+        sap = SapDePapier()
+        sap.identite = Identite(systeme="QAS", mandant="200", langue="FR",
+                                transaction="SESSION_MANAGER",
+                                programme="SAPLSMTR", dynpro="0100")
+        with Bac() as bac:
+            resultat = explorer(self.trace, sap, catalogue=bac,
+                                plafond_gestes=500, plafond_ecrans=500,
+                                registre=REGISTRE)
+            texte = R.rendre(resultat, self.trace)
+        self.assertEqual((resultat.systeme, resultat.mandant), ("QAS", "200"))
+        self.assertIn("systeme        QAS  mandant 200  langue FR", texte)
 
-        Annoncer « 3 sauvegardes » sans dire que la trace en contient 8
-        laisserait croire que la rejouer sans dry-run en ecrirait 3.
+    def test_le_rapport_previent_du_piege_des_modales(self):
+        """Le releve d'une modale porte le dynpro de l'ecran de DESSOUS.
+
+        Limite prexistante, mais l'explorateur la multiplie : la moitie de la
+        trace de reference se passe dans `wnd[1]`. Un humain qui promeut sans
+        le savoir verse au catalogue une variante etiquetee du mauvais ecran.
         """
         with Bac() as bac:
             texte = R.rendre(self._explorer(bac), self.trace)
-        self.assertIn("3 refusee(s) sur 8 que la trace contient", texte)
+        self.assertIn("le releve d'une MODALE porte le", texte)
+        self.assertIn("Avant de promouvoir, verifier lesquelles", texte)
+
+    def test_le_rapport_compte_les_sauvegardes_atteintes_ET_contenues(self):
+        """2 refusees sur 8 : les six autres n'ont pas ete atteintes.
+
+        Annoncer « 2 sauvegardes » sans dire que la trace en contient 8
+        laisserait croire que la rejouer sans dry-run en ecrirait 2. Le second
+        chiffre est celui qui compte pour decider de lancer, et il ne depend
+        pas de la ou le parcours s'est arrete.
+        """
+        with Bac() as bac:
+            texte = R.rendre(self._explorer(bac), self.trace)
+        self.assertIn("2 refusee(s) sur 8 que la trace contient", texte)
         self.assertIn("ecrirait 8 fois dans SAP", texte)
 
     def test_la_previsualisation_annonce_les_sauvegardes_avant_de_lancer(self):

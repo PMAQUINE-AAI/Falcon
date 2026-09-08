@@ -16,7 +16,7 @@ from .gestes import (
 )
 from .parcours import (
     CODES_DE_SESSION, ETATS, INTERROMPUE, MODE, MOTIFS, PLAFOND,
-    PLAFOND_SAUVEGARDES, TERMINEE, TOUCHE_AVEUGLE, Branche, Exploration,
+    PLAFOND_SAUVEGARDES, TERMINEE, ACTION_AVEUGLE, Branche, Exploration,
     ExplorationImpossible, Previsualisation, Reprise, SauvegardeRefusee,
     explorer, previsualiser,
 )
@@ -34,7 +34,7 @@ __all__ = [
     "explorer", "previsualiser", "Exploration", "Previsualisation",
     "Branche", "Reprise", "SauvegardeRefusee", "ExplorationImpossible",
     "MODE", "PLAFOND_SAUVEGARDES", "ETATS", "TERMINEE", "INTERROMPUE",
-    "PLAFOND", "MOTIFS", "CODES_DE_SESSION", "TOUCHE_AVEUGLE",
+    "PLAFOND", "MOTIFS", "CODES_DE_SESSION", "ACTION_AVEUGLE",
     "rendre", "previsualisation", "etat_des_visites", "visites_manquantes",
     "esquisses_manquantes", "ordres_manquants",
     "ATTEINTE", "SAUTEE", "NON_EXPLOREE", "ETATS_DE_VISITE",

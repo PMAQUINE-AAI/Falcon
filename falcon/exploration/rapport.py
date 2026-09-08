@@ -126,6 +126,11 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
         f"cartographie de {exploration.trace}",
         f"  catalogue      {exploration.catalogue}",
         f"  etat           {exploration.etat}",
+        # Sur QUOI cela a-t-il agi. Rien ici ne sait distinguer un bac a
+        # sable d'une production ; le rapport peut au moins le nommer.
+        f"  systeme        {exploration.systeme or '?'}  "
+        f"mandant {exploration.mandant or '?'}  "
+        f"langue {exploration.langue or '?'}",
     ]
     if exploration.raison:
         lignes.append(f"  raison         {exploration.raison}")
@@ -141,6 +146,13 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
         "    Un releve par fenetre ouverte, apres chaque action. Le nombre",
         "    d'ecrans VERSES est inferieur : plusieurs releves tombent sur la",
         "    meme variante, et le depot n'en garde qu'une.",
+        "",
+        "    A RELIRE AVEC CA EN TETE : le releve d'une MODALE porte le",
+        "    programme et le dynpro de l'ecran de DESSOUS — `fields(fenetre)`",
+        "    prend son identite de `screen()`, qui decrit wnd[0] — et la",
+        "    variante ne dit pas de quelle fenetre elle vient. Une modale et",
+        "    son ecran porteur arrivent donc au catalogue comme deux variantes",
+        "    du meme triplet. Avant de promouvoir, verifier lesquelles.",
     ]
 
     # -- conjecture contre observation ------------------------------------
@@ -229,9 +241,16 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
         "      erreur, et la suite du parcours diverge alors en silence.",
         "    - que les ecrans verses sont justes : ils sont en QUARANTAINE,",
         "      c'est-a-dire en attente qu'un humain les relise et les promeuve.",
-        "    - qu'aucun effet n'a eu lieu dans SAP. Aucune sauvegarde n'est",
-        "      partie ; l'exploration a tout de meme presse des boutons, lance",
+        "    - qu'aucun effet n'a eu lieu dans SAP. Aucune sauvegarde RECONNUE",
+        "      n'est partie — le dry-run les refuse — mais l'exploration a",
+        "      saisi des valeurs dans les champs, presse des boutons, lance",
         "      des selections, et peut avoir pose des verrous.",
+        "    - qu'aucune sauvegarde n'a pu partir. Le dry-run reconnait deux",
+        "      gestes : `vkey(11)` et un `press` sur `tbar[0]/btn[11]`. Une",
+        "      sauvegarde declenchee par un chemin de menu passe au travers,",
+        "      faute de catalogue des menus, et `gardes.py` le dit de",
+        "      lui-meme. C'est pour cela que l'exploration refuse en plus",
+        "      d'ACTIVER quoi que ce soit dans une fenetre non identifiee.",
     ]
 
     if exploration.etat == PLAFOND:
@@ -285,9 +304,14 @@ def previsualisation(trace: Trace) -> str:
         "  sauvegardes a zero. Mais chaque refus fait TOMBER la branche, et",
         "  l'exploration ne repart qu'au prochain code transaction.",
         "",
-        "  L'exploration n'ecrit aucune donnee. Elle AGIT : elle navigue, elle",
-        "  presse des boutons, elle lance des selections qui peuvent tourner",
-        "  longtemps et charger le systeme, et elle peut poser des verrous SAP.",
-        "  A lancer sur un mandant de qualite avant la production.",
+        "  L'exploration ne SAUVEGARDE rien : toute sauvegarde reconnue est",
+        "  refusee. Elle SAISIT en revanche des valeurs dans les champs — un",
+        "  `write` en dry-run tape bel et bien dans SAP, il n'est simplement",
+        "  jamais valide. Et elle AGIT : elle navigue, presse des boutons,",
+        "  lance des selections qui peuvent tourner longtemps et charger le",
+        "  systeme, et elle peut poser des verrous.",
+        "",
+        "  « Aucune sauvegarde » n'est donc pas « aucun effet ». A lancer sur",
+        "  un mandant de qualite avant la production.",
     ]
     return "\n".join(lignes)

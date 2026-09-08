@@ -663,8 +663,9 @@ def confirmer(console: Console, attendu: str, *,
     un Ctrl-C. Le defaut est de NE RIEN faire dans un ERP.
     """
     console.ecrire()
-    console.ecrire(f"  {annonce} Pour confirmer, tape {quoi}")
-    console.ecrire("  en toutes lettres. Toute autre reponse annule.")
+    console.ecrire(f"  {annonce}")
+    console.ecrire(f"  Pour confirmer, tape {quoi} en toutes lettres.")
+    console.ecrire("  Toute autre reponse annule.")
     try:
         saisie = console.lire(f"\n  nom attendu « {attendu} » : ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -1902,15 +1903,16 @@ def ecran_sap(env: Environnement) -> Menu:
             "vous vous etes authentifie vous-meme. Aucun mot de passe ne\n"
             "transite par FALCON.\n"
             "\n"
-            "AUCUNE entree d'ici n'ecrit de donnee dans SAP. Les deux\n"
-            "premieres ne font que REGARDER. La troisieme AGIT DANS SAP :\n"
-            "elle rejoue une trace, donc elle navigue, presse des boutons et\n"
-            "lance des selections qui peuvent tourner longtemps. Elle demande\n"
-            "le nom du fichier de trace en toutes lettres avant de partir.\n"
+            "AUCUNE entree d'ici ne SAUVEGARDE dans SAP. Les deux premieres\n"
+            "ne font que REGARDER. La troisieme AGIT DANS SAP : elle rejoue\n"
+            "une trace, donc elle SAISIT des valeurs dans les champs — sans\n"
+            "jamais les valider — navigue, presse des boutons et lance des\n"
+            "selections qui peuvent tourner longtemps. Elle demande le nom du\n"
+            "fichier de trace en toutes lettres avant de partir.\n"
             "\n"
-            "Aucune sauvegarde ne peut partir d'ici : la cartographie tourne\n"
-            "en dry-run, plafond de sauvegardes a zero. « Sans effet » serait\n"
-            "autre chose, et personne ne l'a mesure sur un systeme reel.\n"
+            "Le dry-run refuse les deux gestes de sauvegarde qu'il sait\n"
+            "reconnaitre. Une sauvegarde par un chemin de MENU passerait au\n"
+            "travers : c'est une limite connue, ecrite dans le controleur.\n"
             "\n"
             "Exige Windows, pywin32, et le scripting autorise des deux cotes."),
         entrees=(
@@ -1936,7 +1938,9 @@ def _cartographier(console: Console, env: Environnement) -> str:
     on ne peut pas taper le nom du fichier sans avoir lu combien de gestes de
     sauvegarde la trace contient.
     """
-    from falcon.commandes.cartographie import cartographier
+    from falcon.commandes.cartographie import (
+        annoncer_la_session, cartographier,
+    )
     from falcon.exploration.rapport import previsualisation
     from falcon.noyau import ErreurFalcon
     from falcon.trace import TraceInvalide, lire
@@ -1970,16 +1974,21 @@ def _cartographier(console: Console, env: Environnement) -> str:
     if plafond_ecrans is None:
         return CONTINUER
 
-    if not confirmer(console, chemin.name,
-                     annonce="Ceci va AGIR dans SAP (sans rien y ecrire).",
-                     quoi="le nom du fichier de trace"):
-        return CONTINUER
-
+    # La connexion precede la confirmation : le mandant doit se lire a
+    # l'endroit meme ou l'on decide de lancer. Elle ne fait que LIRE.
     try:
         driver = env.connecter()
+        console.ecrire()
+        console.ecrire("  session SAP :")
+        console.ecrire(annoncer_la_session(driver))
     except ErreurFalcon as erreur:
         console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
         console.pause()
+        return CONTINUER
+
+    if not confirmer(console, chemin.name,
+                     annonce="Ceci va AGIR dans SAP, sur la session ci-dessus.",
+                     quoi="le nom du fichier de trace"):
         return CONTINUER
 
     try:

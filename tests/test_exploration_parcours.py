@@ -221,14 +221,40 @@ class TestLaSuretEstStructurelle(unittest.TestCase):
         self.assertFalse([g for g in sap.gestes if "shell" in g[1]])
 
 
-class TestLaToucheAveugle(unittest.TestCase):
+class TestLActionAveugle(unittest.TestCase):
     """Le trou que `DriverGarde` ne bouche pas, et que l'exploration ferme.
 
     `gardes._est_sauvegarde` ne reconnait que `vkey(11)` et `btn[11]`.
-    **Entree n'en fait pas partie**, et Entree sur « Donnees modifiees,
-    enregistrer ? » actionne Oui. Une pipeline vit avec cette limite — un
-    humain a declare `sauvegarde` la ou elle sauve ; une exploration, non.
+    **Entree n'en fait pas partie, et `usr/btnBUTTON_1` non plus** — c'est
+    pourtant le nom SAP standard du premier bouton d'une popup generique,
+    donc le « Oui » de « Donnees modifiees, enregistrer ? ». Une pipeline vit
+    avec cette limite : un humain a declare `sauvegarde` la ou elle sauve.
+    Une exploration, non.
     """
+
+    def test_un_bouton_de_popup_generique_dans_une_modale_inconnue_est_refuse(self):
+        """`usr/btnBUTTON_1` : le « Oui » d'une SPOP.
+
+        Le raisonnement « un press NOMME sa cible, donc il leve si l'ecran
+        differe » tombe precisement ici : toutes les popups generiques de SAP
+        portent ce meme identifiant. Le press reussirait sur la mauvaise
+        boite. C'est ce qui a fait passer la regle de « aucune touche
+        aveugle » a « aucune ACTION aveugle ».
+        """
+        trace = trace_de(
+            'session.findById("wnd[0]/usr/btnGO").press\r\n'
+            'session.findById("wnd[1]/usr/btnBUTTON_1").press\r\n')
+        sap = SapDePapier()
+        sap.apres_action = lambda double, geste, cible: (
+            double.ouvrir_modale("wnd[1]/usr/btnBUTTON_1")
+            if cible == "wnd[0]/usr/btnGO" else None)
+        with Bac() as bac:
+            resultat = P.explorer(trace, sap, catalogue=bac,
+                                  plafond_gestes=50, plafond_ecrans=50,
+                                  registre=REGISTRE)
+        self.assertEqual([b.categorie for b in resultat.branches],
+                         [P.ACTION_AVEUGLE])
+        self.assertNotIn(("press", "wnd[1]/usr/btnBUTTON_1", ""), sap.gestes)
 
     def test_une_touche_vers_une_modale_non_identifiee_est_refusee(self):
         """CONTROLE NEGATIF : retirer `_touche_aveugle` fait tomber ce test.
@@ -248,7 +274,7 @@ class TestLaToucheAveugle(unittest.TestCase):
                                   plafond_gestes=50, plafond_ecrans=50,
                                   registre=REGISTRE)
         self.assertEqual([b.categorie for b in resultat.branches],
-                         [P.TOUCHE_AVEUGLE])
+                         [P.ACTION_AVEUGLE])
         self.assertNotIn(("vkey", "wnd[1]", "0"), sap.gestes)
 
     def test_une_touche_vers_une_modale_DEJA_touchee_passe(self):
@@ -287,11 +313,15 @@ class TestLaToucheAveugle(unittest.TestCase):
                                   plafond_gestes=50, plafond_ecrans=50,
                                   registre=REGISTRE)
         self.assertEqual([b.categorie for b in resultat.branches],
-                         [P.TOUCHE_AVEUGLE])
+                         [P.ACTION_AVEUGLE])
         self.assertNotIn(("vkey", "wnd[0]", "3"), sap.gestes)
 
-    def test_une_touche_n_identifie_pas_la_fenetre_pour_la_suivante(self):
-        """Deux Entree d'affilee : la seconde n'herite pas de la premiere."""
+    def test_une_action_activante_n_identifie_pas_la_fenetre_pour_la_suivante(self):
+        """Deux Entree d'affilee : la seconde n'herite pas de la premiere.
+
+        Une action qui ACTIVE aurait reussi sur n'importe quelle boite : elle
+        n'etablit donc rien sur celle qui est la maintenant.
+        """
         trace = trace_de(
             'session.findById("wnd[0]/usr/btnBUTTON_1").press\r\n'
             'session.findById("wnd[1]/usr/txtV-LOW").text = "*BCP*"\r\n'
@@ -306,7 +336,7 @@ class TestLaToucheAveugle(unittest.TestCase):
                                   plafond_gestes=50, plafond_ecrans=50,
                                   registre=REGISTRE)
         self.assertEqual([b.categorie for b in resultat.branches],
-                         [P.TOUCHE_AVEUGLE])
+                         [P.ACTION_AVEUGLE])
         self.assertEqual(sap.gestes.count(("vkey", "wnd[1]", "0")), 1)
 
 
@@ -730,15 +760,15 @@ class TestLaMegatrace(unittest.TestCase):
                                   registre=REGISTRE)
         self.assertEqual(
             resultat.partition,
-            {"rejoues": 32, "confort": 9, "interrompus": 4, "reprises": 5,
-             "validations consommees": 3, "sautes": 37, "non explores": 0})
+            {"rejoues": 23, "confort": 9, "interrompus": 4, "reprises": 5,
+             "validations consommees": 3, "sautes": 46, "non explores": 0})
         self.assertEqual(
             [(b.ordre, b.categorie, b.reprise) for b in resultat.branches],
             [(10, P.SAUVEGARDE, "IH08"),
              (27, P.SAUVEGARDE, "IW39"),
-             (70, P.SAUVEGARDE, "IW2ç"),
+             (66, P.ACTION_AVEUGLE, "IW2ç"),
              (73, P.REPRISE_REFUSEE, "IW29"),
-             (87, P.TOUCHE_AVEUGLE, "")])
+             (82, P.ACTION_AVEUGLE, "")])
         self.assertEqual(resultat.etat, P.INTERROMPUE)
 
     def test_les_gestes_d_arbre_ne_sont_meme_pas_ATTEINTS(self):

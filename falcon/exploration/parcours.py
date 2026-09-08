@@ -43,12 +43,13 @@ bornent, et aucun n'est un parametre.
    pendant que le rapport annoncerait « IW39 explore ». Aucune exception, un
    resultat plausible, et faux.
 
-6. **Aucune touche envoyee a une fenetre qu'on n'a pas identifiee.** C'est le
-   refus que `DriverGarde` ne porte PAS, et il fallait l'ajouter :
+6. **Aucune action ACTIVANTE dans une fenetre qu'on vient pas d'identifier.**
+   C'est le refus que `DriverGarde` ne porte PAS, et il fallait l'ajouter :
    `_est_sauvegarde` ne connait que `vkey(11)` et le bouton `btn[11]` —
-   **Entree n'en fait pas partie**, et Entree sur « Donnees modifiees,
-   enregistrer ? » vaut Oui. Voir `_touche_aveugle` pour la regle exacte et
-   son cout mesure.
+   **Entree n'en fait pas partie, et `usr/btnBUTTON_1` non plus**, alors que
+   c'est le nom standard du premier bouton d'une popup generique, donc le
+   « Oui » de « Donnees modifiees, enregistrer ? ». Voir `_action_a_l_aveugle`
+   pour la regle exacte et son cout mesure.
 
 **Ce que l'assouplissement de la taxonomie coute, et ce qui l'achete.** Le
 moteur arrete tout sur un inconnu bloquant, parce que l'action suivante
@@ -74,13 +75,14 @@ from typing import TYPE_CHECKING
 
 from falcon.catalogue import ClefVariante, Depot, Variante, variante_de
 from falcon.controleur import Constat, Contrat, Derogation, DriverGarde
-from falcon.controleur.gardes import BOUTON_SAUVEGARDE, VKEY_SAUVEGARDE
+from falcon.controleur.gardes import est_sauvegarde
 from falcon.noyau import (
     CHAMP_DE_COMMANDE, Echec, Horloge, PORTEE_TOTALE, Refus, RefusDryRun,
     maintenant,
 )
 from falcon.taxonomie import INCONNUE, Registre, ecrire_dump
 from falcon.trace import Geste, Trace
+from falcon.trace.modele import FENETRE_RACINE
 from falcon.trace.esquisse import code_transaction, vise_le_champ_de_commande
 
 from .gestes import ARGUMENT_REFUSE, ECARTE_CONFORT, TRADUIT, Traduction
@@ -112,9 +114,9 @@ SAUVEGARDE = "sauvegarde"       # RefusDryRun : la trace sauvegarde ici
 INCIDENT = "incident"           # garde : statut E/A, ecart de relecture...
 COUTURE = "couture"             # Echec de la couture : ObjetIntrouvable...
 REPRISE_REFUSEE = "reprise_refusee"     # le code tape n'a pas pris
-TOUCHE_AVEUGLE = "touche_aveugle"       # une touche qui ne nomme pas sa cible
+ACTION_AVEUGLE = "action_aveugle"       # activee dans une fenetre non identifiee
 MOTIFS = (SANS_COUTURE, SANS_REPRISE, ARGUMENT, VERBE, SAUVEGARDE, INCIDENT,
-          COUTURE, REPRISE_REFUSEE, TOUCHE_AVEUGLE)
+          COUTURE, REPRISE_REFUSEE, ACTION_AVEUGLE)
 
 #: Codes du champ de commande qui ne demarrent pas une transaction mais
 #: agissent sur la SESSION. `_CODE` d'`esquisse` les laisse passer — `/nex`
@@ -241,6 +243,17 @@ class Exploration:
     actions_envoyees: int = 0
     releves: int = 0
 
+    #: Systeme, mandant et langue LUS sur l'ecran de depart.
+    #:
+    #: `Identite` les porte depuis le noyau et rien ne les lisait : un compte
+    #: rendu de cartographie ne disait donc pas SUR QUOI elle avait agi. Rien
+    #: ici ne peut distinguer un bac a sable d'une production — ce depot ne
+    #: sait pas quel mandant est lequel — mais il peut le NOMMER, et c'est ce
+    #: qu'un humain relit pour s'en apercevoir.
+    systeme: str = ""
+    mandant: str = ""
+    langue: str = ""
+
     @property
     def interrompue(self) -> bool:
         return self.etat != TERMINEE
@@ -295,17 +308,25 @@ class Previsualisation:
 # Predicats partages
 # =========================================================================
 
+#: Verbe de trace -> nom du geste, tel que le controleur le nomme.
+_GESTES = {"sendVKey": "vkey", "press": "press",
+           "doubleClickCurrentCell": "grid_double_click"}
+
+
 def _est_sauvegarde(geste: Geste) -> bool:
     """Ce geste declencherait-il une sauvegarde.
 
-    **Miroir de `controleur.gardes._est_sauvegarde`, et rien de plus.** Il
-    n'existe que pour la PREVISUALISATION : le refus, lui, est prononce par
-    `DriverGarde` et par personne d'autre. Les deux constantes sont importees
-    du controleur pour que ce miroir ne puisse pas se decoller de l'original.
+    **Appelle la fonction du controleur, il n'en garde pas de copie.** Elle
+    n'est lue ici que pour la PREVISUALISATION : le refus, lui, est prononce
+    par `DriverGarde` et par personne d'autre. Une copie aurait fini par
+    diverger de l'original — c'est le raisonnement que la decision n°14 tient
+    deja pour le code transaction.
     """
-    if geste.verbe == "sendVKey" and geste.valeur == VKEY_SAUVEGARDE:
-        return True
-    return geste.verbe == "press" and geste.cible.endswith(BOUTON_SAUVEGARDE)
+    nom = _GESTES.get(geste.verbe)
+    if nom is None:
+        return False
+    n = geste.valeur if isinstance(geste.valeur, int) else 0
+    return est_sauvegarde(nom, cible=geste.cible, n=n)
 
 
 def _code_de_reprise(geste: Geste) -> str:
@@ -370,21 +391,39 @@ def previsualiser(trace: Trace) -> Previsualisation:
 # Le parcours
 # =========================================================================
 
-#: Les appels de couture qui n'attendent aucune cible nommee.
+#: Appels de couture qui ACTIVENT : ils peuvent presser un bouton, donc
+#: valider une boite de dialogue.
+METHODES_ACTIVANTES = ("press", "select", "vkey", "grid_double_click")
+
+#: Appels qui n'attendent aucune cible nommee. Une touche ne designe rien :
+#: elle actionne ce que la fenetre au premier plan propose par defaut.
 METHODES_AVEUGLES = ("vkey",)
 
 
-def _touche_aveugle(appel, ouvertes: tuple[str, ...],
-                    derniere_cible: str) -> str:
-    """Motif de refus d'une touche envoyee a l'aveugle, ou "".
+def _fenetre_de(appel) -> str:
+    """La fenetre a laquelle cet appel s'adresse.
+
+    Pour une touche, c'est le dernier argument — la couture prend la fenetre
+    explicitement. Pour tout le reste, c'est la racine de l'identifiant.
+    """
+    if appel.methode in METHODES_AVEUGLES:
+        return str(appel.arguments[-1])
+    trouve = FENETRE_RACINE.match(str(appel.arguments[0]))
+    return trouve.group(1) if trouve else ""
+
+
+def _action_a_l_aveugle(appel, ouvertes: tuple[str, ...],
+                        derniere_cible: str) -> str:
+    """Motif de refus d'une action portee sur une fenetre inconnue, ou "".
 
     **C'est le trou que `DriverGarde` ne bouche pas, et il faut le dire en
-    entier.** `_est_sauvegarde` (gardes.py:305-310) ne connait que trois
-    choses : un contrat qui se declare `sauvegarde`, `vkey(11)`, et un `press`
-    sur `tbar[0]/btn[11]`. **Entree — `vkey(0)` — n'en fait pas partie.** Or
-    Entree sur la boite « Donnees modifiees. Enregistrer ? » actionne le
-    bouton par defaut, c'est-a-dire Oui, c'est-a-dire une ecriture. Le
-    commentaire de `gardes.py:36-39` le dit deja de lui-meme : la
+    entier.** `_est_sauvegarde` (gardes.py) ne connait que trois choses : un
+    contrat qui se declare `sauvegarde`, `vkey(11)`, et un `press` sur
+    `tbar[0]/btn[11]`. **Entree n'en fait pas partie, et `usr/btnBUTTON_1` non
+    plus.** Or Entree sur la boite « Donnees modifiees. Enregistrer ? »
+    actionne le bouton par defaut — Oui — et `usr/btnBUTTON_1` EST ce
+    bouton-la : c'est le nom SAP standard du premier bouton d'une popup
+    generique. Le commentaire de `gardes.py` le dit deja de lui-meme : la
     reconnaissance d'office est « une securite contre l'oubli, pas une
     detection complete ».
 
@@ -393,47 +432,59 @@ def _touche_aveugle(appel, ouvertes: tuple[str, ...],
     n'a valide un seul de ses gestes. Elle doit donc etre PLUS stricte que le
     controleur, et c'est ici que ca se joue.
 
-    **L'asymetrie sur laquelle repose ce refus**, et elle est structurelle :
-    un `press`, un `write`, un `grid_*` NOMMENT leur cible. Si l'ecran n'est
-    pas celui de l'enregistrement, l'identifiant ne resout pas, la couture
-    leve `ObjetIntrouvable`, et la branche tombe — le bon resultat. Une touche
-    ne nomme rien : elle actionne ce que la boite qui est la propose par
-    defaut, quelle qu'elle soit, et elle reussit toujours.
+    **La regle : on n'ACTIVE rien dans une fenetre qu'on vient pas
+    d'identifier.** Une action activante visant une fenetre autre que `wnd[0]`
+    n'est envoyee que si l'action PRECEDENTE parvenue au driver a nomme un
+    controle de cette meme fenetre et l'a atteint.
 
-    **La regle, et ce qu'elle etablit exactement.** Une touche adressee a une
-    fenetre autre que `wnd[0]` n'est envoyee que si la derniere action
-    parvenue au driver a nomme un controle DE CETTE FENETRE et l'a atteint.
-    Cela n'etablit pas que la boite est celle de l'enregistrement — rien ici
-    ne peut l'etablir. Cela etablit que la fenetre ouverte porte le controle
-    que la trace y nommait au meme point de la sequence, ce qui est un fait
-    observe et non une conjecture ; une boite de confirmation d'enregistrement
-    ne porte pas `usr/txtV-LOW`, et l'ecriture aurait leve avant qu'on en
-    arrive a la touche.
+    « Precedente », et non « une fois quelque part avant » : une modale fermee
+    puis rouverte n'est pas la meme boite, et rien ne dit qu'elle porte les
+    memes controles. Se fier a `windows()` pour detecter la fermeture
+    demanderait au surplus de savoir QUAND SAP ferme une modale — ce que ce
+    depot ne sait pas et refuse de conjecturer.
 
-    Une touche adressee a `wnd[0]` exige, elle, que `wnd[0]` soit la SEULE
+    **Ce que cela etablit, exactement.** Pas que la boite est celle de
+    l'enregistrement — rien ici ne peut l'etablir. Cela etablit que la fenetre
+    ouverte porte le controle que la trace y nommait au meme point de la
+    sequence, ce qui est un fait OBSERVE : une boite de confirmation
+    d'enregistrement ne porte pas `usr/txtV-LOW`, et l'ecriture aurait leve
+    avant qu'on en arrive au bouton.
+
+    **Pourquoi une ecriture peut s'y risquer et pas un bouton.** Un `write`
+    qui tombe sur la mauvaise boite ne resout pas : il leve, la branche tombe,
+    rien n'est arrive. Un `press` ou une touche qui tombent sur la mauvaise
+    boite REUSSISSENT — c'est toute la difference, et c'est pourquoi la
+    premiere action dans une modale doit etre une action qui nomme.
+
+    Une touche adressee a `wnd[0]` exige en plus que `wnd[0]` soit la SEULE
     fenetre ouverte : c'est la fenetre au premier plan qui recevrait la
     frappe, et ce ne serait pas celle que la trace visait.
 
-    Cout mesure sur la trace de reference : **nul**. Ses quatre `sendVKey` vers
-    `wnd[1]` sont tous precedes d'un `text` sur `wnd[1]/usr/txtV-LOW`, qui les
-    autorise. La regle ne coute rien ici et ferme le cas ou l'exploration a
-    diverge — c'est-a-dire precisement celui ou la boite n'est pas la bonne.
+    **Cout mesure sur la trace de reference, et il n'est pas nul :** neuf
+    gestes rejoues en moins (32 -> 23), zero ecran verse en moins. Les refus
+    portent sur des `press` dans `wnd[1]` qui suivent immediatement une
+    Entree dans cette meme fenetre — l'Entree a pu changer la boite, donc le
+    bouton suivant est presse a l'aveugle au sens strict.
+
+    Ce cout est assume : un refus vaut toujours mieux qu'un enregistrement
+    qu'on ne saurait pas avoir declenche. Il se paie en ecrans qu'il faudra
+    aller relever a la main, ce que le rapport nomme.
     """
-    if appel.methode not in METHODES_AVEUGLES:
+    if appel.methode not in METHODES_ACTIVANTES:
         return ""
-    fenetre = appel.arguments[-1]
+    fenetre = _fenetre_de(appel)
     if fenetre != "wnd[0]":
         if not derniere_cible.startswith(f"{fenetre}/"):
-            return (f"touche envoyee a {fenetre!r} sans qu'aucun controle de "
-                    f"cette fenetre ait ete atteint juste avant (derniere "
-                    f"cible : {derniere_cible or 'aucune'!r}). Une touche ne "
-                    f"nomme rien : elle actionne le bouton par defaut de la "
-                    f"boite qui est la. Si l'exploration a diverge et que "
-                    f"cette boite est « Donnees modifiees, enregistrer ? », "
-                    f"Entree vaut Oui — et aucune garde ne reconnait Entree "
-                    f"comme une sauvegarde")
+            return (f"{appel.methode} dans {fenetre!r}, alors que la derniere "
+                    f"action parvenue au driver visait "
+                    f"{derniere_cible or 'aucune cible'!r}. Une action qui "
+                    f"ACTIVE reussit sur n'importe quelle boite : si "
+                    f"l'exploration a diverge et que celle-ci est « Donnees "
+                    f"modifiees, enregistrer ? », le bouton presse vaut Oui. "
+                    f"Une ecriture, elle, aurait leve — c'est pourquoi la "
+                    f"premiere action dans une modale doit nommer un champ")
         return ""
-    if ouvertes != ("wnd[0]",):
+    if appel.methode in METHODES_AVEUGLES and ouvertes != ("wnd[0]",):
         intruses = [f for f in ouvertes if f != "wnd[0]"]
         return (f"touche destinee a wnd[0] alors que {intruses} est/sont "
                 f"ouverte(s) : c'est la fenetre au premier plan qui la "
@@ -509,8 +560,9 @@ class _Parcours:
         #: Index du geste dont l'Entree a deja ete envoyee par une reprise.
         self.validation_consommee: int | None = None
 
-        #: Identifiant NOMME de la derniere action parvenue au driver. Une
-        #: touche ne nomme rien et la remet a "" : voir `_touche_aveugle`.
+        #: Identifiant NOMME de la derniere action parvenue au driver.
+        #: Une action ACTIVANTE la remet a "" : elle aurait reussi sur
+        #: n'importe quelle boite, donc elle n'identifie rien.
         self.derniere_cible = ""
 
     # -- releve ------------------------------------------------------------
@@ -530,6 +582,21 @@ class _Parcours:
         parcours, le catalogue CURE, et la quarantaine. La consultation du
         catalogue cure est celle qui compte : sans elle, un ecran qu'un humain
         a relu et promu reapparaitrait en quarantaine au parcours suivant.
+
+        **La limite qu'il faut connaitre, et que l'explorateur MULTIPLIE.**
+        `fields(fenetre)` rend un `Ecran` dont l'identite est celle de
+        `screen()` — c'est-a-dire de la fenetre PRINCIPALE. Le releve d'une
+        modale porte donc le programme et le dynpro de l'ecran de DESSOUS, et
+        la `Variante` ne porte pas la fenetre : une modale et l'ecran qui la
+        porte deviennent deux variantes du meme triplet, distinguees par leur
+        seule empreinte, et rien dans le YAML ne dit laquelle etait la modale.
+
+        La limite prexiste — `diagnostiquer --fenetre wnd[1] --catalogue` fait
+        deja cela — mais elle etait rare et devient courante : la moitie de la
+        trace de reference se passe dans `wnd[1]`. Elle est signalee au
+        rapport plutot que corrigee en douce ici, parce que la corriger veut
+        dire ajouter la fenetre a `ClefVariante`, donc changer toutes les
+        empreintes deja ecrites.
         """
         self.releves += 1
         for fenetre in self.garde.windows():
@@ -647,12 +714,11 @@ class _Parcours:
         with self.garde.sous_contrat(_contrat(traduction.geste)):
             getattr(self.garde, appel.methode)(*appel.arguments)
         self.actions += 1
-        # Une touche ne nomme aucune cible : elle n'identifie donc pas la
-        # fenetre pour la touche suivante. Toute autre methode prend un
-        # identifiant en premier argument, et l'avoir atteint est un fait.
-        self.derniere_cible = (
-            "" if appel.methode in METHODES_AVEUGLES
-            else str(appel.arguments[0]))
+        # Une action qui a NOMME un controle et l'a atteint identifie sa
+        # fenetre. Une action activante, elle, n'etablit rien : elle aurait
+        # reussi sur n'importe quelle boite.
+        self.derniere_cible = ("" if appel.methode in METHODES_ACTIVANTES
+                               else str(appel.arguments[0]))
 
 
 def _branche(geste: Geste, categorie: str, motif: str, *,
@@ -706,6 +772,7 @@ def explorer(trace: Trace,
         registre=registre if registre is not None else Registre.charger(),
         horloge=horloge)
 
+    depart = parcours.garde.screen()
     etat, raison, index = _parcourir(parcours)
     non_explores = max(0, len(parcours.gestes) - index)
 
@@ -731,6 +798,7 @@ def explorer(trace: Trace,
         gestes_non_explores=non_explores,
         actions_envoyees=parcours.actions,
         releves=parcours.releves,
+        systeme=depart.systeme, mandant=depart.mandant, langue=depart.langue,
     )
 
 
@@ -803,14 +871,14 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             index = suite
             continue
 
-        # -- la touche aveugle ---------------------------------------------
+        # -- l'action a l'aveugle ------------------------------------------
         assert traduction.appel is not None             # garanti par TRADUIT
-        aveugle = _touche_aveugle(traduction.appel,
-                                  tuple(f.id for f in p.garde.windows()),
-                                  p.derniere_cible)
+        aveugle = _action_a_l_aveugle(
+            traduction.appel, tuple(f.id for f in p.garde.windows()),
+            p.derniere_cible)
         if aveugle:
             p.interrompus += 1
-            suite = _abandonner(p, geste, TOUCHE_AVEUGLE, aveugle, index)
+            suite = _abandonner(p, geste, ACTION_AVEUGLE, aveugle, index)
             if suite < 0:
                 return INTERROMPUE, _sans_point_de_reprise(p, geste), total
             index = suite

@@ -41,8 +41,13 @@ que le lecteur de traces s'interdit.
 
 - elle ne devine pas : aucun verbe n'est traduit « par ressemblance » d'un
   identifiant ou d'un prefixe ;
-- elle ne normalise pas : elle ne convertit pas un type en un autre, ne trie
-  ni ne dedoublonne les rangs, ne rogne pas les espaces d'un argument ;
+- elle ne normalise pas — a une exception PRES, et il faut la nommer plutot
+  que de la laisser contredire la phrase : `selectedRows` porte des index de
+  ligne sous forme de texte, et `_rangs` les convertit en entiers. C'est le
+  SEUL endroit ou un type en devient un autre, et c'est la que toute
+  convention pourrait se glisser — d'ou le refus de trier, de dedoublonner,
+  de rogner un espace ou de lire un intervalle. Partout ailleurs, un type
+  inattendu est refuse, jamais converti ;
 - elle ne repare pas : `/nIW2ç` — la faute de frappe de l'operateur dans la
   trace de reference — est ecrite telle quelle, et c'est SAP qui la refusera ;
 - elle ne juge pas de la surete : elle traduit `press` sur
@@ -336,6 +341,20 @@ def _fenetre(geste: Geste) -> str:
     return geste.cible
 
 
+#: Ce qu'un entier negatif ferait, selon la grandeur qu'il porte. Le message
+#: raisonnait en lignes de grille quel que soit le verbe : « touche numero -1 »
+#: n'agit pas « sur une autre ligne », et un refus qui explique de travers est
+#: un refus qu'on relira mal.
+_CONSEQUENCES = {
+    "index de ligne": ("Un index negatif designe la fin en Python et rien du "
+                       "tout en SAP : il agirait sur une autre ligne, ou sur "
+                       "aucune, sans lever"),
+    "numero de touche": ("Aucune touche de fonction ne porte un numero "
+                         "negatif : la couture le transmettrait tel quel a "
+                         "SAP, qui en ferait ce qu'il veut"),
+}
+
+
 def _entier(geste: Geste, quoi: str) -> int:
     """Un entier positif LU, jamais converti depuis autre chose."""
     valeur = geste.valeur
@@ -347,9 +366,8 @@ def _entier(geste: Geste, quoi: str) -> int:
             f"l'API SAP accepte l'autre type")
     if valeur < 0:
         raise _Refus(
-            f"{geste.verbe} : {quoi} negatif ({valeur}). Un index negatif "
-            f"designe la fin en Python et rien du tout en SAP : il agirait "
-            f"sur une autre ligne, ou sur aucune, sans lever")
+            f"{geste.verbe} : {quoi} negatif ({valeur}). "
+            f"{_CONSEQUENCES[quoi]}")
     return valeur
 
 

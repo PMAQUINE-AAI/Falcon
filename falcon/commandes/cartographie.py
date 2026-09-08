@@ -35,6 +35,27 @@ TERMINE = 0
 INCOMPLET = 1
 
 
+def annoncer_la_session(driver) -> str:
+    """Sur QUOI on s'apprete a agir, lu par une facade en LECTURE SEULE.
+
+    Montre avant la confirmation, et pas seulement dans le compte rendu :
+    l'endroit ou quelqu'un decide de lancer est l'endroit ou il doit voir le
+    mandant. Rien ici ne sait lequel est la production — ce depot ne le sait
+    pas — mais un humain, lui, reconnait le sien.
+
+    `DriverLecture` et non le driver : cette fonction ne peut pas agir, au
+    sens ou `write` et `press` n'existent pas sur l'objet qu'elle tient.
+    """
+    from falcon.couture import DriverLecture
+
+    identite = DriverLecture(driver).screen()
+    return (f"  systeme {identite.systeme or '?'}   "
+            f"mandant {identite.mandant or '?'}   "
+            f"langue {identite.langue or '?'}\n"
+            f"  ecran courant : {identite.transaction or '?'} / "
+            f"{identite.programme or '?'} / {identite.dynpro or '?'}")
+
+
 def cartographier(trace: str | Path,
                   catalogue: str | Path,
                   *,

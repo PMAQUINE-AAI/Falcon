@@ -4,9 +4,11 @@ Minimale, et delibere. **Aucune de ces commandes n'ECRIT dans SAP**, mais deux
 d'entre elles y AGISSENT, et la nuance compte assez pour etre ecrite ici :
 
   - `console` peut lancer une pipeline, donc ecrire, apres confirmation ;
-  - `explorer` rejoue une trace en observation. Elle n'ecrit aucune donnee —
-    toute sauvegarde est refusee par le dry-run — mais elle navigue, presse
-    des boutons et lance des selections. « Lecture seule » serait faux.
+  - `explorer` rejoue une trace en observation. Elle ne SAUVEGARDE rien —
+    toute sauvegarde reconnue est refusee — mais elle saisit des valeurs dans
+    les champs, navigue, presse des boutons et lance des selections.
+    « Lecture seule » serait faux, et « n'ecrit rien » aussi : un `write` en
+    dry-run tape dans SAP, il n'est simplement jamais valide.
 
 Les autres regardent un ecran, une trace, un catalogue, et rien de plus.
 
@@ -43,9 +45,10 @@ DESCRIPTION = """FALCON — automatisation SAP Front End.
 Une seule commande peut ECRIRE dans SAP — `console` — et seulement sur trois
 de ses ecrans, apres confirmation du nom de la pipeline en toutes lettres.
 
-`explorer` n'ecrit rien mais AGIT : elle rejoue une trace, donc elle navigue
-et presse des boutons. Elle demande, elle aussi, le nom du fichier de trace en
-toutes lettres. Toutes les autres commandes sont en lecture seule.
+`explorer` ne SAUVEGARDE rien mais AGIT : elle rejoue une trace, donc elle
+saisit des valeurs, navigue et presse des boutons. Elle demande, elle aussi,
+le nom du fichier de trace en toutes lettres. Les autres commandes sont en
+lecture seule.
 
   console         menus interactifs : tests, traces, catalogue, EXECUTION
   explorer        rejoue une trace en OBSERVATION et peuple la quarantaine
@@ -172,9 +175,10 @@ def analyseur() -> argparse.ArgumentParser:
                          "quarantaine",
         description="Etape 2 du cycle de vie : FALCON rejoue la trace, releve "
                     "chaque ecran traverse et le verse en QUARANTAINE. "
-                    "N'ecrit AUCUNE donnee — toute sauvegarde est refusee — "
-                    "mais AGIT : elle navigue, presse des boutons et lance "
-                    "des selections qui peuvent tourner longtemps. Exige une "
+                    "Ne SAUVEGARDE rien — toute sauvegarde reconnue est "
+                    "refusee — mais AGIT : elle saisit des valeurs dans les "
+                    "champs, navigue, presse des boutons et lance des "
+                    "selections qui peuvent tourner longtemps. Exige une "
                     "session SAP ouverte, et le nom du fichier de trace en "
                     "toutes lettres. A lancer sur un mandant de qualite avant "
                     "la production.")
@@ -397,7 +401,10 @@ def _explorer(options: argparse.Namespace) -> int:
     avoir vu le recapitulatif qui l'annonce, donc au passage le nombre de
     gestes de sauvegarde que la trace contient.
     """
-    from falcon.commandes.cartographie import INCOMPLET, TERMINE, cartographier
+    from falcon.commandes.cartographie import (
+        INCOMPLET, TERMINE, annoncer_la_session, cartographier,
+    )
+    from falcon.couture.sapgui import connecter
     from falcon.exploration import TERMINEE
     from falcon.exploration.rapport import previsualisation
     from falcon.taxonomie import Registre
@@ -410,6 +417,13 @@ def _explorer(options: argparse.Namespace) -> int:
     print(previsualisation(lire(chemin)), file=sys.stderr)
     print(f"\n  plafonds : {options.plafond_gestes} action(s), "
           f"{options.plafond_ecrans} ecran(s)", file=sys.stderr)
+
+    # La connexion precede la confirmation, pour que le mandant se lise a
+    # l'endroit meme ou l'on decide de lancer. Elle n'agit pas : elle se
+    # greffe sur une session ouverte et en LIT l'identite.
+    driver = connecter(connexion=options.connexion, session=options.session)
+    print("\n  session SAP :", file=sys.stderr)
+    print(annoncer_la_session(driver), file=sys.stderr)
 
     if options.oui_je_sais != attendu:
         if not sys.stdin.isatty():
@@ -435,7 +449,7 @@ def _explorer(options: argparse.Namespace) -> int:
         plafond_ecrans=options.plafond_ecrans,
         esquisses=options.esquisses,
         registre=Registre.avec_surcouches(*options.registre),
-        connexion=options.connexion, session=options.session)
+        driver=driver)
 
     print()
     print(compte_rendu)

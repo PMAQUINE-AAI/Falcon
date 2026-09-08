@@ -1982,6 +1982,21 @@ class TestCartographie(unittest.TestCase):
         self.assertEqual(self.sap.gestes, [])
         self.assertFalse((Path(self.bac.name) / "quarantaine").exists())
 
+    def test_le_mandant_se_lit_AVANT_la_confirmation(self):
+        """L'endroit ou l'on decide de lancer est l'endroit ou l'on doit voir
+        sur quoi. Rien ici ne sait distinguer un bac a sable d'une production
+        — ce depot ne le sait pas — mais un humain reconnait le sien.
+        """
+        from falcon.noyau import Identite
+        self.sap.identite = Identite(systeme="PRD", mandant="100",
+                                     langue="FR", transaction="SESSION_MANAGER",
+                                     programme="SAPLSMTR", dynpro="0100")
+        journal = self._session(str(MEGATRACE), self.bac.name, "500", "500",
+                                "non")
+        self.assertIn("systeme PRD", journal.texte)
+        self.assertIn("mandant 100", journal.texte)
+        self.assertIn("Annule", journal.texte)
+
     def test_l_apercu_precede_la_confirmation(self):
         """On ne peut pas taper le nom sans avoir vu ce que la trace contient.
 

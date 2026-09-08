@@ -41,6 +41,26 @@ VKEY_SAUVEGARDE = 11
 BOUTON_SAUVEGARDE = "tbar[0]/btn[11]"
 
 
+def est_sauvegarde(geste: str, cible: str = "", n: int = 0) -> bool:
+    """La reconnaissance d'office, en UN seul endroit.
+
+    Publique et libre de tout contrat parce qu'elle a deux lecteurs :
+    `DriverGarde`, qui s'en sert pour REFUSER, et `exploration.previsualiser`,
+    qui s'en sert pour ANNONCER a l'avance ce que le dry-run refusera. Une
+    copie dans l'explorateur aurait fini par diverger de celle-ci — c'est le
+    raisonnement que la decision n°14 tient deja pour le code transaction, et
+    il vaut a plus forte raison pour la regle la plus importante du depot.
+
+    **Elle est incomplete, et c'est enonce ailleurs aussi :** une sauvegarde
+    declenchee par un chemin de MENU passe au travers, faute de catalogue des
+    menus.
+    """
+    if geste == "vkey":
+        return n == VKEY_SAUVEGARDE
+    return geste in ("press", "select", "grid_double_click") and cible.endswith(
+        BOUTON_SAUVEGARDE)
+
+
 @dataclass(frozen=True)
 class Constat:
     """Trace d'une garde qui a eu quelque chose a dire.
@@ -303,11 +323,11 @@ class DriverGarde(Driver):
                                     "rang": self._sauvegardes}))
 
     def _est_sauvegarde(self, geste: str, cible: str = "", n: int = 0) -> bool:
-        if self._contrat.sauvegarde:
-            return True
-        if geste == "vkey" and n == VKEY_SAUVEGARDE:
-            return True
-        return geste == "press" and cible.endswith(BOUTON_SAUVEGARDE)
+        # Le contrat d'abord : une etape qui se DECLARE sauvegarde est honoree
+        # quel que soit le geste par lequel elle sauve. Le reste est la
+        # reconnaissance d'office, partagee avec l'explorateur.
+        return (self._contrat.sauvegarde
+                or est_sauvegarde(geste, cible=cible, n=n))
 
     def _apres_action(self) -> None:
         self._garde_fenetres()
