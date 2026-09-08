@@ -17,6 +17,15 @@ L'humain valide le fichier intermédiaire avant toute écriture. C'est à la foi
 le contrat entre les deux passes, la trace d'audit, et la garde de sécurité la
 plus efficace du dispositif.
 
+**Pour commencer :** [docs/DEMARRAGE.md](docs/DEMARRAGE.md) mène de
+l'installation à la première exécution sur un poste Windows, et dit à chaque
+étape ce qui peut échouer et pourquoi. [exemple/](exemple/) est un automatisme
+complet qu'on copie, et qui se rejoue ici sans SAP :
+
+```bash
+python exemple/rejouer.py
+```
+
 ## La référence
 
 **[SPEC_FALCON.md](SPEC_FALCON.md)** — spécification fonctionnelle complète :

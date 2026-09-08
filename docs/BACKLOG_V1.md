@@ -56,12 +56,12 @@ Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
 | 10 | `[x]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8b | 33 tests, dont deux **bout en bout** — un lot interrompu, repris, et son fichier de KO rechargé sans retouche ; un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne ; un item interrompu **après** sauvegarde ressort `douteux` de bout en bout et la reprise ne le rejoue pas ; le jeu est vérifié **avant** la première action |
 | 11 | `[x]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | 25 tests ; muet hors terminal ; rendu = fonction pure, aucun test ne capture de terminal ; ETA glissant qui **se tait** tant qu'il n'est pas fiable |
 | 12a | `[x]` | Format d'export, provenance, conservation, delta (§3.6) | — | 28 tests ; provenance **refusée incomplète avant écriture** ; un dossier par système, fichier horodaté ; delta par clef déclarée, jamais par rang |
-| 12b | `[~]` | Navigation `SE16N` (§3.6) | 12a, **carte d'écran relevée** | 15 tests ; mécanique livrée et exercée contre le double ; la carte est livrée **vide** et l'export refuse avant toute navigation. **Reste** : relever la carte sur un poste réel |
-| 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction**. Bundle livré : `python outils/embarquer.py` produit un `falcon.pyz` qui tourne **sans `site-packages`**. **Reste** : la validation sur un poste réel |
+| 12b | `[~]` | Navigation `SE16N` (§3.6) | 12a, **carte d'écran relevée** | 15 tests ; mécanique livrée et exercée contre le double ; la carte est livrée **vide** et l'export refuse avant toute navigation. **Reste** : relever la carte sur un poste réel — et rien de ce que je peux faire ici ne le débloque |
+| 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction**. Bundle livré : `python outils/embarquer.py` produit un `falcon.pyz` qui tourne **sans `site-packages`**. Le paquet s'installe aussi par `pip` depuis ce lot : `packages` récursif et `package-data`, vérifiés en construisant une roue. **Reste** : la validation sur un poste réel |
 | 14 | `[x]` | Console interactive : tests, traces, catalogue, diagnostic | 6, 9, 13 | 28 tests ; une session complète se rejoue sans terminal ; le décor s'encode en cp1252 ; aucun écran n'atteint une méthode mutante (vérifié sur l'AST) |
 | 15 | `[x]` | La console pilote tout FALCON | 8, 10, 12a, 14 | 111 tests. « Pipelines et données » : une pipeline se relit étape par étape avec ses plafonds, ses navigations libres et ses dérogations motivées **avant** tout lancement. « Journaux » : rapport, états, douteux nommés par leur clef, et un réexport des KO **reprojeté depuis le journal**, douteux exclus, cinq colonnes de diagnostic remplies. « Exports de table » : conservation avec provenance, delta contre le précédent, et la carte SE16N qui dit ce qui lui manque. « Exécuter » : répétition à blanc, run, reprise et chaîne, chacune précédée d'un récapitulatif complet et d'une **confirmation en toutes lettres** — le nom de la pipeline, jamais un `o/n` ; le `Rapporteur` du lot 11 est enfin branché. Racine à **sept branches**, bundle construit depuis le menu. Un test de fumée traverse tout l'arbre : aucun écran ne meurt sur une fin de flux, et **aucun menu qui mène à une écriture ne se dit inoffensif** |
 
-| 16 | `[~]` | Un automatisme = un YAML, jamais un commit | 8, 10 | composition déclarative livrée : `gabarit` compose depuis plusieurs colonnes, `format` applique un **registre fermé** de transformations dans l'ordre déclaré, `defaut` remplace une valeur vide. Les six besoins mesurés comme impossibles le sont tous devenus. **Reste** : l'échappatoire `action: python` exige toujours d'éditer le dépôt |
+| 16 | `[x]` | Un automatisme = un YAML, jamais un commit | 8, 10 | composition déclarative livrée : `gabarit` compose depuis plusieurs colonnes, `format` applique un **registre fermé** de transformations dans l'ordre déclaré, `defaut` remplace une valeur vide. Et le chaînon qui manquait : `falcon/tableur/` convertit les trois CSV du classeur en pipeline YAML, **relue avant d'être écrite**, avec une émission déterministe à l'octet. Classeur `.xlsx` + module VBA livrés. **Limite assumée** : `action: python` exige toujours d'éditer le dépôt |
 
 ## Ce qui bloque, et sur quoi
 
@@ -95,8 +95,15 @@ donc pas peupler le catalogue — elle produit une *esquisse*, que
 `Depot.pour_garde` refuse déjà de servir (lot 9). Le raccordement était prêt
 avant le producteur.
 
-Reste demandé, non bloquant ici : la **convention de nommage des variantes**.
-Trois ou quatre noms réels suffisent. Ça bloquera la pipeline d'audit.
+~~Reste demandé : la **convention de nommage des variantes**. Trois ou quatre
+noms réels suffisent. Ça bloquera la pipeline d'audit.~~
+
+**Cette dette n'existe plus, et elle n'aurait jamais dû exister.** Un nom de
+variante composé s'écrit `source: {gabarit: "/BCP01_{site}"}` — la convention
+n'a pas à remonter jusqu'à nous, et c'était précisément le grief :
+« il ne faut pas faire un programme spécifique pour les variantes, c'est à moi
+de le renseigner. » Demander une convention pour la coder était le symptôme,
+pas la solution.
 
 ## Tout piloter depuis un seul endroit
 
