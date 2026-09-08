@@ -9,10 +9,12 @@ from .contrat import (
     ContratIncomplet, Derogation, DerogationRefusee, contrat_pour,
 )
 from .gardes import Constat, DriverGarde
+from .grille import GrilleIllisible, chercher, colonnes_de, relever
 from .poste import Poste
 
 __all__ = [
     "Contrat", "ContratIncomplet", "Derogation", "DerogationRefusee",
     "DEROGEABLES", "PORTEE_TOTALE", "contrat_pour",
     "MOTIF_MINIMAL", "COMPARAISONS", "DriverGarde", "Constat", "Poste",
+    "relever", "chercher", "colonnes_de", "GrilleIllisible",
 ]

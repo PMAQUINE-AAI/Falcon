@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from falcon.controleur import Contrat, DriverGarde, Poste
+from falcon.controleur.grille import relever
 from falcon.noyau import CHAMP_DE_COMMANDE, Horloge, maintenant
 from falcon.taxonomie import Registre
 
@@ -74,15 +75,17 @@ def _filtrer(poste: Poste, garde: DriverGarde, carte: Carte,
 
 def _relever(poste: Poste, garde: DriverGarde,
              carte: Carte) -> list[dict[str, Any]]:
-    """Lit la grille de resultat, par index ABSOLU et sans defilement."""
+    """Lit la grille de resultat, sous le contrat de l'ecran de resultat.
+
+    Le CORPS de la lecture vit dans `controleur/grille.py`, et il n'y a qu'un
+    seul exemplaire dans le depot : c'etait ici, et l'explorateur declaratif en
+    avait besoin aussi. Deux copies finissent par diverger, et celle qui
+    apprendrait quelque chose que l'autre ignore lirait des lignes que l'autre
+    ne lit pas. Ce qui reste ici est ce qui appartient a l'export : le contrat.
+    """
     with garde.sous_contrat(Contrat(nom="lire la liste",
                                     ecran_attendu=carte.ecran_resultat)):
-        colonnes = poste.grid_columns(carte.grille)
-        return [
-            {colonne: poste.grid_read(carte.grille, ligne, colonne)
-             for colonne in colonnes}
-            for ligne in range(poste.grid_rows(carte.grille))
-        ]
+        return relever(poste, carte.grille)
 
 
 def exporter_table(brut: "Driver",
