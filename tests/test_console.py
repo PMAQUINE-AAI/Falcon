@@ -596,6 +596,23 @@ class TestCatalogue(unittest.TestCase):
         self.assertNotIn(empreinte, empreintes,
                          "un « oui » a suffi a promouvoir")
 
+    def test_promouvoir_une_ESQUISSE_ne_fait_pas_certifier_l_ecran(self):
+        """« Promouvoir dit j'ai vu le FICHIER, pas j'ai vu l'ECRAN. »
+
+        Le `setUp` met une esquisse en quarantaine. L'ecran de promotion
+        annoncait « tu as relu cet ecran » — faux pour une esquisse, que
+        personne n'a jamais vue : elle vient d'une trace et ne porte que les
+        champs TOUCHES. Faire certifier a quelqu'un ce qu'il n'a pas fait est
+        la meme classe de defaut que le reste, appliquee a la confirmation.
+        """
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Promouvoir une capture"),
+            str(self.racine), "1", "", "", "0", "0")
+        parcourir(racine(), journal.console())
+        self.assertIn("ESQUISSE", journal.texte)
+        self.assertIn("personne n'a vu cet", journal.texte)
+        self.assertNotIn("TU as relu cet ecran", journal.texte)
+
     def test_le_dictionnaire_s_exporte_depuis_la_console(self):
         """Le lot 15 s'appelle « la console pilote tout FALCON » ;
         `dictionnaire` y faisait exception."""

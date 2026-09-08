@@ -1702,7 +1702,24 @@ def ecran_catalogue(env: Environnement) -> Menu:
         # Confirmation par l'EMPREINTE, en toutes lettres. Deux variantes d'un
         # meme ecran ne different que par elle : un « oui » ne dirait pas
         # laquelle on a relue, et c'est precisement ce qu'on certifie ici.
-        console.ecrire("\n  Promouvoir, c'est dire que TU as relu cet ecran.")
+        variante = ecarte.pour_edition(choisie)
+        if variante.observee:
+            console.ecrire("\n  Promouvoir, c'est dire que TU as relu cet "
+                           "ecran.")
+        else:
+            # Une esquisse vient d'une TRACE : elle porte les champs touches,
+            # pas les champs presents, et personne n'a vu l'ecran. La promouvoir
+            # dit « j'ai vu le fichier », pas « j'ai vu l'ecran » — et
+            # `pour_garde` continuera de la refuser. Le dire ici evite de faire
+            # certifier a l'utilisateur quelque chose qu'il n'a pas fait.
+            console.ecrire("\n  C'est une ESQUISSE, tiree d'une trace : "
+                           "personne n'a vu cet")
+            console.ecrire("  ecran. La promouvoir la rend disponible pour "
+                           "REDIGER une")
+            console.ecrire("  pipeline, rien de plus — une garde d'identite "
+                           "la refusera")
+            console.ecrire("  toujours. Tu certifies avoir lu le FICHIER, pas "
+                           "l'ecran.")
         console.ecrire("  Pour confirmer, tape son empreinte en toutes "
                        "lettres.")
         if not confirmer(console, choisie.empreinte):
