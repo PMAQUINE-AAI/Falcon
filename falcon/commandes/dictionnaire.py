@@ -76,6 +76,53 @@ COLONNES = (
 #: dynpro n'est plus recadrable — Excel y voit du texte.
 SEPARATEUR_ECRAN = "::"
 
+#: Les colonnes NUES, que le tableur retyperait, et leur parade.
+#:
+#: Le commentaire ci-dessus decrit exactement le probleme — « une colonne
+#: `dynpro` seule est nue : Excel y recadre 0100 en 100 » — et la colonne
+#: etait livree nue trois lignes plus bas. `empreinte` est pire encore, et
+#: n'avait pas eu ce soin du tout : c'est un prefixe de `sha256` sur seize
+#: caracteres hexadecimaux, ecrit dans une colonne qu'Excel type comme un
+#: nombre. Mesure sur 400 000 empreintes reelles :
+#:
+#:      203 entierement numeriques   (0,051 %)  4694198984395866 -> 4,694199E+15
+#:      284 en notation scientifique (0,071 %)  86e5014965866131 -> INF
+#:      ---
+#:      1 empreinte sur 821 silencieusement corrompue
+#:
+#: `86e5014965866131` est un prefixe de sha256 parfaitement ordinaire. Sur un
+#: catalogue de quelques milliers de variantes, c'est plusieurs lignes
+#: detruites a chaque export — et l'empreinte est la SEULE colonne qui
+#: distingue deux variantes d'un meme triplet.
+#:
+#: Les crochets sont la meme parade que le jeton `::`, sous une autre forme :
+#: une cellule qui contient `[` et `]` n'est jamais un nombre pour Excel, et
+#: elle survit a la saisie, a l'enregistrement et au copier-coller quel que
+#: soit le format de la colonne. C'est aussi la convention que le
+#: convertisseur attend pour les valeurs, donc rien de nouveau a apprendre.
+ENCADREES = ("dynpro", "empreinte")
+
+#: Caracteres qui font d'une cellule une FORMULE pour un tableur.
+#:
+#: Les libelles SAP commencant par `-` sont frequents, et `texte` est la
+#: colonne dont on dit qu'elle porte « le seul nom qu'un humain reconnait ».
+#: Affichee comme le resultat d'un calcul, elle fait choisir le mauvais champ
+#: — le defaut de ce projet, applique au choix du champ plutot qu'a sa valeur.
+FORMULE = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _pour_tableur(valeur: str) -> str:
+    """Neutralise une cellule qu'un tableur evaluerait au lieu de l'afficher.
+
+    L'apostrophe de tete est la convention des tableurs pour « ceci est du
+    texte » ; elle ne s'affiche pas et disparait a la copie. Elle reste
+    visible d'un lecteur qui ouvre le CSV en brut, ce qui est assume : ces
+    colonnes sont faites pour etre LUES dans un tableur, et aucune n'est
+    relue par FALCON — celles qu'on recopie sont `ecran` et `cible`, qui ne
+    commencent ni par `=` ni par `-`.
+    """
+    return f"'{valeur}" if valeur.startswith(FORMULE) else valeur
+
 #: Ce qu'ecrit une console Windows francaise, et ce que lit Excel sans rien
 #: demander. Le BOM n'est pas decoratif : sans lui, Excel lit en ANSI.
 DIALECTE_TABLEUR = Dialecte(
@@ -119,6 +166,13 @@ def lignes_de(variante: Variante) -> Iterator[dict[str, str]]:
         }
 
 
+def _protegee(ligne: dict[str, str]) -> dict[str, str]:
+    """Une ligne prete pour un tableur : rien qu'Excel puisse retyper."""
+    return {colonne: (f"[{valeur}]" if colonne in ENCADREES and valeur
+                      else _pour_tableur(valeur))
+            for colonne, valeur in ligne.items()}
+
+
 def recenser(depot: Depot) -> list[dict[str, str]]:
     """Tout le depot, a plat. Ordre stable : triplet, puis empreinte."""
     lignes: list[dict[str, str]] = []
@@ -143,7 +197,7 @@ def rendre(lignes: Iterable[dict[str, str]],
         lineterminator=dialecte.fin_de_ligne, extrasaction="raise")
     redacteur.writeheader()
     for ligne in lignes:
-        redacteur.writerow(ligne)
+        redacteur.writerow(_protegee(ligne))
 
     brut = tampon.getvalue().encode(dialecte.encodage)
     return (b"\xef\xbb\xbf" + brut) if dialecte.bom else brut

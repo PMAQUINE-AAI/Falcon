@@ -257,3 +257,67 @@ class TestLaCommande(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSurvieDansUnTableur(unittest.TestCase):
+    """Les colonnes qu'Excel retypait, et le libelle qu'il evaluait.
+
+    Le commentaire de `SEPARATEUR_ECRAN` decrit le probleme depuis toujours —
+    « une colonne `dynpro` seule est nue : Excel y recadre 0100 en 100 » — et
+    la colonne etait livree nue trois lignes plus bas.
+    """
+
+    def _ligne(self, **champs) -> dict[str, str]:
+        depart = {c: "" for c in COLONNES}
+        depart.update(champs)
+        return depart
+
+    def _relire(self, ligne):
+        texte = rendre([ligne]).decode("utf-8-sig")
+        return next(csv.DictReader(io.StringIO(texte), delimiter=";"))
+
+    def test_l_empreinte_ne_peut_pas_devenir_un_nombre(self):
+        """1 empreinte sur 821 est detruite sans cette protection.
+
+        Mesure sur 400 000 empreintes reelles : 203 entierement numeriques
+        (4694198984395866 -> 4,694199E+15) et 284 en notation scientifique
+        (86e5014965866131 -> INF). C'est la SEULE colonne qui distingue deux
+        variantes d'un meme triplet.
+        """
+        for empreinte in ("4694198984395866", "86e5014965866131"):
+            with self.subTest(empreinte=empreinte):
+                relue = self._relire(self._ligne(empreinte=empreinte))
+                self.assertEqual(relue["empreinte"], f"[{empreinte}]")
+
+    def test_le_dynpro_seul_ne_peut_pas_etre_recadre(self):
+        """« 0100 » n'est pas « 100 »."""
+        relue = self._relire(self._ligne(dynpro="0100"))
+        self.assertEqual(relue["dynpro"], "[0100]")
+
+    def test_un_libelle_qui_commence_par_un_signe_reste_un_libelle(self):
+        """Les libelles SAP commencant par `-` sont frequents, et `texte` est
+        la colonne dont on dit qu'elle porte « le seul nom qu'un humain
+        reconnait ». Affichee comme un calcul, elle fait choisir le mauvais
+        champ."""
+        for brut in ("-Ne pas saisir", "=1+1", "+41", "@ligne"):
+            with self.subTest(texte=brut):
+                relue = self._relire(self._ligne(texte=brut))
+                self.assertEqual(relue["texte"], f"'{brut}")
+
+    def test_un_libelle_ordinaire_n_est_pas_touche(self):
+        relue = self._relire(self._ligne(texte="Division", nom="WERKS-LOW"))
+        self.assertEqual(relue["texte"], "Division")
+        self.assertEqual(relue["nom"], "WERKS-LOW")
+
+    def test_les_colonnes_qu_on_COPIE_restent_collables_telles_quelles(self):
+        """`ecran` et `cible` sont celles qu'on recopie dans le classeur : ni
+        crochets ajoutes, ni apostrophe."""
+        relue = self._relire(self._ligne(ecran="IA08::RIPLKO10::0100",
+                                         cible="wnd[0]/usr/ctxtWERKS-LOW"))
+        self.assertEqual(relue["ecran"], "IA08::RIPLKO10::0100")
+        self.assertEqual(relue["cible"], "wnd[0]/usr/ctxtWERKS-LOW")
+
+    def test_une_colonne_encadree_VIDE_le_reste(self):
+        """« [] » se lirait comme une valeur ; le vide doit rester vide."""
+        self.assertEqual(self._relire(self._ligne())["empreinte"], "")
+
