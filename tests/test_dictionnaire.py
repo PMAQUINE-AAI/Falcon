@@ -41,14 +41,18 @@ def _ecran() -> Ecran:
         titre="Gammes de maintenance : selection",
         champs=(
             Champ(id="wnd[0]/usr/ctxtWERKS-LOW", type="GuiCTextField",
-                  nom="WERKS-LOW", texte="Division",
+                  nom="WERKS-LOW", texte="Division", modifiable=True,
                   infobulle="Division (WERKS)"),
             Champ(id="wnd[0]/usr/chkDY_MAB", type="GuiCheckBox",
-                  nom="DY_MAB", texte="Gammes equipement"),
+                  nom="DY_MAB", texte="Gammes equipement", modifiable=True),
             Champ(id="wnd[0]/tbar[1]/btn[8]", type="GuiButton",
-                  texte="Executer", infobulle="Executer (F8)"),
+                  texte="Executer", modifiable=True,
+                  infobulle="Executer (F8)"),
             Champ(id="wnd[0]/usr/txtCREE", type="GuiTextField",
                   texte="Cree par", modifiable=False),
+            # Sans `modifiable` : c'est ce qu'une esquisse produit, et le
+            # dictionnaire doit le dire plutot que de repondre « oui ».
+            Champ(id="wnd[0]/usr/txtINCONNU", type=""),
         ))
 
 
@@ -78,12 +82,24 @@ class TestCeQuiRendLeSelecteurIntelligent(Base):
         self.assertEqual(par_id["wnd[0]/usr/ctxtWERKS-LOW"]["modifiable"], "oui")
         self.assertEqual(par_id["wnd[0]/usr/txtCREE"]["modifiable"], "non")
 
+    def test_un_champ_non_observe_ne_dit_ni_oui_ni_non(self):
+        """Le troisieme etat, et c'est celui qui manquait.
+
+        `Champ.modifiable` valait `True` par defaut : un champ d'esquisse —
+        conjecture depuis une trace, donc jamais observe — sortait
+        « modifiable : oui », et un selecteur l'aurait offert pour un `set`.
+        Le tri-etat le rend visible ; le repasser a `True` par defaut fait
+        tomber ce test.
+        """
+        par_id = self._par_id()
+        self.assertEqual(par_id["wnd[0]/usr/txtINCONNU"]["modifiable"], "?")
+
     def test_oui_et_non_plutot_que_VRAI_et_FAUX(self):
         """`VRAI`/`FAUX` d'Excel est localise : il ne se relit pas d'une locale
-        a l'autre. « oui »/« non » traverse."""
+        a l'autre. « oui »/« non »/« ? » traverse."""
         for ligne in self._lignes():
             with self.subTest(champ=ligne["cible"]):
-                self.assertIn(ligne["modifiable"], ("oui", "non"))
+                self.assertIn(ligne["modifiable"], ("oui", "non", "?"))
 
     def test_le_type_distingue_un_bouton_d_une_case_d_un_champ(self):
         """C'est ce qui permet de n'offrir que les boutons pour un `press` et
@@ -217,7 +233,7 @@ class TestExport(Base):
         self.assertEqual(chemin, cible)
         texte = cible.read_bytes().decode("utf-8-sig")
         lignes = list(csv.DictReader(io.StringIO(texte), delimiter=";"))
-        self.assertEqual(len(lignes), 4)
+        self.assertEqual(len(lignes), 5)
 
     def test_l_ordre_est_stable_d_un_export_a_l_autre(self):
         """Un dictionnaire qui change d'ordre a chaque export est indiffable,

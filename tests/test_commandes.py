@@ -190,9 +190,23 @@ class TestLigneDeCommande(unittest.TestCase):
         durable.
         """
         aide = analyseur().format_help()
-        self.assertIn("Une seule commande peut ecrire dans SAP", aide)
+        self.assertIn("Une seule commande peut ECRIRE dans SAP", aide)
         self.assertIn("console", aide)
         self.assertNotIn("aucune n'ecrit dans SAP", aide)
+
+    def test_l_aide_distingue_ECRIRE_de_AGIR(self):
+        """Le meme defaut, une seconde fois, et sur la commande qui compte.
+
+        `explorer` n'ecrit aucune donnee — toute sauvegarde est refusee par le
+        dry-run — mais elle navigue, presse des boutons et lance des
+        selections. Une aide qui la rangerait avec les commandes « en lecture
+        seule » laisserait quelqu'un la lancer sur la production en croyant
+        qu'elle ne peut rien faire.
+        """
+        aide = analyseur().format_help()
+        self.assertIn("explorer", aide)
+        self.assertIn("AGIT", aide)
+        self.assertNotIn("Toutes les autres sont en lecture seule", aide)
 
     def test_inventaire_marche_sans_sap(self):
         """Le sous-module SAP n'est importe que par `diagnostiquer` : une

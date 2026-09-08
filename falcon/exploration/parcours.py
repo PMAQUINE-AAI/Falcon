@@ -216,6 +216,19 @@ class Exploration:
     #: sautes bien avant, la branche tombant sur une sauvegarde.
     ordres_sautes: tuple[int, ...] = ()
 
+    #: Les ORDRES des gestes ou le parcours est effectivement PASSE — rejoues,
+    #: ecartes comme confort, consommes par une reprise, ou porteurs d'une
+    #: branche. Le complement de `ordres_sautes` et de la queue non exploree.
+    #:
+    #: C'est ce qui permet au rapport de dire quelle VISITE de la trace a ete
+    #: atteinte. Le rapprochement se fait par POSITION et jamais par clef :
+    #: l'empreinte d'une esquisse porte sur les identifiants TOUCHES, celle
+    #: d'un releve sur les identifiants PRESENTS, et les deux ne peuvent pas
+    #: coincider (`trace/esquisse.py`). Une difference d'ensembles sur les
+    #: `ClefVariante` annoncerait « 35 conjecturees, 0 relevee, 35 restantes »
+    #: sur une cartographie parfaitement reussie.
+    ordres_atteints: tuple[int, ...] = ()
+
     gestes_lus: int = 0
     gestes_rejoues: int = 0
     gestes_confort: int = 0
@@ -269,6 +282,7 @@ class Previsualisation:
     confort: int = 0
     sauvegardes: tuple[int, ...] = ()       # ordres refuses par le dry-run
     sans_couture: tuple[int, ...] = ()      # ordres des gestes d'arbre
+    verbes_inconnus: tuple[int, ...] = ()   # ordres des verbes hors de la table
     sans_reprise: tuple[int, ...] = ()      # ordres des codes de session
     codes: tuple[str, ...] = ()             # transactions nommees, dans l'ordre
 
@@ -318,6 +332,7 @@ def previsualiser(trace: Trace) -> Previsualisation:
     confort = 0
     ordres_sauvegarde: list[int] = []
     sans_couture: list[int] = []
+    inconnus: list[int] = []
     sans_reprise: list[int] = []
     codes: list[str] = []
 
@@ -334,12 +349,20 @@ def previsualiser(trace: Trace) -> Previsualisation:
         traduction = traduire(geste)
         if traduction.genre == ECARTE_CONFORT:
             confort += 1
-        elif traduction.genre != TRADUIT:
+        elif traduction.genre == GENRE_SANS_COUTURE:
             sans_couture.append(geste.ordre)
+        elif traduction.genre != TRADUIT:
+            # `verbe inconnu` et `argument refuse` ne sont PAS « sans
+            # couture » : le premier se corrige en relisant la trace, le
+            # second en la relisant aussi — pas en elargissant la couture.
+            # Les confondre annoncerait « geste d'arbre » d'un verbe que le
+            # recorder n'a jamais ecrit, ce qui est une affirmation fausse.
+            inconnus.append(geste.ordre)
 
     return Previsualisation(
         gestes=len(trace.gestes), confort=confort,
         sauvegardes=tuple(ordres_sauvegarde), sans_couture=tuple(sans_couture),
+        verbes_inconnus=tuple(inconnus),
         sans_reprise=tuple(sans_reprise), codes=tuple(codes))
 
 
@@ -464,6 +487,7 @@ class _Parcours:
         self.deja_connues: list[ClefVariante] = []
         self.branches: list[Branche] = []
         self.ordres_sautes: list[int] = []
+        self.ordres_atteints: list[int] = []
         self.reprises: list[Reprise] = []
         self.sauvegardes: list[SauvegardeRefusee] = []
         self.dumps: list[str] = []
@@ -703,6 +727,7 @@ def explorer(trace: Trace,
         validations_consommees=parcours.validations,
         gestes_sautes=parcours.sautes,
         ordres_sautes=tuple(parcours.ordres_sautes),
+        ordres_atteints=tuple(parcours.ordres_atteints),
         gestes_non_explores=non_explores,
         actions_envoyees=parcours.actions,
         releves=parcours.releves,
@@ -733,6 +758,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         if p.validation_consommee == index:
             p.validation_consommee = None
             p.validations += 1
+            p.ordres_atteints.append(geste.ordre)
             index += 1
             continue
 
@@ -762,6 +788,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         traduction = traduire(geste)
         if traduction.genre == ECARTE_CONFORT:
             p.confort += 1
+            p.ordres_atteints.append(geste.ordre)
             index += 1
             continue
 
@@ -837,6 +864,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             continue
 
         p.rejoues += 1
+        p.ordres_atteints.append(geste.ordre)
         if not p.relever():
             return PLAFOND, _plafond_ecrans(p, index + 1), index + 1
         index += 1
@@ -867,6 +895,7 @@ def _tenter_reprise(p: _Parcours, index: int) -> int | None:
         return None
 
     p.gestes_de_reprise += 1
+    p.ordres_atteints.append(geste.ordre)
     p.reprises.append(reprise)
     if not reprise.acceptee:
         p.branches.append(_branche(
@@ -888,6 +917,7 @@ def _tenter_reprise(p: _Parcours, index: int) -> int | None:
 def _abandonner(p: _Parcours, geste: Geste, categorie: str, motif: str,
                 index: int, *, entree: str = "", dump: str = "") -> int:
     """Note la branche et rend l'index de reprise, ou -1."""
+    p.ordres_atteints.append(geste.ordre)
     p.branches.append(_branche(geste, categorie, motif, entree=entree,
                                dump=dump))
     return _sauter_vers_reprise(p, index + 1)

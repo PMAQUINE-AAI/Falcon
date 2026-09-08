@@ -162,8 +162,11 @@ class Depot:
     def _variante(triplet: tuple[str, str, str], marque: str,
                   brute: dict) -> Variante:
         champs = tuple(
+            # `modifiable` absent du fichier veut dire « pas observe », donc
+            # `None` — et non `True`, qui aurait reintroduit l'affirmation que
+            # le tri-etat de `Champ` retire.
             Champ(**{attribut: brut.get(attribut, "" if attribut != "modifiable"
-                                        else True)
+                                        else None)
                      for attribut in ATTRIBUTS})
             for brut in brute.get("champs", []))
         return Variante(

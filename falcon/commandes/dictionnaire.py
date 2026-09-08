@@ -156,7 +156,12 @@ def lignes_de(variante: Variante) -> Iterator[dict[str, str]]:
             # utilisateur francais filtre dans un tableur, et ca evite le
             # VRAI/FAUX localise d'Excel, qui ne se relit pas d'une locale a
             # l'autre.
-            "modifiable": "oui" if champ.modifiable else "non",
+            # Trois valeurs, parce qu'il y a trois etats. « ? » est ce que
+            # porte un champ d'ESQUISSE : personne n'a vu l'ecran, et repondre
+            # « oui » offrirait au selecteur un champ pour un `set` sur la foi
+            # d'un defaut de dataclass.
+            "modifiable": {True: "oui", False: "non"}.get(champ.modifiable,
+                                                          "?"),
             "infobulle": champ.infobulle,
             # Une esquisse vient d'une trace : elle porte les champs TOUCHES,
             # pas les champs presents, et son `type` est vide. Un selecteur

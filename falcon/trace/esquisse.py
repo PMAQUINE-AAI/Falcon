@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Iterable
 
 from falcon.catalogue import ESQUISSE, ClefVariante, Variante
 from falcon.noyau import SUFFIXE_CHAMP_DE_COMMANDE, Champ, empreinte
@@ -205,7 +206,8 @@ def esquisses(trace: Trace, *, capture_le: str = "") -> tuple[Variante, ...]:
     return tuple(retenues.values())
 
 
-def deposer(trace: Trace, depot, *, capture_le: str = ""
+def deposer(trace: Trace, depot, *, capture_le: str = "",
+            seulement: Iterable[int] | None = None
             ) -> tuple[ClefVariante, ...]:
     """Verse les esquisses d'une trace **en quarantaine**.
 
@@ -214,9 +216,30 @@ def deposer(trace: Trace, depot, *, capture_le: str = ""
     valide. Meme promue, elle reste une esquisse — `pour_garde` continue de la
     refuser, et c'est voulu : la promotion dit « j'ai vu le fichier », pas
     « j'ai vu l'ecran ».
+
+    `seulement` restreint aux visites dont l'ORDRE figure dans la collection —
+    c'est-a-dire, en pratique, a celles qu'une exploration n'a pas atteintes.
+    Verser les 35 esquisses de la trace de reference apres une cartographie
+    reussie mettrait cote a cote, dans la meme quarantaine, l'esquisse
+    conjecturee et le releve reel du meme ecran. La quarantaine est ce qu'un
+    humain relit une entree a la fois : y poser des doublons dont l'un est
+    faux par construction, c'est faire relire du bruit. Une liste de courses
+    dit ce qui MANQUE, pas l'inventaire.
+
+    Le filtre porte sur l'ordre de la VISITE et non sur la clef : deux visites
+    distinctes peuvent produire la meme esquisse, et le dedoublonnage garde la
+    premiere — donc l'appelant doit pouvoir designer une visite, pas une clef.
     """
-    clefs = []
-    for esquisse in esquisses(trace, capture_le=capture_le):
+    retenus = None if seulement is None else set(seulement)
+    clefs: list[ClefVariante] = []
+    vues: set[ClefVariante] = set()
+    for visite in visites(trace):
+        if retenus is not None and visite.ordre not in retenus:
+            continue
+        esquisse = esquisse_de(visite, capture_le=capture_le)
+        if esquisse is None or esquisse.clef in vues:
+            continue
+        vues.add(esquisse.clef)
         depot.mettre_en_quarantaine(esquisse)
         clefs.append(esquisse.clef)
     return tuple(clefs)

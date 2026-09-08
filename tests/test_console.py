@@ -35,6 +35,7 @@ from falcon.couture.double import DriverScripte
 from falcon.noyau import Champ, Ecran, Identite, SapIndisponible, Statut
 
 from tests.test_gardes import MUTATIONS
+from tests.test_trace import MEGATRACE
 
 RACINE = Path(__file__).resolve().parent.parent
 IA08 = Identite(transaction="IA08", programme="RIPLKO10", dynpro="1000")
@@ -81,19 +82,40 @@ def _menus(menu: Menu) -> list[Menu]:
 #: Ce qu'un ecran qui ecrit dans SAP doit annoncer dans son detail.
 MARQUE_ECRITURE = "ECRIT DANS SAP"
 
+#: Ce qu'un ecran qui AGIT dans SAP sans y ecrire doit annoncer.
+#:
+#: La distinction n'est pas cosmetique. La cartographie ne pose aucune
+#: sauvegarde — le dry-run les refuse toutes — mais elle navigue, presse des
+#: boutons et lance des selections. Un ecran qui la rangerait avec les
+#: diagnostics laisserait quelqu'un la declencher sur la production en croyant
+#: qu'elle ne peut rien faire.
+MARQUE_ACTION = "AGIT DANS SAP"
+
 #: Formules par lesquelles un preambule affirme qu'on ne risque rien.
-PROMESSES_D_INNOCUITE = ("n'ecrit dans SAP", "ne touche a SAP", "Lecture seule")
+PROMESSES_D_INNOCUITE = ("n'ecrit dans SAP", "ne touche a SAP",
+                         "lecture seule", "Lecture seule", "LECTURE SEULE",
+                         "rien d'ici ne peut ecrire")
+
+
+def _porte(menu: Menu, marque: str) -> bool:
+    """Ce menu mene-t-il, directement ou non, a un ecran qui porte `marque` ?"""
+    for entree in menu.entrees:
+        if isinstance(entree.cible, Menu):
+            if _porte(entree.cible, marque):
+                return True
+        elif marque in entree.detail:
+            return True
+    return False
 
 
 def _ecrit(menu: Menu) -> bool:
     """Ce menu mene-t-il, directement ou non, a un ecran qui ecrit ?"""
-    for entree in menu.entrees:
-        if isinstance(entree.cible, Menu):
-            if _ecrit(entree.cible):
-                return True
-        elif MARQUE_ECRITURE in entree.detail:
-            return True
-    return False
+    return _porte(menu, MARQUE_ECRITURE)
+
+
+def _agit(menu: Menu) -> bool:
+    """Ce menu mene-t-il a un ecran qui AGIT dans SAP sans y ecrire ?"""
+    return _porte(menu, MARQUE_ACTION)
 
 
 def vers(menu: Menu, *libelles: str) -> list[str]:
@@ -368,6 +390,51 @@ class TestAffichage(unittest.TestCase):
                         promesse, menu.preambule,
                         f"« {menu.titre} » mene a un ecran qui ecrit dans SAP "
                         f"et promet le contraire")
+
+    def test_aucun_menu_qui_AGIT_ne_se_dit_inoffensif(self):
+        """Le meme accord, pour la distinction qui manquait.
+
+        « Aucune entree d'ici ne peut ecrire dans SAP » etait vrai de la
+        branche « session SAP » — et le serait reste apres l'arrivee de la
+        cartographie, qui n'ecrit rien. Elle AGIT pourtant : elle rejoue une
+        trace, donc elle navigue et presse des boutons. La promesse aurait
+        couvert exactement ce qu'elle ne couvre pas.
+        """
+        for menu in _menus(racine()):
+            if not _agit(menu):
+                continue
+            for promesse in PROMESSES_D_INNOCUITE:
+                with self.subTest(menu=menu.titre, promesse=promesse):
+                    self.assertNotIn(
+                        promesse, menu.preambule,
+                        f"« {menu.titre} » mene a un ecran qui AGIT dans SAP "
+                        f"et promet le contraire")
+                    self.assertNotIn(promesse, menu.titre)
+
+    def test_un_menu_qui_AGIT_le_dit_dans_son_preambule(self):
+        for menu in _menus(racine()):
+            if _agit(menu):
+                with self.subTest(menu=menu.titre):
+                    self.assertIn(MARQUE_ACTION, menu.preambule)
+
+    def test_aucune_ENTREE_ne_promet_l_innocuite_de_ce_qu_elle_ouvre(self):
+        """Le preambule n'est pas le seul texte rassurant possible.
+
+        Le detail de « 8 > Session SAP » disait « en lecture seule ». Il etait
+        vrai, et il a cesse de l'etre le jour ou la cartographie est arrivee
+        sous cette branche — sans qu'aucun test ne le voie, parce que tous
+        regardaient les preambules. C'est litteralement le meme defaut que
+        celui contre lequel ce fichier a ete ecrit, une couche plus bas.
+        """
+        for menu in _menus(racine()):
+            for entree in menu.entrees:
+                if not isinstance(entree.cible, Menu):
+                    continue
+                if not (_ecrit(entree.cible) or _agit(entree.cible)):
+                    continue
+                for promesse in PROMESSES_D_INNOCUITE:
+                    with self.subTest(entree=entree.libelle, promesse=promesse):
+                        self.assertNotIn(promesse, entree.detail)
 
     def test_un_menu_qui_ecrit_le_dit_dans_son_preambule(self):
         """L'accord dans l'autre sens : ne pas mentir ne suffit pas, il faut
@@ -1870,3 +1937,129 @@ class TestExecution(unittest.TestCase):
                         noeud.func.attr, MUTATIONS,
                         f"{module}:{noeud.lineno} appelle {noeud.func.attr!r} "
                         f"— une methode mutante de la couture")
+
+
+class TestCartographie(unittest.TestCase):
+    """« 8 > Cartographier une trace » — la seule entree qui AGIT sans ecrire.
+
+    Contre un SAP de papier : ces tests etablissent l'enchainement de la
+    console, jamais la reponse d'un vrai systeme.
+    """
+
+    def setUp(self):
+        from tests.test_exploration_parcours import SapDePapier
+        self.sap = SapDePapier()
+        self.sap.refusees = {"IW2ç"}
+        self.bac = tempfile.TemporaryDirectory()
+        self.arbre = racine(Environnement(connecter=lambda: self.sap))
+
+    def tearDown(self):
+        self.bac.cleanup()
+
+    def _session(self, *saisies: str) -> Journal:
+        journal = Journal(*vers(self.arbre, "Session SAP", "Cartographier"),
+                          *saisies, "", "0", "0")
+        parcourir(self.arbre, journal.console())
+        return journal
+
+    def test_le_parcours_complet_verse_des_ecrans(self):
+        journal = self._session(str(MEGATRACE), self.bac.name, "500", "500",
+                                "megatrace_2026-09.vbs")
+        quarantaine = Path(self.bac.name) / "quarantaine"
+        fichiers = sorted(p.name for p in quarantaine.glob("*.yaml"))
+        self.assertIn("cartographie de", journal.texte)
+        self.assertTrue(fichiers)
+        # Un releve porte son triplet ; une esquisse porte des `?`, remplaces
+        # par des `_` dans le nom de fichier. Ils se distinguent a l'oeil.
+        self.assertTrue([f for f in fichiers if "SAPL" in f])
+        self.assertTrue([f for f in fichiers if "______" in f])
+
+    def test_sans_confirmation_rien_n_est_tente(self):
+        """Le nom du fichier de trace, en toutes lettres. Pas un `o/n`."""
+        journal = self._session(str(MEGATRACE), self.bac.name, "500", "500",
+                                "oui")
+        self.assertIn("Annule", journal.texte)
+        self.assertEqual(self.sap.gestes, [])
+        self.assertFalse((Path(self.bac.name) / "quarantaine").exists())
+
+    def test_l_apercu_precede_la_confirmation(self):
+        """On ne peut pas taper le nom sans avoir vu ce que la trace contient.
+
+        C'est tout l'interet d'une confirmation en toutes lettres : le mot
+        attendu ne se trouve que dans le recapitulatif.
+        """
+        journal = Journal(*vers(self.arbre, "Session SAP", "Cartographier"),
+                          str(MEGATRACE), self.bac.name, "500", "500",
+                          "non", "", "0", "0")
+        # Les invites et les lignes ecrites sont deux flux distincts : pour
+        # etablir l'ORDRE entre elles, on note ce qui avait deja ete ecrit au
+        # moment de chaque invite.
+        deja_ecrit: list[tuple[str, str]] = []
+        console = journal.console()
+        lire_reel = console.lire
+        console = Console(
+            lire=lambda invite: (deja_ecrit.append((invite, journal.texte))
+                                 or lire_reel(invite)),
+            ecrire=console.ecrire)
+        parcourir(self.arbre, console)
+
+        confirmations = [texte for invite, texte in deja_ecrit
+                         if "nom attendu" in invite]
+        self.assertEqual(len(confirmations), 1,
+                         "la confirmation doit etre demandee une fois")
+        self.assertIn("geste(s) de SAUVEGARDE", confirmations[0])
+        self.assertIn("mandant de qualite", confirmations[0])
+
+    def test_un_plafond_nul_ou_absurde_est_refuse_avant_la_connexion(self):
+        """Un plafond nul donnerait une exploration qui semble passer sans
+        rien voir — et le §5.5 fait du rayon d'action une obligation."""
+        for plafond in ("0", "", "beaucoup", "-3"):
+            with self.subTest(plafond):
+                journal = self._session(str(MEGATRACE), self.bac.name, plafond,
+                                        "500", "megatrace_2026-09.vbs")
+                self.assertEqual(self.sap.gestes, [])
+                self.assertNotIn("cartographie de", journal.texte)
+
+    def test_une_trace_illisible_renvoie_vers_l_inventaire(self):
+        """`lire` est stricte sur la SYNTAXE, pas sur le vocabulaire.
+
+        Premiere redaction de ce test : `.wiggle 3`. Elle passait — un verbe
+        inconnu se LIT parfaitement, il est seulement signale comme inconnu.
+        Ce qui refuse une trace, c'est une ligne qui ne s'apparie a aucune des
+        trois formes du recorder.
+        """
+        illisible = Path(self.bac.name) / "cassee.vbs"
+        illisible.write_text('session.findById("wnd[0]" press oups\r\n',
+                             encoding="utf-8")
+        journal = self._session(str(illisible), self.bac.name)
+        self.assertIn("TraceInvalide", journal.texte)
+        self.assertIn("Inventaire", journal.texte)
+        self.assertEqual(self.sap.gestes, [])
+
+    def test_la_cartographie_passe_par_confirmer(self):
+        """Garde-fou AST, a l'image de celui de `promouvoir`.
+
+        Une confirmation ecrite a la main dans cette fonction divergerait de
+        celle de l'execution des la premiere retouche. Retirer l'appel a
+        `confirmer` fait tomber ce test.
+        """
+        confirmees = []
+        for module, arbre in _arbres():
+            for fonction in ast.walk(arbre):
+                if not isinstance(fonction, (ast.FunctionDef,
+                                             ast.AsyncFunctionDef)):
+                    continue
+                appels = [n for n in ast.walk(fonction)
+                          if isinstance(n, ast.Call)]
+                if not any(getattr(a.func, "id", None) == "cartographier"
+                           for a in appels):
+                    continue
+                confirmees.append(f"{module}:{fonction.name}")
+                self.assertTrue(
+                    any(getattr(a.func, "id", None) == "confirmer"
+                        for a in appels),
+                    f"{module}:{fonction.name} lance une cartographie sans "
+                    f"passer par `confirmer` : elle partirait d'une touche")
+        self.assertTrue(confirmees,
+                        "aucune cartographie dans la console : l'entree "
+                        "annoncee au menu n'existerait nulle part")

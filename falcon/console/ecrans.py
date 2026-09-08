@@ -642,7 +642,9 @@ def _recapituler(console: Console, pipeline, items, jeu: Path,
         console.ecrire("    derogations           aucune")
 
 
-def confirmer(console: Console, attendu: str) -> bool:
+def confirmer(console: Console, attendu: str, *,
+              annonce: str = "Ceci va ECRIRE dans SAP.",
+              quoi: str = "le nom de la pipeline") -> bool:
     """Confirmation en TOUTES LETTRES. Rend True seulement sur le mot exact.
 
     Pas un `o/n`. Un `o/n` se tape sans lire — c'est un reflexe, et un reflexe
@@ -651,12 +653,17 @@ def confirmer(console: Console, attendu: str) -> bool:
     sans avoir vu au passage les plafonds, le nombre d'items et les
     derogations.
 
+    `annonce` et `quoi` sont des PARAMETRES parce que la cartographie confirme
+    autre chose — elle n'ecrit rien mais elle AGIT, et le mot attendu y est le
+    nom du fichier de trace. Recopier cette fonction pour en changer la
+    premiere phrase donnerait deux confirmations qui divergeraient, et c'est
+    la confirmation qui protege ici.
+
     Toute autre saisie renonce — y compris une saisie vide, une fin de flux ou
-    un Ctrl-C. Le defaut est de NE PAS ecrire dans un ERP.
+    un Ctrl-C. Le defaut est de NE RIEN faire dans un ERP.
     """
     console.ecrire()
-    console.ecrire("  Ceci va ECRIRE dans SAP. Pour confirmer, tape le nom de "
-                   "la pipeline")
+    console.ecrire(f"  {annonce} Pour confirmer, tape {quoi}")
     console.ecrire("  en toutes lettres. Toute autre reponse annule.")
     try:
         saisie = console.lire(f"\n  nom attendu « {attendu} » : ").strip()
@@ -664,7 +671,7 @@ def confirmer(console: Console, attendu: str) -> bool:
         saisie = ""
     if saisie == attendu:
         return True
-    console.ecrire("\n  Annule. Rien n'a ete ecrit.")
+    console.ecrire("\n  Annule. Rien n'a ete fait.")
     return False
 
 
@@ -1885,12 +1892,25 @@ def ecran_sap(env: Environnement) -> Menu:
             return CONTINUER
         return _diagnostiquer(console, dossier)
 
+    def cartographier(console: Console) -> str:
+        return _cartographier(console, env)
+
     return Menu(
-        titre="FALCON — session SAP (LECTURE SEULE)",
+        titre="FALCON — session SAP",
         preambule=(
             "Se greffe sur une session que vous avez ouverte et sur laquelle\n"
             "vous vous etes authentifie vous-meme. Aucun mot de passe ne\n"
-            "transite par FALCON, et rien d'ici ne peut ecrire dans SAP.\n"
+            "transite par FALCON.\n"
+            "\n"
+            "AUCUNE entree d'ici n'ecrit de donnee dans SAP. Les deux\n"
+            "premieres ne font que REGARDER. La troisieme AGIT DANS SAP :\n"
+            "elle rejoue une trace, donc elle navigue, presse des boutons et\n"
+            "lance des selections qui peuvent tourner longtemps. Elle demande\n"
+            "le nom du fichier de trace en toutes lettres avant de partir.\n"
+            "\n"
+            "Aucune sauvegarde ne peut partir d'ici : la cartographie tourne\n"
+            "en dry-run, plafond de sauvegardes a zero. « Sans effet » serait\n"
+            "autre chose, et personne ne l'a mesure sur un systeme reel.\n"
             "\n"
             "Exige Windows, pywin32, et le scripting autorise des deux cotes."),
         entrees=(
@@ -1898,7 +1918,104 @@ def ecran_sap(env: Environnement) -> Menu:
                    "identite, fenetres, statut, releve des champs"),
             Entree("2", "Diagnostiquer et verser en quarantaine", relever,
                    "le releve devient une capture a relire"),
+            # Le marqueur est dans le DETAIL, pas dans le libelle : c'est la
+            # regle que la console s'est donnee, et le libelle se lit trop
+            # vite. « AGIT » et non « ECRIT » : la distinction est reelle et
+            # un test verifie qu'aucun preambule ne la gomme.
+            Entree("3", "Cartographier une trace", cartographier,
+                   "AGIT DANS SAP — rejoue la trace, sans rien y ecrire"),
         ))
+
+
+def _cartographier(console: Console, env: Environnement) -> str:
+    """L'etape 2 du cycle de vie, depuis la console.
+
+    La seule entree de la console, avec l'execution, qui AGISSE dans SAP. Elle
+    n'ecrit aucune donnee — le dry-run refuse toute sauvegarde — mais elle
+    navigue. D'ou la confirmation en toutes lettres, et d'ou l'apercu AVANT :
+    on ne peut pas taper le nom du fichier sans avoir lu combien de gestes de
+    sauvegarde la trace contient.
+    """
+    from falcon.commandes.cartographie import cartographier
+    from falcon.exploration.rapport import previsualisation
+    from falcon.noyau import ErreurFalcon
+    from falcon.trace import TraceInvalide, lire
+
+    chemin = demander_chemin(console, "trace du recorder (.vbs)")
+    if chemin is None:
+        return CONTINUER
+    catalogue = demander_chemin(console, "dossier du catalogue")
+    if catalogue is None:
+        return CONTINUER
+
+    try:
+        trace = lire(chemin)
+    except TraceInvalide as erreur:
+        console.ecrire(f"\n  TraceInvalide : {erreur}")
+        console.ecrire("  Une trace a moitie comprise ne se rejoue pas. Passe "
+                       "par « 2 > Inventaire ».")
+        console.pause()
+        return CONTINUER
+
+    console.titre("Cartographier une trace")
+    console.ecrire()
+    console.ecrire(previsualisation(trace))
+
+    plafond_gestes = _demander_plafond(console, "plafond d'actions envoyees "
+                                                "a SAP")
+    if plafond_gestes is None:
+        return CONTINUER
+    plafond_ecrans = _demander_plafond(console, "plafond d'ecrans verses en "
+                                                "quarantaine")
+    if plafond_ecrans is None:
+        return CONTINUER
+
+    if not confirmer(console, chemin.name,
+                     annonce="Ceci va AGIR dans SAP (sans rien y ecrire).",
+                     quoi="le nom du fichier de trace"):
+        return CONTINUER
+
+    try:
+        driver = env.connecter()
+    except ErreurFalcon as erreur:
+        console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+        console.pause()
+        return CONTINUER
+
+    try:
+        _, _, compte_rendu = cartographier(
+            chemin, catalogue, plafond_gestes=plafond_gestes,
+            plafond_ecrans=plafond_ecrans, esquisses=True, driver=driver)
+    except ErreurFalcon as erreur:
+        console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+        console.pause()
+        return CONTINUER
+
+    console.ecrire()
+    console.ecrire(compte_rendu)
+    console.pause()
+    return CONTINUER
+
+
+def _demander_plafond(console: Console, invite: str) -> int | None:
+    """Un plafond, sans defaut et strictement positif.
+
+    Sans defaut a dessein : le §5.5 fait du rayon d'action une obligation. Un
+    defaut serait un rayon que personne n'a choisi, sur l'entree de console
+    qui agit dans SAP sans pipeline pour declarer ses bornes.
+    """
+    try:
+        saisie = console.lire(f"\n  {invite} : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not saisie.isdigit() or int(saisie) <= 0:
+        console.ecrire("\n  Un nombre entier strictement positif est attendu. "
+                       "Un plafond nul")
+        console.ecrire("  donnerait une exploration qui semble passer et n'a "
+                       "rien vu.")
+        console.pause()
+        return None
+    return int(saisie)
 
 
 # ---------------------------------------------------------------------------
@@ -2051,9 +2168,14 @@ def racine(env: Environnement | None = None) -> Menu:
         preambule=(
             "Automatisation SAP Front End.\n"
             "\n"
-            "Tout se lit sans rien changer, SAUF trois ecrans — « 3 > Executer »,\n"
-            "« 3 > Reprendre » et « 3 > Enchainer » — qui ECRIVENT DANS SAP,\n"
-            "apres confirmation en toutes lettres."),
+            "Tout se lit sans rien changer, SAUF quatre ecrans, tous derriere\n"
+            "une confirmation en toutes lettres :\n"
+            "\n"
+            "  « 3 > Executer », « 3 > Reprendre », « 3 > Enchainer »\n"
+            "        ECRIVENT DANS SAP.\n"
+            "  « 8 > Cartographier une trace »\n"
+            "        AGIT DANS SAP sans y ecrire : elle rejoue une trace, donc\n"
+            "        elle navigue et presse des boutons."),
         entrees=(
             Entree("1", "Verification et livraison", ecran_verification(env),
                    "les suites, la preuve que les gardes protegent, le bundle"),
@@ -2070,5 +2192,5 @@ def racine(env: Environnement | None = None) -> Menu:
             Entree("7", "Taxonomie des incidents", ecran_taxonomie(env),
                    "inconnus bloquants, et les entrees de registre a ecrire"),
             Entree("8", "Session SAP", ecran_sap(env),
-                   "diagnostic de l'ecran courant, en lecture seule"),
+                   "diagnostic de l'ecran courant, et CARTOGRAPHIE d'une trace"),
         ))

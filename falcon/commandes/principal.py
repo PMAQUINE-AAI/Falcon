@@ -1,8 +1,14 @@
 """La ligne de commande de FALCON.
 
-Minimale, et delibere. Aucune de ces commandes n'ecrit dans SAP : elles
-regardent un ecran, une trace, un catalogue. C'est tout ce qui a du sens tant
-qu'aucune pipeline n'a tourne sur un systeme reel.
+Minimale, et delibere. **Aucune de ces commandes n'ECRIT dans SAP**, mais deux
+d'entre elles y AGISSENT, et la nuance compte assez pour etre ecrite ici :
+
+  - `console` peut lancer une pipeline, donc ecrire, apres confirmation ;
+  - `explorer` rejoue une trace en observation. Elle n'ecrit aucune donnee —
+    toute sauvegarde est refusee par le dry-run — mais elle navigue, presse
+    des boutons et lance des selections. « Lecture seule » serait faux.
+
+Les autres regardent un ecran, une trace, un catalogue, et rien de plus.
 
 `argparse` plutot qu'une bibliotheque : la livraison est un fichier unique, et
 chaque dependance de plus est une piece a embarquer.
@@ -34,11 +40,15 @@ ERREURS_LISIBLES = (ErreurFalcon, TraceInvalide, PipelineInvalide,
 
 DESCRIPTION = """FALCON — automatisation SAP Front End.
 
-Une seule commande peut ecrire dans SAP — `console` — et seulement sur trois
+Une seule commande peut ECRIRE dans SAP — `console` — et seulement sur trois
 de ses ecrans, apres confirmation du nom de la pipeline en toutes lettres.
-Toutes les autres sont en lecture seule.
+
+`explorer` n'ecrit rien mais AGIT : elle rejoue une trace, donc elle navigue
+et presse des boutons. Elle demande, elle aussi, le nom du fichier de trace en
+toutes lettres. Toutes les autres commandes sont en lecture seule.
 
   console         menus interactifs : tests, traces, catalogue, EXECUTION
+  explorer        rejoue une trace en OBSERVATION et peuple la quarantaine
   diagnostiquer   identite de l'ecran courant et releve des champs
   inventaire      rapport de couverture d'une trace du SAP GUI Recorder
   brouillon       ebauche de pipeline depuis une trace — inachevee a dessein
@@ -156,6 +166,48 @@ def analyseur() -> argparse.ArgumentParser:
     promotion.add_argument("--empreinte", default=None,
                            help="empreinte de la capture a promouvoir ; sans "
                                 "elle, la commande se contente de lister")
+
+    exploration = sous.add_parser(
+        "explorer", help="rejoue une trace en OBSERVATION et peuple la "
+                         "quarantaine",
+        description="Etape 2 du cycle de vie : FALCON rejoue la trace, releve "
+                    "chaque ecran traverse et le verse en QUARANTAINE. "
+                    "N'ecrit AUCUNE donnee — toute sauvegarde est refusee — "
+                    "mais AGIT : elle navigue, presse des boutons et lance "
+                    "des selections qui peuvent tourner longtemps. Exige une "
+                    "session SAP ouverte, et le nom du fichier de trace en "
+                    "toutes lettres. A lancer sur un mandant de qualite avant "
+                    "la production.")
+    exploration.add_argument("trace", metavar="TRACE.vbs")
+    exploration.add_argument("--catalogue", metavar="DOSSIER", required=True,
+                             help="dossier du catalogue ; les releves vont "
+                                  "dans son sous-dossier `quarantaine`")
+    # Les deux plafonds sont REQUIS et sans defaut. Le §5.5 dit « rayon
+    # d'action obligatoire », et le chargeur de pipeline applique deja
+    # litteralement cette phrase. Un defaut serait un rayon d'action que
+    # personne n'a choisi, sur la seule commande qui agit dans SAP sans
+    # pipeline pour declarer ses bornes.
+    exploration.add_argument("--plafond-gestes", type=int, required=True,
+                             metavar="N",
+                             help="nombre maximal d'actions envoyees a SAP, "
+                                  "gestes de reprise compris (obligatoire)")
+    exploration.add_argument("--plafond-ecrans", type=int, required=True,
+                             metavar="N",
+                             help="nombre maximal d'ecrans verses en "
+                                  "quarantaine (obligatoire)")
+    exploration.add_argument("--esquisses", action="store_true",
+                             help="verse aussi, en quarantaine, les esquisses "
+                                  "des visites NON atteintes — une liste de "
+                                  "courses, pas des releves")
+    exploration.add_argument("--registre", metavar="SURCOUCHE.yaml",
+                             action="append", default=[],
+                             help="surcouche de taxonomie ; repetable")
+    exploration.add_argument("--oui-je-sais", metavar="TRACE.vbs", default="",
+                             help="nom du fichier de trace, en toutes "
+                                  "lettres ; sans lui la commande demande la "
+                                  "confirmation au terminal")
+    exploration.add_argument("--connexion", type=int, default=0)
+    exploration.add_argument("--session", type=int, default=0)
 
     return principal
 
@@ -336,10 +388,68 @@ def _brouillon(options: argparse.Namespace) -> int:
     return 0
 
 
+def _explorer(options: argparse.Namespace) -> int:
+    """Rejoue une trace en observation. La seule commande, avec `console`, qui
+    exige une session SAP ouverte — et qui AGIT dessus.
+
+    La confirmation porte sur le NOM DU FICHIER DE TRACE, en toutes lettres.
+    Un `o/n` se tape sans lire ; le nom du fichier ne peut se taper qu'apres
+    avoir vu le recapitulatif qui l'annonce, donc au passage le nombre de
+    gestes de sauvegarde que la trace contient.
+    """
+    from falcon.commandes.cartographie import INCOMPLET, TERMINE, cartographier
+    from falcon.exploration import TERMINEE
+    from falcon.exploration.rapport import previsualisation
+    from falcon.taxonomie import Registre
+    from falcon.trace import lire
+
+    chemin = Path(options.trace)
+    attendu = chemin.name
+
+    print(f"exploration de {chemin}")
+    print(previsualisation(lire(chemin)), file=sys.stderr)
+    print(f"\n  plafonds : {options.plafond_gestes} action(s), "
+          f"{options.plafond_ecrans} ecran(s)", file=sys.stderr)
+
+    if options.oui_je_sais != attendu:
+        if not sys.stdin.isatty():
+            print(f"\nConfirmation requise. Hors terminal, passer "
+                  f"`--oui-je-sais {attendu}`.", file=sys.stderr)
+            return 2
+        print("\n  Ceci va AGIR dans SAP : naviguer, presser des boutons, "
+              "lancer des", file=sys.stderr)
+        print("  selections. Aucune donnee ne sera ecrite. Pour confirmer, "
+              "tape le nom", file=sys.stderr)
+        print("  du fichier de trace en toutes lettres.", file=sys.stderr)
+        try:
+            saisie = input(f"\n  nom attendu « {attendu} » : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            saisie = ""
+        if saisie != attendu:
+            print("\n  Annule. Rien n'a ete fait.", file=sys.stderr)
+            return 2
+
+    _, exploration, compte_rendu = cartographier(
+        chemin, options.catalogue,
+        plafond_gestes=options.plafond_gestes,
+        plafond_ecrans=options.plafond_ecrans,
+        esquisses=options.esquisses,
+        registre=Registre.avec_surcouches(*options.registre),
+        connexion=options.connexion, session=options.session)
+
+    print()
+    print(compte_rendu)
+    # 0 seulement si la trace a ete parcourue de bout en bout. Une
+    # cartographie coupee a la visite 17 sur 40 qui rendrait 0 serait un
+    # succes annonce sur un travail a moitie fait.
+    return TERMINE if exploration.etat == TERMINEE else INCOMPLET
+
+
 COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
              "inventaire": _inventaire, "brouillon": _brouillon,
              "dictionnaire": _dictionnaire, "recolter": _recolter,
-             "composer": _composer, "promouvoir": _promouvoir}
+             "composer": _composer, "promouvoir": _promouvoir,
+             "explorer": _explorer}
 
 
 def main(arguments: list[str] | None = None) -> int:

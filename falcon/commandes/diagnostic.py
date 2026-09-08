@@ -59,7 +59,10 @@ def rapport(lecteur: DriverLecture, fenetre: str = "wnd[0]") -> str:
     lignes.append(f"  champs de {fenetre} ({len(ecran.champs)})")
     for champ in ecran.champs:
         soustype = f"/{champ.soustype}" if champ.soustype else ""
-        fige = "" if champ.modifiable else "  (fige)"
+        # Trois etats, pas deux : `None` veut dire « pas observe », et
+        # l'ecrire « (fige) » affirmerait le contraire de ce qu'on sait.
+        fige = {True: "", False: "  (fige)"}.get(champ.modifiable,
+                                                 "  (modifiable ?)")
         lignes.append(f"    {champ.id}")
         lignes.append(f"        {champ.type}{soustype}"
                       f"{('  ' + champ.nom) if champ.nom else ''}"

@@ -81,7 +81,21 @@ class Champ:
                                 # un vrai editeur de texte parmi les shells
     nom: str = ""
     texte: str = ""             # sans valeur sur un GuiShell : voir l'entete
-    modifiable: bool = True
+
+    #: `None` = **on ne sait pas**, et c'est le defaut a dessein.
+    #:
+    #: Le defaut valait `True`. Un champ d'esquisse — conjecture depuis une
+    #: trace, donc jamais observe — sortait donc « modifiable : oui » au
+    #: dictionnaire et `modifiable: true` au catalogue. Mesure sur la trace de
+    #: reference : 45 lignes affirmant d'un champ que personne n'a vu qu'il
+    #: est ecrivable. C'est le defaut que ce depot traque, dans sa forme la
+    #: plus pure — une affirmation d'aspect normal, fausse, produite par un
+    #: defaut de dataclass.
+    #:
+    #: La couture renseigne toujours l'attribut (`sapgui.py`, `Changeable`) :
+    #: un releve reel n'est donc jamais `None`, et le tri-etat ne coute rien
+    #: la ou l'information existe.
+    modifiable: bool | None = None
     infobulle: str = ""
 
 

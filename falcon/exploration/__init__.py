@@ -20,6 +20,11 @@ from .parcours import (
     ExplorationImpossible, Previsualisation, Reprise, SauvegardeRefusee,
     explorer, previsualiser,
 )
+from .rapport import (
+    ATTEINTE, ETATS_DE_VISITE, NON_EXPLOREE, SAUTEE, esquisses_manquantes,
+    etat_des_visites, ordres_manquants, previsualisation, rendre,
+    visites_manquantes,
+)
 
 __all__ = [
     "TABLE", "Regle", "Appel", "Traduction", "TableIncoherente",
@@ -30,4 +35,7 @@ __all__ = [
     "Branche", "Reprise", "SauvegardeRefusee", "ExplorationImpossible",
     "MODE", "PLAFOND_SAUVEGARDES", "ETATS", "TERMINEE", "INTERROMPUE",
     "PLAFOND", "MOTIFS", "CODES_DE_SESSION", "TOUCHE_AVEUGLE",
+    "rendre", "previsualisation", "etat_des_visites", "visites_manquantes",
+    "esquisses_manquantes", "ordres_manquants",
+    "ATTEINTE", "SAUTEE", "NON_EXPLOREE", "ETATS_DE_VISITE",
 ]
