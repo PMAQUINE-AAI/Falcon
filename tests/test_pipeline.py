@@ -97,6 +97,37 @@ class TestChargementValide(Base):
         self.assertEqual((source.genre, source.valeur), ("colonne", "site"))
 
 
+class TestEmpreinteObligatoire(unittest.TestCase):
+    """Aucune pipeline ne peut exister sans empreinte.
+
+    C'est elle que la reprise compare pour verifier que ni la pipeline ni le
+    jeu n'ont change. `charger()` est aujourd'hui le seul constructeur du
+    depot et la remplit toujours ; ce controle existe pour que ca reste vrai
+    si un second chemin de construction apparait — un convertisseur, par
+    exemple.
+    """
+
+    def test_une_pipeline_sans_empreinte_ne_se_construit_pas(self):
+        from falcon.pipeline.modele import Etape, Pipeline
+
+        etape = Etape(nom="x", action="press", cible="wnd[0]/tbar[0]/btn[11]",
+                      navigation_libre=True)
+        for empreinte in ("", "   "):
+            with self.subTest(empreinte=empreinte):
+                with self.assertRaises(ValueError) as capture:
+                    Pipeline(nom="p", classe="iterative", etapes=(etape,),
+                             plafond_items=1, plafond_sauvegardes=1,
+                             empreinte=empreinte)
+                self.assertIn("empreinte", str(capture.exception))
+
+    def test_une_pipeline_chargee_en_porte_toujours_une(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        chemin = Path(dossier.name) / "p.yaml"
+        chemin.write_text(textwrap.dedent(VALIDE), encoding="utf-8")
+        self.assertTrue(charger(chemin).empreinte.strip())
+
+
 class TestRefusSitues(Base):
     """Chaque refus doit dire ou chercher."""
 

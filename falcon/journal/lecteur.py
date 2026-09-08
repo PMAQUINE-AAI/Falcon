@@ -142,6 +142,12 @@ def preparer(chemin: str | Path,
     laissait vides et gardait la comparaison derriere un `if`, si bien qu'un
     `preparer(chemin, items)` distrait ne verifiait rien — la garde la plus
     severe du dispositif s'obtenait a l'envers, par omission.
+
+    ET LA CORRECTION S'ETAIT ARRETEE LA. Rendre le parametre obligatoire
+    empeche de l'OMETTRE ; ca n'empeche pas de passer une chaine vide, et le
+    `if` que ce paragraphe accusait est reste. Une empreinte vide ne faisait
+    donc pas lever la garde : elle la sautait. Elle est refusee ici, avant
+    toute comparaison.
     """
     enregistrements = lire(chemin)
 
@@ -163,14 +169,27 @@ def preparer(chemin: str | Path,
             f"dit qu'on ne sait pas ce qui a ete fait. Pour lancer un lot "
             f"neuf, c'est le mode `run`")
 
+    # Une empreinte vide est un refus, pas un laissez-passer.
+    #
+    # C'est le point exact ou la garde se desarmait : `if empreinte and ...`
+    # traite « je ne sais pas » comme « c'est pareil ». Or ne pas savoir sur
+    # quoi on reprend est precisement le cas ou il ne faut pas reprendre.
+    for quoi, valeur in (("pipeline", pipeline_empreinte),
+                         ("jeu", jeu_empreinte)):
+        if not str(valeur).strip():
+            raise RepriseIncoherente(
+                f"empreinte de {quoi} vide : la reprise ne peut pas verifier "
+                f"que le monde n'a pas change depuis. Une empreinte absente "
+                f"n'est pas une empreinte identique")
+
     if not forcer:
         if ouvertures:
             origine = ouvertures[0]
             ecarts = []
-            if pipeline_empreinte and origine.pipeline_empreinte != pipeline_empreinte:
+            if origine.pipeline_empreinte != pipeline_empreinte:
                 ecarts.append(
                     f"pipeline {origine.pipeline_empreinte!r} -> {pipeline_empreinte!r}")
-            if jeu_empreinte and origine.jeu_empreinte != jeu_empreinte:
+            if origine.jeu_empreinte != jeu_empreinte:
                 ecarts.append(
                     f"jeu {origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
             if ecarts:

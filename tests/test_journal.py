@@ -253,6 +253,38 @@ class TestReprise(unittest.TestCase):
         self.assertIn("rien a reprendre", message)
         self.assertIn("run", message)
 
+    def test_une_empreinte_VIDE_est_refusee_et_ne_saute_pas_la_garde(self):
+        """Le point exact ou la garde la plus severe se desarmait.
+
+        La comparaison etait gardee par `if empreinte and ...` : une chaine
+        vide ne faisait pas lever la garde, elle la SAUTAIT. Ne pas savoir sur
+        quoi on reprend est precisement le cas ou il ne faut pas reprendre.
+
+        La docstring de `preparer` racontait deja avoir corrige ce defaut. Elle
+        disait vrai a moitie : rendre le parametre obligatoire empeche de
+        l'omettre, pas de passer `""`, et le `if` qu'elle accusait etait reste.
+        """
+        self._journal(_ouverture(),
+                      ItemDebut(run_id=RUN, item_id="a1"),
+                      ItemFin(run_id=RUN, item_id="a1", etat=OK))
+        for vide in ("", "   "):
+            for pipeline, jeu in ((vide, "jeu1"), ("pipe1", vide)):
+                with self.subTest(pipeline=pipeline, jeu=jeu):
+                    with self.assertRaises(RepriseIncoherente) as capture:
+                        preparer(self.chemin, ["a1"],
+                                 pipeline_empreinte=pipeline,
+                                 jeu_empreinte=jeu)
+                    self.assertIn("vide", str(capture.exception))
+
+    def test_une_empreinte_vide_est_refusee_MEME_en_forcant(self):
+        """`forcer` sert a passer outre un ecart CONSTATE, avec un motif
+        trace. Il ne peut pas servir a passer outre une comparaison qui n'a
+        pas eu lieu."""
+        self._journal(_ouverture())
+        with self.assertRaises(RepriseIncoherente):
+            preparer(self.chemin, ["a1"], pipeline_empreinte="",
+                     jeu_empreinte="jeu1", forcer=True, motif="un motif")
+
     def test_un_journal_vide_non_plus(self):
         self.chemin.write_text("", encoding="utf-8")
         with self.assertRaises(RepriseIncoherente):

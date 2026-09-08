@@ -131,8 +131,26 @@ class Pipeline:
     plafond_sauvegardes: int
     cles: tuple[str, ...] = ()               # obligatoire si iterative
     validation_reelle: dict[str, Any] | None = None
+    #: `sha256` du texte integral du fichier, tronque a 16 hex.
+    #:
+    #: Le defaut vide est conserve pour l'ordre des champs de la dataclasse,
+    #: mais `__post_init__` le refuse : c'est sur cette empreinte que la
+    #: reprise verifie que le monde n'a pas change, et une empreinte vide
+    #: rendrait la verification sans objet.
     empreinte: str = ""
     source: str = ""                         # chemin du fichier charge
+
+    def __post_init__(self) -> None:
+        # Une pipeline sans empreinte ne peut pas etre reprise : la garde qui
+        # compare le monde d'avant a celui d'aujourd'hui n'aurait rien a
+        # comparer. `charger()` est le seul constructeur du depot et la
+        # remplit toujours ; ce controle existe pour que ca reste vrai si un
+        # second chemin de construction apparait.
+        if not self.empreinte.strip():
+            raise ValueError(
+                f"pipeline {self.nom!r} sans empreinte. C'est elle que la "
+                f"reprise compare pour verifier que ni la pipeline ni le jeu "
+                f"n'ont change ; vide, la garde n'aurait rien a comparer")
 
     @property
     def iterative(self) -> bool:
