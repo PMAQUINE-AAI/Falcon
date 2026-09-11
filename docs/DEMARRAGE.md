@@ -121,7 +121,10 @@ relever à la main. Elles portent `programme: "?"` et `dynpro: "?"`, se
 distinguent donc à l'œil nu d'un relevé, et `pour_garde` les refuse même
 promues.
 
-Depuis la console : « 8 → Cartographier une trace ».
+Depuis la console : « **2 → Explorer la trace dans SAP** », qui est la
+branche des traces du recorder — c'est là qu'on va avec un `.vbs` en
+main. La même entrée figure sous « 8 → Explorer la trace dans SAP »,
+avec la session ; les deux lancent exactement la même chose.
 
 **Ce que la cartographie ne fera pas pour toi.** Elle ne suit pas la trace :
 elle dit quels écrans ont été **vus**. Un index de grille rejoué tel quel peut

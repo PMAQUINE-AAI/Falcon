@@ -440,12 +440,23 @@ def ecran_traces(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def explorer(console: Console) -> str:
+        return _cartographier(console, env)
+
     return Menu(
         titre="FALCON — traces du recorder",
-        preambule="Lecture seule d'enregistrements .vbs. Seul le brouillon "
-                  "ecrit,\net seulement un fichier que vous nommez.",
+        preambule=(
+            "Les quatre premieres entrees ne font que lire le fichier .vbs ;\n"
+            "le brouillon ecrit un fichier que vous nommez, et rien d'autre.\n"
+            "\n"
+            "La cinquieme AGIT DANS SAP : elle rejoue la trace sur une\n"
+            "session ouverte pour aller observer les ecrans. Elle ne\n"
+            "SAUVEGARDE rien. C'est la meme que « 8 > Explorer la trace »."),
         entrees=(
-            Entree("1", "Couverture du parseur", inventaire,
+            # « Inventaire » et pas seulement « Couverture du parseur » :
+            # c'est le nom de `falcon inventaire`, et deux textes de cette
+            # console renvoyaient vers « 2 > Inventaire », qui n'existait pas.
+            Entree("1", "Inventaire : couverture du parseur", inventaire,
                    "ce qu'il sait lire, et ce qu'il n'en sait pas"),
             Entree("2", "Ecrans conjectures", ecrans,
                    "decoupage en visites, et champs touches"),
@@ -453,6 +464,13 @@ def ecran_traces(env: Environnement) -> Menu:
                    "la trace, sans les gestes de confort"),
             Entree("4", "Brouillon de pipeline", ebauche,
                    "ebauche YAML, inachevee a dessein"),
+            # La MEME action que « 8 > 3 », au meme nom, delibere. Elle etait
+            # atteignable uniquement sous « Session SAP » : presente, testee,
+            # et introuvable pour qui tient un .vbs et cherche quoi en faire.
+            # Une fonctionnalite qu'on ne trouve pas ne se distingue pas
+            # d'une fonctionnalite absente.
+            Entree("5", "Explorer la trace dans SAP", explorer,
+                   "AGIT DANS SAP — cartographie les ecrans, sans y ecrire"),
         ))
 
 
@@ -1153,26 +1171,82 @@ def ecran_pipelines(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def composer_le_classeur(console: Console) -> str:
+        """`falcon composer` : les CSV exportes du classeur, vers un YAML.
+
+        C'est le maillon entre le classeur Excel et une pipeline chargeable,
+        et il n'existait que dans la CLI. La console — c'est-a-dire ce que
+        l'utilisateur ouvre — ne savait pas le faire : le classeur produisait
+        deux CSV dont rien, ici, ne savait quoi faire.
+
+        On MONTRE avant d'ecrire, et l'ecriture passe par
+        `convertir_fichiers`, qui RELIT par `charger()` avant de poser le
+        fichier. Un YAML produit et refuse n'atteint donc jamais le disque.
+        """
+        from falcon.tableur import (
+            TableurInvalide, convertir, convertir_fichiers,
+        )
+
+        dossier = demander_chemin(console, "dossier des CSV du classeur")
+        if dossier is None:
+            return CONTINUER
+        if not dossier.is_dir():
+            console.ecrire(f"\n  {dossier} n'est pas un dossier. Le classeur "
+                           "exporte deux CSV ;")
+            console.ecrire("  c'est le dossier qui les contient qu'on attend "
+                           "ici.")
+            console.pause()
+            return CONTINUER
+
+        try:
+            texte = convertir(dossier)
+        except TableurInvalide as erreur:
+            console.ecrire(f"\n  TableurInvalide : {erreur}")
+            console.pause()
+            return CONTINUER
+
+        console.titre("Pipeline composee")
+        console.ecrire()
+        console.ecrire(texte)
+
+        sortie = demander_chemin_neuf(console, "ecrire dans (vide = ne rien "
+                                               "ecrire)")
+        if sortie is None:
+            console.pause()
+            return CONTINUER
+        try:
+            chemin = convertir_fichiers(dossier, sortie)
+        except TableurInvalide as erreur:
+            console.ecrire(f"\n  TableurInvalide : {erreur}")
+            console.ecrire("  RIEN n'a ete ecrit.")
+            console.pause()
+            return CONTINUER
+        console.ecrire(f"\n  {chemin} ecrit.")
+        console.pause()
+        return CONTINUER
+
     return Menu(
         titre="FALCON — pipelines et donnees",
         preambule=(
-            "1 a 3 : relecture, aucun geste.\n"
-            "4 : repetition a blanc, s'arrete avant toute validation.\n"
-            "5 a 7 : ECRIVENT DANS SAP, apres confirmation en toutes lettres."),
+            "1 a 4 : relecture et composition, aucun geste dans SAP.\n"
+            "5 : repetition a blanc, s'arrete avant toute validation.\n"
+            "6 a 8 : ECRIVENT DANS SAP, apres confirmation en toutes lettres."),
         entrees=(
-            Entree("1", "Charger et valider une pipeline", valider,
+            Entree("1", "Composer depuis le classeur", composer_le_classeur,
+                   "les deux CSV exportes d'Excel deviennent un YAML"),
+            Entree("2", "Charger et valider une pipeline", valider,
                    "ce que les gardes verront, etape par etape"),
-            Entree("2", "Relire un brouillon", brouillon,
+            Entree("3", "Relire un brouillon", brouillon,
                    "meme chose, marqueurs toleres"),
-            Entree("3", "Inspecter un jeu de donnees", jeu,
+            Entree("4", "Inspecter un jeu de donnees", jeu,
                    "dialecte, colonnes, et regroupement en items"),
-            Entree("4", "Repetition a blanc", a_blanc,
+            Entree("5", "Repetition a blanc", a_blanc,
                    "tout sauf la validation — aucune ecriture dans SAP"),
-            Entree("5", "Executer", lancer,
+            Entree("6", "Executer", lancer,
                    "ECRIT DANS SAP. Confirmation en toutes lettres"),
-            Entree("6", "Reprendre une execution", reprendre,
+            Entree("7", "Reprendre une execution", reprendre,
                    "ECRIT DANS SAP. Les douteux ne sont jamais rejoues"),
-            Entree("7", "Enchainer des pipelines", enchainer_les,
+            Entree("8", "Enchainer des pipelines", enchainer_les,
                    "ECRIT DANS SAP. Un maillon interrompu arrete la chaine"),
         ))
 
@@ -1916,6 +1990,7 @@ def ecran_sap(env: Environnement) -> Menu:
     def cartographier(console: Console) -> str:
         return _cartographier(console, env)
 
+
     return Menu(
         titre="FALCON — session SAP",
         preambule=(
@@ -1944,8 +2019,8 @@ def ecran_sap(env: Environnement) -> Menu:
             # regle que la console s'est donnee, et le libelle se lit trop
             # vite. « AGIT » et non « ECRIT » : la distinction est reelle et
             # un test verifie qu'aucun preambule ne la gomme.
-            Entree("3", "Cartographier une trace", cartographier,
-                   "AGIT DANS SAP — rejoue la trace, sans rien y ecrire"),
+            Entree("3", "Explorer la trace dans SAP", cartographier,
+                   "AGIT DANS SAP — cartographie les ecrans, sans y ecrire"),
         ))
 
 
@@ -1981,7 +2056,7 @@ def _cartographier(console: Console, env: Environnement) -> str:
         console.pause()
         return CONTINUER
 
-    console.titre("Cartographier une trace")
+    console.titre("Explorer la trace dans SAP")
     console.ecrire()
     console.ecrire(previsualisation(trace))
 
@@ -2179,7 +2254,7 @@ def ecran_taxonomie(env: Environnement) -> Menu:
             "\n"
             "Rien ici n'ecrit dans SAP."),
         entrees=(
-            Entree("1", "Voir les incidents inconnus", inspecter,
+            Entree("1", "Recolter les incidents inconnus", inspecter,
                    "ce qui a bloque, et sur quelle signature"),
             Entree("2", "Proposer la surcouche a completer", proposer,
                    "le YAML a relire, completer, puis joindre a l'execution"),
@@ -2197,19 +2272,19 @@ def racine(env: Environnement | None = None) -> Menu:
         preambule=(
             "Automatisation SAP Front End.\n"
             "\n"
-            "Tout se lit sans rien changer, SAUF quatre ecrans, tous derriere\n"
+            "Tout se lit sans rien changer, SAUF ces ecrans, tous derriere\n"
             "une confirmation en toutes lettres :\n"
             "\n"
             "  « 3 > Executer », « 3 > Reprendre », « 3 > Enchainer »\n"
             "        ECRIVENT DANS SAP.\n"
-            "  « 8 > Cartographier une trace »\n"
+            "  « 2 > Explorer la trace » — la MEME que « 8 > Explorer »\n"
             "        AGIT DANS SAP sans y ecrire : elle rejoue une trace, donc\n"
             "        elle navigue et presse des boutons."),
         entrees=(
             Entree("1", "Verification et livraison", ecran_verification(env),
                    "les suites, la preuve que les gardes protegent, le bundle"),
             Entree("2", "Traces du recorder", ecran_traces(env),
-                   "couverture du parseur, ecrans conjectures, gestes"),
+                   "couverture, ecrans conjectures, et EXPLORER la trace"),
             Entree("3", "Pipelines et donnees", ecran_pipelines(env),
                    "charger, inspecter, et EXECUTER"),
             Entree("4", "Journaux", ecran_journaux(env),

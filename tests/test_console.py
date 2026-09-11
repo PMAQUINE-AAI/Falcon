@@ -70,6 +70,21 @@ def _arbres() -> list[tuple[str, ast.Module]]:
             for chemin in sorted(Path(ecrans.__file__).parent.glob("*.py"))]
 
 
+def _textes_de_console() -> list[str]:
+    """Toute chaine litterale des modules de la console.
+
+    Les preambules et les details ne sont pas les seuls textes qu'un humain
+    lit : les messages ecrits en cours de route en font partie, et c'est l'un
+    d'eux qui renvoyait vers une entree de menu inexistante.
+    """
+    textes: list[str] = []
+    for _, arbre in _arbres():
+        for noeud in ast.walk(arbre):
+            if isinstance(noeud, ast.Constant) and isinstance(noeud.value, str):
+                textes.append(noeud.value)
+    return textes
+
+
 def _menus(menu: Menu) -> list[Menu]:
     """Tous les menus atteignables, y compris la racine."""
     trouves = [menu]
@@ -1939,8 +1954,20 @@ class TestExecution(unittest.TestCase):
                         f"— une methode mutante de la couture")
 
 
+#: Les deux chemins de console qui menent a l'exploration.
+#:
+#: Il y en a DEUX a dessein. « Session SAP » est ou la fonction a ete posee,
+#: parce qu'elle a besoin d'une session ; « Traces du recorder » est ou va
+#: quelqu'un qui tient un .vbs et cherche quoi en faire. La fonction a vecu
+#: sous le seul premier chemin : presente, testee, rendue par `rendre`, et
+#: introuvable — un utilisateur a cherche, n'a pas trouve, et a conclu qu'elle
+#: n'existait pas. Il avait raison de le conclure.
+PORTE_SAP = ("Session SAP", "Explorer")
+PORTE_TRACES = ("Traces du recorder", "Explorer")
+
+
 class TestCartographie(unittest.TestCase):
-    """« 8 > Cartographier une trace » — la seule entree qui AGIT sans ecrire.
+    """« Explorer la trace dans SAP » — la seule entree qui AGIT sans ecrire.
 
     Contre un SAP de papier : ces tests etablissent l'enchainement de la
     console, jamais la reponse d'un vrai systeme.
@@ -1956,9 +1983,9 @@ class TestCartographie(unittest.TestCase):
     def tearDown(self):
         self.bac.cleanup()
 
-    def _session(self, *saisies: str) -> Journal:
-        journal = Journal(*vers(self.arbre, "Session SAP", "Cartographier"),
-                          *saisies, "", "0", "0")
+    def _session(self, *saisies: str, porte: tuple[str, ...] = PORTE_SAP
+                 ) -> Journal:
+        journal = Journal(*vers(self.arbre, *porte), *saisies, "", "0", "0")
         parcourir(self.arbre, journal.console())
         return journal
 
@@ -2003,7 +2030,7 @@ class TestCartographie(unittest.TestCase):
         C'est tout l'interet d'une confirmation en toutes lettres : le mot
         attendu ne se trouve que dans le recapitulatif.
         """
-        journal = Journal(*vers(self.arbre, "Session SAP", "Cartographier"),
+        journal = Journal(*vers(self.arbre, *PORTE_SAP),
                           str(MEGATRACE), self.bac.name, "500", "500",
                           "non", "", "0", "0")
         # Les invites et les lignes ecrites sont deux flux distincts : pour
@@ -2078,3 +2105,144 @@ class TestCartographie(unittest.TestCase):
         self.assertTrue(confirmees,
                         "aucune cartographie dans la console : l'entree "
                         "annoncee au menu n'existerait nulle part")
+
+    def test_la_porte_des_TRACES_mene_a_la_meme_exploration(self):
+        """L'entree ajoutee sous « Traces du recorder » n'est pas un decor.
+
+        Deux entrees au meme libelle pourraient parfaitement en declencher
+        deux choses differentes — ou une seule des deux pourrait marcher.
+        Ce test rejoue le parcours COMPLET par l'autre porte et verifie le
+        meme effet observable : des ecrans verses en quarantaine.
+        """
+        journal = self._session(str(MEGATRACE), self.bac.name, "500", "500",
+                                "megatrace_2026-09.vbs", porte=PORTE_TRACES)
+        quarantaine = Path(self.bac.name) / "quarantaine"
+        self.assertIn("cartographie de", journal.texte)
+        self.assertTrue(sorted(p.name for p in quarantaine.glob("*.yaml")))
+
+    def test_la_porte_des_TRACES_confirme_elle_aussi(self):
+        """La confirmation en toutes lettres ne depend pas du chemin pris."""
+        journal = self._session(str(MEGATRACE), self.bac.name, "500", "500",
+                                "oui", porte=PORTE_TRACES)
+        self.assertIn("Annule", journal.texte)
+        self.assertEqual(self.sap.gestes, [])
+
+
+class TestLeVocabulaire(unittest.TestCase):
+    """Une fonctionnalite qu'on ne trouve pas ne se distingue pas d'une absente.
+
+    Le defaut que cette classe existe pour empecher est arrive en vrai, et il
+    avait passe tous les autres tests de ce fichier : la cartographie etait
+    presente, rendue par `rendre`, couverte par huit tests — et le mot par
+    lequel la CLI, la documentation et l'utilisateur la nomment, `explorer`,
+    ne figurait dans AUCUN libelle de la console. Elle etait donc, pour qui la
+    cherchait, absente.
+
+    C'est la meme famille que le reste du fichier : un ecran qui ne dit pas ce
+    qu'il fait. Ici il ne dit pas QU'il le fait.
+    """
+
+    #: Commande de la CLI → le fragment que la console doit porter quelque
+    #: part dans un libelle, pour que qui a lu la doc trouve l'equivalent.
+    #:
+    #: Table EXPLICITE, et pas derivee de `COMMANDES` par troncature : le
+    #: rapprochement entre « inventaire » et « couverture du parseur » est un
+    #: jugement, et un jugement doit s'ecrire.
+    MOT_DE_LA_CLI = {
+        "brouillon": "brouillon",
+        "composer": "compos",
+        "diagnostiquer": "diagnostiqu",
+        "dictionnaire": "dictionnaire",
+        "explorer": "explor",
+        "inventaire": "inventaire",
+        "promouvoir": "promouv",
+        "recolter": "recolt",
+    }
+
+    #: Commandes dont l'absence de la console est DELIBEREE, avec le motif.
+    SANS_EQUIVALENT = {
+        "console": "c'est la console elle-meme",
+    }
+
+    def _libelles(self) -> list[str]:
+        vus: list[str] = []
+
+        def descendre(menu: Menu) -> None:
+            for entree in menu.entrees:
+                vus.append(entree.libelle.lower())
+                if isinstance(entree.cible, Menu):
+                    descendre(entree.cible)
+
+        descendre(racine())
+        return vus
+
+    def test_chaque_commande_de_la_CLI_se_retrouve_dans_un_libelle(self):
+        libelles = self._libelles()
+        for commande, mot in sorted(self.MOT_DE_LA_CLI.items()):
+            with self.subTest(commande=commande):
+                self.assertTrue(
+                    [l for l in libelles if mot in l],
+                    f"`falcon {commande}` existe et la console ne porte le "
+                    f"mot « {mot} » dans aucun libelle. Qui lit la "
+                    f"documentation cherchera ce mot, ne le trouvera pas, et "
+                    f"conclura que la console ne sait pas le faire")
+
+    def test_la_table_couvre_exactement_les_commandes_de_la_CLI(self):
+        """Ajouter une commande a la CLI force a dire si la console la porte.
+
+        Sans ce controle, la table se periment en silence et le test
+        precedent continue de passer en ne verifiant plus rien de neuf.
+        """
+        from falcon.commandes.principal import COMMANDES
+        declarees = set(self.MOT_DE_LA_CLI) | set(self.SANS_EQUIVALENT)
+        self.assertEqual(declarees, set(COMMANDES))
+        self.assertFalse(set(self.MOT_DE_LA_CLI) & set(self.SANS_EQUIVALENT))
+
+    def test_aucun_texte_de_console_ne_renvoie_vers_une_entree_inexistante(self):
+        """Un message qui cite « 2 > Inventaire » doit pouvoir y mener.
+
+        Trouve en vrai : `_cartographier` renvoyait vers « 2 > Inventaire »
+        quand la trace est illisible, et l'entree s'appelait « Couverture du
+        parseur ». Le conseil etait juste et le nom faux — on envoie quelqu'un
+        chercher une ligne de menu qui n'existe pas.
+        """
+        import re
+
+        arbre = racine()
+        textes = [arbre.preambule]
+        cites: list[tuple[str, str]] = []
+
+        def descendre(menu: Menu) -> None:
+            textes.append(menu.preambule)
+            for entree in menu.entrees:
+                textes.append(entree.detail)
+                if isinstance(entree.cible, Menu):
+                    descendre(entree.cible)
+
+        descendre(arbre)
+        textes += _textes_de_console()
+
+        # « 2 > Quelque chose » ou « 8 > 3 » : on ne retient que la forme
+        # nommee, la seule qu'on puisse verifier.
+        for texte in textes:
+            for chiffre, nom in re.findall(r"«\s*(\d)\s*>\s*([^»]+?)\s*»",
+                                           texte):
+                if nom.isdigit():
+                    continue
+                cites.append((chiffre, nom))
+
+        self.assertTrue(cites, "aucune citation d'entree : le test ne "
+                               "verifierait rien")
+        for chiffre, nom in cites:
+            with self.subTest(citation=f"{chiffre} > {nom}"):
+                branche = [e.cible for e in arbre.entrees if e.clef == chiffre]
+                self.assertTrue(branche, f"la racine n'a pas de « {chiffre} »")
+                cible = branche[0]
+                if not isinstance(cible, Menu):
+                    continue
+                self.assertTrue(
+                    [e for e in cible.entrees
+                     if nom.lower() in e.libelle.lower()],
+                    f"« {chiffre} > {nom} » est cite mais « {cible.titre} » "
+                    f"ne porte aucune entree de ce nom : "
+                    f"{[e.libelle for e in cible.entrees]}")
