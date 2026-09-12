@@ -582,10 +582,17 @@ def reposer_le_bit(systeme: Systeme) -> bool:
       - sur Windows 8.1, `SetConsoleMode` refuse le bit inconnu : faux, et
         c'est exactement ce que la sonde avait deja mesure.
 
-    L'appelant — aujourd'hui `commandes/principal.py:_explorer` — en fait un
-    `forcer_nu`. Il n'y a pas d'autre usage, et il ne doit pas y en avoir un
-    qui se contente de la valeur de retour sans peindre derriere : reposer le
-    bit est un effet sur le terminal de quelqu'un.
+    Deux appelants, et ils couvrent les deux surfaces qui peignent :
+    `commandes/principal.py:_explorer` pour le direct, et
+    `commandes/principal.py:_capacites_a_peindre` pour la console. Cette
+    docstring a dit « il n'y a pas d'autre usage » pendant que la console
+    sondait `stdout`, en tirait un `PeintreColore` et ne reposait rien — une
+    phrase vraie le jour ou elle a ete ecrite, fausse le lendemain, et c'est
+    la forme la plus courante du defaut que ce depot traque.
+
+    Il ne doit pas y avoir d'appelant qui se contente de la valeur de retour
+    sans peindre derriere : reposer le bit est un effet sur le terminal de
+    quelqu'un, pas une question qu'on pose.
     """
     if not systeme.plateforme.startswith("win"):
         return True

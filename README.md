@@ -97,11 +97,29 @@ Tout depuis un seul endroit :
 python -m falcon console
 ```
 
-Sept branches : vérification et livraison, traces du recorder, pipelines et
-données, journaux, catalogue d'écrans, exports de table, session SAP. Pas de
-`curses` et pas de dépendance : `curses` n'est pas fourni avec CPython sous
-Windows, or c'est la seule machine où SAP GUI existe. Le décor s'encode en
-cp1252, ce qu'écrit une console Windows française redirigée.
+Huit branches : vérification et livraison, traces du recorder, pipelines et
+données, journaux, catalogue d'écrans, exports de table, taxonomie des
+incidents, session SAP. Pas de `curses` et pas de dépendance : `curses` n'est
+pas fourni avec CPython sous Windows, or c'est la seule machine où SAP GUI
+existe — et comme la CI, elle, est Linux *où curses existe*, le refus est un
+test (`MODULES_INTERDITS`) et non une intention. Le décor s'encode en cp1252,
+ce qu'écrit une console Windows française redirigée.
+
+**La couleur arrive si — et seulement si — ce terminal l'a prouvée.** Les
+menus, eux, n'émettent jamais rien : leur rendu est comparé caractère par
+caractère à une fixture gelée. Ce que le peintre teinte, c'est ce qui compte —
+« AGIT DANS SAP » et la ligne de mandant en rouge, les branches tombées et les
+avertissements en jaune, les écrans versés et les reprises acceptées en vert.
+Seize couleurs, jamais 256 : `COLORTERM` est une déclaration, et 16 est ce que
+toute console ANSI tient. Pour refuser sans argumenter : `--sans-couleur` sur
+`explorer`, et `falcon sonde` dit pourquoi le niveau retenu est celui-là.
+
+Deux choses que ce dépôt **n'a pas** mesurées et s'interdit donc : l'écran
+alterné et le positionnement de curseur. Le bit VT prouve que la console
+interprète des séquences, pas qu'elle honore un ancrage — et leur échec est
+silencieux, c'est-à-dire qu'un écran à moitié dessiné se lit comme un écran
+correct. Le seul redessin du dépôt reste le retour chariot, qui a un ancrage :
+la colonne zéro.
 
 **C'est aussi d'ici qu'on exécute.** Une exécution réelle écrit dans un ERP :
 elle est donc précédée d'un récapitulatif — pipeline et jeu avec leurs

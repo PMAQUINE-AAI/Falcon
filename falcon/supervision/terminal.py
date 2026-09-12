@@ -8,10 +8,22 @@ sur un terminal, ou le retour chariot repositionne le curseur.
 `forcer=True` existe pour le cas ou on veut quand meme la trace — un lot long
 lance dans un `nohup`, typiquement. C'est un choix explicite, pas un defaut.
 
-**Le redessin n'utilise aucune sequence ANSI.** Un simple retour chariot et du
-remplissage : ca marche dans `cmd`, dans PowerShell, a travers RDP. Une
-sequence ANSI marcherait sur la moitie de ces terminaux et laisserait des
-caracteres parasites sur l'autre.
+**Le redessin n'utilise aucune sequence ANSI, et ce module-ci n'en emet
+aucune.** Un simple retour chariot et du remplissage : ca marche dans `cmd`,
+dans PowerShell, a travers RDP.
+
+Le motif d'origine — « une sequence marcherait sur la moitie de ces terminaux
+et laisserait des caracteres parasites sur l'autre » — n'est plus le bon, et le
+laisser serait affirmer du depot quelque chose qui a cesse d'etre vrai :
+`falcon/toile/capacites.py` MESURE desormais ce que le terminal tient, et
+`falcon/toile/direct.py` peint le direct d'une cartographie en couleur quand la
+preuve est la.
+
+Le vrai motif, lui, tient toujours : **le positionnement de curseur n'a aucun
+ancrage sur un conhost**. Un retour chariot en a un — la colonne zero de la
+ligne courante — et c'est pour ca qu'il reste le seul redessin de ce depot,
+ici comme dans `toile/direct.py`. Ce qui a ete mesure, c'est la COULEUR ; ni
+l'ecran alterne, ni `CSI H`, ni l'effacement ne l'ont ete.
 """
 
 from __future__ import annotations

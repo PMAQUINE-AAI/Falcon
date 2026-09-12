@@ -432,7 +432,6 @@ def _console(options: argparse.Namespace) -> int:
     avoir ete mesuree.
     """
     from falcon.console import Console, Environnement, parcourir, racine
-    from falcon.toile import sonder, systeme_reel
 
     if not sys.stdin.isatty():
         # Une console interactive sur un flux non interactif ne peut rien
@@ -444,9 +443,57 @@ def _console(options: argparse.Namespace) -> int:
     # Une FONCTION, et pas une valeur : le navigateur la rappelle a chaque
     # tour. Windows n'a pas de `SIGWINCH`, et une reconnexion RDP a une autre
     # resolution redimensionne la console de l'hote en pleine session.
-    env = Environnement(
-        capacites=lambda: sonder(systeme_reel(sys.stdout, "stdout")))
+    env = Environnement(capacites=lambda: _capacites_a_peindre(sys.stdout,
+                                                               "stdout"))
     return parcourir(racine(env), Console())
+
+
+def _capacites_a_peindre(flux, nom: str):
+    """Ce que le flux sait faire, ET le bit VT repose dessus avant de peindre.
+
+    **Le trou que cette fonction bouche.** `sonder` RESTAURE le mode qu'elle a
+    trouve — elle mesure, elle ne regle pas — et `reposer_le_bit` existe pour
+    le reposer avant de peindre. Sa propre docstring disait : « L'appelant —
+    aujourd'hui `commandes/principal.py:_explorer` — en fait un `forcer_nu`.
+    Il n'y a pas d'autre usage. » C'etait faux depuis que la console peint :
+    elle sondait `stdout`, en tirait un `PeintreColore`, et n'avait jamais
+    repose le bit. Sur un conhost de Windows 10 ou de PowerShell 5.1 — la
+    machine cible, ou VT est ETEINT par defaut — chaque ligne du navigateur
+    serait sortie en `<-[1m` en toutes lettres.
+
+    Et la garde n°9 n'aurait pas mordu : elle ne regarde que les CAPACITES,
+    qui etaient vraies. C'est l'etat du HANDLE qui avait change apres la
+    mesure. Des capacites exactes, un terminal illisible, aucune exception —
+    le defaut directeur du depot, par le seul chemin ou la garde est aveugle.
+
+    **Le refus est le repli, et il ne degrade rien.** Un bit qu'on n'a pas pu
+    reposer rend des capacites ou `ansi` et `couleur` valent faux : le peintre
+    nu est le cas de BASE, pas un mode degrade. Le motif dit pourquoi, et
+    `falcon sonde` reste la commande qui l'explique.
+
+    **Appelee a CHAQUE tour du navigateur, et c'est voulu.** Windows n'a pas
+    de `SIGWINCH` : la geometrie se remesure a chaque tour. Le mode VT, lui,
+    peut avoir ete remis a zero entre deux tours — une reconnexion RDP ouvre
+    un autre handle de console. Mesurer la largeur a chaque tour et le mode
+    une seule fois laisserait la seconde moitie d'une session peindre sur un
+    handle qui n'interprete plus rien.
+    """
+    from dataclasses import replace
+
+    from falcon.toile import reposer_le_bit, sonder, systeme_reel
+
+    systeme = systeme_reel(flux, nom)
+    capacites = sonder(systeme)
+    if not capacites.ansi:
+        return capacites
+    if reposer_le_bit(systeme):
+        return capacites
+    return replace(
+        capacites, ansi=False, couleur=False,
+        motifs=capacites.motifs + (
+            "le bit VT n'a pas pu etre repose avant de peindre : ce terminal "
+            "SAIT interpreter les sequences, mais son handle ne les "
+            "interprete pas maintenant",))
 
 
 def _inventaire(options: argparse.Namespace) -> int:

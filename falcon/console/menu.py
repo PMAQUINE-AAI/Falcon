@@ -10,8 +10,22 @@ ajouter.
 
 Le rendu est donc un menu numerote sur un flux texte : ca marche dans `cmd`,
 dans PowerShell, dans un terminal Linux, a travers RDP, et dans un journal
-rediriges. Aucune sequence ANSI, aucun caractere semi-graphique — voir
-`ENCODAGE_MINIMAL`.
+rediriges. Aucun caractere semi-graphique — voir `ENCODAGE_MINIMAL`.
+
+**Sur les sequences ANSI, ce module a change d'avis, et il faut le dire.** Il a
+longtemps porte « aucune sequence ANSI », avec la raison : une sequence
+marcherait sur la moitie de ces terminaux et laisserait des caracteres
+parasites sur l'autre. C'etait vrai TANT QU'ON NE MESURAIT PAS. `falcon/toile/`
+mesure desormais — sur Windows on pose le bit VT, on le RELIT, et l'echec de
+`GetConsoleMode` est lui-meme la reponse — et `peintre.py` porte une garde qui
+LEVE si l'on peint au-dela de ce qui a ete prouve.
+
+**Ce module, lui, n'emet toujours rien.** `rendre` produit des lignes nues, et
+un test compare sa sortie a une fixture gelee, au caractere pres. Le decor
+arrive tout fait du peintre, qui est le seul a avoir lu la sonde. C'est ce
+partage qui fait que le niveau NU reste le cas de BASE et non un repli : une
+suite qui n'a pas de terminal exerce exactement le meme code qu'un poste qui
+en a un.
 
 **Les entrees/sorties sont injectees**, pas cablees sur `input` et `print`.
 C'est ce qui rend la console testable : une suite lui joue une session

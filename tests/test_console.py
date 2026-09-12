@@ -14,6 +14,16 @@ viennent d'une liste decouverte sur le disque.
 francaise redirigee vers un fichier. Un cadre semi-graphique y leverait, et
 l'outil mourrait sur son propre decor — sur la seule machine ou il sert,
 puisque c'est la seule ou SAP GUI existe.
+
+**Et AUCUN module de console n'emet de sequence** — ce qui n'est plus la meme
+chose que « le depot n'en emet pas ». Depuis la decision n°21, la couleur est
+permise la ou le terminal l'a PROUVEE, et `falcon/toile/peintre.py` en pose.
+Ce que ce fichier verifie est le partage : le code d'ecran reste lisible sans
+decor, un test AST interdit `\x1b` dans ses litteraux, et une session complete
+du navigateur jouee par `Journal` ne doit porter aucune sequence, parce que
+`Environnement.capacites` y vaut `Capacites()` — tout faux — et que la mesure
+est un geste que le PROGRAMME pose, jamais un etat du monde que la suite
+heriterait du terminal de qui la lance.
 """
 
 from __future__ import annotations
@@ -2282,6 +2292,69 @@ class TestCartographie(unittest.TestCase):
                                 "oui", porte=PORTE_TRACES)
         self.assertIn("Annule", journal.texte)
         self.assertEqual(self.sap.gestes, [])
+
+
+class TestLeRenduGele(unittest.TestCase):
+    """La preuve, et non l'esperance, que les menus n'ont pas derive.
+
+    La decision n°21 ouvre la couleur au depot. Les 14 tests de
+    `TestAffichage` restent verts sans une retouche — mais ils verifient des
+    PROPRIETES (largeur, encodage, accord entre ce qu'un menu fait et ce qu'il
+    en dit), pas l'identite. Un decor pose sur le chemin par defaut passerait
+    chacune d'elles : une sequence SGR n'ajoute aucune colonne visible, elle
+    s'encode en cp1252 caractere par caractere, et elle ne change aucun
+    libelle.
+
+    Ce test-ci compare l'arbre RENDU a une fixture prise a 05a3337, le commit
+    d'avant le lot de la couleur. C'est ce qui rend verifiable la phrase que
+    `console/menu.py` porte desormais : « ce module, lui, n'emet toujours
+    rien ». Sans lui, elle serait une intention de plus.
+
+    Quand une entree de menu change legitimement, cette fixture se regenere —
+    et le diff du commit montre alors exactement ce que l'utilisateur verra
+    changer, ce qui est le but.
+    """
+
+    FIXTURE = Path(__file__).parent / "fixtures" / "console" / "menus_rendus.txt"
+
+    def _rendu(self) -> str:
+        arbre = racine()
+        lignes: list[str] = []
+        for menu in _menus(arbre):
+            lignes.append(f"### {menu.titre}")
+            lignes += rendre(menu, racine=(menu is arbre))
+        return "\n".join(lignes)
+
+    def test_le_rendu_sans_peintre_est_identique_a_celui_d_avant_la_couleur(self):
+        attendu = self.FIXTURE.read_text(encoding="utf-8")
+        obtenu = self._rendu()
+        if obtenu != attendu:
+            a, o = attendu.splitlines(), obtenu.splitlines()
+            ecarts = [f"  ligne {i + 1} :\n    avant : {x!r}\n    apres : {y!r}"
+                      for i, (x, y) in enumerate(zip(a, o)) if x != y][:5]
+            if len(a) != len(o):
+                ecarts.append(f"  {len(a)} ligne(s) avant, {len(o)} apres")
+            self.fail("le rendu des menus a change depuis 05a3337 :\n"
+                      + "\n".join(ecarts)
+                      + "\n  Si c'est voulu, regenere la fixture et laisse le "
+                        "diff du commit\n  montrer ce que l'utilisateur verra "
+                        "changer.")
+
+    def test_la_fixture_n_est_pas_vide(self):
+        """Une fixture vide rendrait le test precedent toujours vert.
+
+        Elle a ete prise par un sous-arbre git sur 05a3337 ; si ce geste
+        echouait en silence, le fichier serait vide et l'egalite tiendrait
+        entre deux chaines vides le jour ou `racine()` leverait.
+        """
+        texte = self.FIXTURE.read_text(encoding="utf-8")
+        self.assertGreater(len(texte.splitlines()), 150)
+        self.assertIn("FALCON — console", texte)
+        self.assertIn("Explorer la trace dans SAP", texte)
+
+    def test_la_fixture_ne_porte_aucune_sequence(self):
+        """Ce qui a ete gele est du texte NU, et c'est la moitie du contrat."""
+        self.assertNotIn("\x1b", self.FIXTURE.read_text(encoding="utf-8"))
 
 
 class TestLeVocabulaire(unittest.TestCase):

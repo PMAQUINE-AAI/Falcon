@@ -1,0 +1,223 @@
+### FALCON — console
+
+========================================================================
+  FALCON — console
+========================================================================
+
+  Automatisation SAP Front End.
+  
+  Tout se lit sans rien changer, SAUF ces ecrans, tous derriere
+  une confirmation en toutes lettres :
+  
+    « 3 > Executer », « 3 > Reprendre », « 3 > Enchainer »
+          ECRIVENT DANS SAP.
+    « 2 > Explorer la trace » — la MEME que « 8 > Explorer »
+          AGIT DANS SAP sans y ecrire : elle rejoue une trace, donc
+          elle navigue et presse des boutons.
+
+   1  Verification et livraison
+      les suites, la preuve que les gardes protegent, le bundle
+   2  Traces du recorder
+      couverture, ecrans conjectures, et EXPLORER la trace
+   3  Pipelines et donnees
+      charger, inspecter, et EXECUTER
+   4  Journaux
+      rapport, etats des items, douteux, reexport des KO
+   5  Catalogue d'ecrans
+      variantes curees et quarantaine
+   6  Exports de table
+      conservation, delta contre le precedent, carte SE16N
+   7  Taxonomie des incidents
+      inconnus bloquants, et les entrees de registre a ecrire
+   8  Session SAP
+      diagnostic de l'ecran courant, et CARTOGRAPHIE d'une trace
+   0  Quitter
+
+### FALCON — verification et livraison
+
+========================================================================
+  FALCON — verification et livraison
+========================================================================
+
+  Les deux commandes du protocole de travail, le detail suite par suite,
+  et la construction du livrable.
+
+   1  Tout verifier
+      les deux suites, et ce qui n'a PAS ete verifie
+   2  Les gardes sont-elles protegees ?
+      retire chaque garde et exige que la suite tombe
+   3  Une suite au choix
+      detail test par test
+   4  Construire le bundle
+      falcon.pyz — un fichier unique executable (§6)
+   5  Sonder ce terminal
+      taille, ANSI, couleur : ce qui est mesure, ce qui est seulement declare
+   0  Retour
+
+### FALCON — traces du recorder
+
+========================================================================
+  FALCON — traces du recorder
+========================================================================
+
+  Les quatre premieres entrees ne font que lire le fichier .vbs ;
+  le brouillon ecrit un fichier que vous nommez, et rien d'autre.
+  
+  La cinquieme AGIT DANS SAP : elle rejoue la trace sur une
+  session ouverte pour aller observer les ecrans. Elle ne
+  SAUVEGARDE rien. C'est la meme que « 8 > Explorer la trace ».
+
+   1  Inventaire : couverture du parseur
+      ce qu'il sait lire, et ce qu'il n'en sait pas
+   2  Ecrans conjectures
+      decoupage en visites, et champs touches
+   3  Gestes significatifs
+      la trace, sans les gestes de confort
+   4  Brouillon de pipeline
+      ebauche YAML, inachevee a dessein
+   5  Explorer la trace dans SAP
+      AGIT DANS SAP — cartographie les ecrans, sans y ecrire
+   0  Retour
+
+### FALCON — pipelines et donnees
+
+========================================================================
+  FALCON — pipelines et donnees
+========================================================================
+
+  1 a 4 : relecture et composition, aucun geste dans SAP.
+  5 : repetition a blanc, s'arrete avant toute validation.
+  6 a 8 : ECRIVENT DANS SAP, apres confirmation en toutes lettres.
+
+   1  Composer depuis le classeur
+      les deux CSV exportes d'Excel deviennent un YAML
+   2  Charger et valider une pipeline
+      ce que les gardes verront, etape par etape
+   3  Relire un brouillon
+      meme chose, marqueurs toleres
+   4  Inspecter un jeu de donnees
+      dialecte, colonnes, et regroupement en items
+   5  Repetition a blanc
+      tout sauf la validation — aucune ecriture dans SAP
+   6  Executer
+      ECRIT DANS SAP. Confirmation en toutes lettres
+   7  Reprendre une execution
+      ECRIT DANS SAP. Les douteux ne sont jamais rejoues
+   8  Enchainer des pipelines
+      ECRIT DANS SAP. Un maillon interrompu arrete la chaine
+   0  Retour
+
+### FALCON — journaux
+
+========================================================================
+  FALCON — journaux
+========================================================================
+
+  Lecture seule sur le journal : il est append-only et fait foi. Rien
+  ici ne le retouche, ne le clot, ni n'arbitre un douteux.
+
+   1  Rapport de fin
+      provenance, compteurs, incidents, derogations
+   2  Etats des items
+      ok, ko, ignore, douteux, en cours — et lesquels
+   3  Les douteux a arbitrer
+      interrompus apres sauvegarde ; jamais rejoues
+   4  Reexporter les KO
+      au format d'entree, reinjectable, douteux exclus
+   0  Retour
+
+### FALCON — catalogue d'ecrans
+
+========================================================================
+  FALCON — catalogue d'ecrans
+========================================================================
+
+  Les entrees 1, 2 et 5 LISENT. La quatrieme ECRIT un CSV sur le
+  disque ; la troisieme PROMEUT une capture, et la cinquieme le
+  peut aussi. La cinquieme — le navigateur — est la seule a
+  montrer les CHAMPS d'une variante.
+  
+  Promouvoir, c'est dire avoir relu l'ecran : les deux entrees qui
+  le font se confirment par l'empreinte en toutes lettres, et le
+  navigateur ne le permet que depuis une fiche OUVERTE.
+  
+  Rien ici n'ecrit dans SAP.
+
+   1  Catalogue cure
+      ce qu'un humain a valide
+   2  Quarantaine
+      les captures pas encore relues
+   3  Promouvoir une capture
+      de la quarantaine au catalogue — apres relecture
+   4  Exporter le dictionnaire
+      le catalogue a plat, en CSV pour le classeur
+   5  Naviguer le catalogue
+      les champs, la recherche, la comparaison — et la promotion apres lecture
+   0  Retour
+
+### FALCON — exports de table
+
+========================================================================
+  FALCON — exports de table
+========================================================================
+
+  Lecture seule. Rien ici ne lance d'export ni n'ecrase un fichier conserve.
+
+   1  Lister les exports
+      ce qui est conserve, du plus ancien au plus recent
+   2  Comparer au precedent
+      ajouts, retraits, et surtout modifications
+   3  La carte SE16N
+      ce qu'elle contient, et ce qui lui manque
+   0  Retour
+
+### FALCON — taxonomie des incidents
+
+========================================================================
+  FALCON — taxonomie des incidents
+========================================================================
+
+  Un incident que rien n'apparie est INCONNU, donc BLOQUANT, et il
+  laisse un dump a cote du journal. C'est de ce dump que sort
+  l'entree de registre qui le classera la prochaine fois.
+  
+  Rien ici n'ecrit dans SAP.
+
+   1  Recolter les incidents inconnus
+      ce qui a bloque, et sur quelle signature
+   2  Proposer la surcouche a completer
+      le YAML a relire, completer, puis joindre a l'execution
+   3  Voir le registre en vigueur
+      ce qui est deja classe, livre et surcouche
+   0  Retour
+
+### FALCON — session SAP
+
+========================================================================
+  FALCON — session SAP
+========================================================================
+
+  Se greffe sur une session que vous avez ouverte et sur laquelle
+  vous vous etes authentifie vous-meme. Aucun mot de passe ne
+  transite par FALCON.
+  
+  AUCUNE entree d'ici ne SAUVEGARDE dans SAP. Les deux premieres
+  ne font que REGARDER. La troisieme AGIT DANS SAP : elle rejoue
+  une trace, donc elle SAISIT des valeurs dans les champs — sans
+  jamais les valider — navigue, presse des boutons et lance des
+  selections qui peuvent tourner longtemps. Elle demande le nom du
+  fichier de trace en toutes lettres avant de partir.
+  
+  Le dry-run refuse les deux gestes de sauvegarde qu'il sait
+  reconnaitre. Une sauvegarde par un chemin de MENU passerait au
+  travers : c'est une limite connue, ecrite dans le controleur.
+  
+  Exige Windows, pywin32, et le scripting autorise des deux cotes.
+
+   1  Diagnostiquer l'ecran courant
+      identite, fenetres, statut, releve des champs
+   2  Diagnostiquer et verser en quarantaine
+      le releve devient une capture a relire
+   3  Explorer la trace dans SAP
+      AGIT DANS SAP — cartographie les ecrans, sans y ecrire
+   0  Retour

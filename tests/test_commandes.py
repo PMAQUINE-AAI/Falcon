@@ -233,5 +233,90 @@ class TestLigneDeCommande(unittest.TestCase):
         self.assertIsNotNone(aide)
 
 
+class TestLeBitReposeAvantDePeindre(unittest.TestCase):
+    """Le seul chemin ou la garde n°9 est AVEUGLE, et ce qui le bouche.
+
+    La garde n°9 refuse de peindre au-dela de ce qui a ete PROUVE. Elle ne
+    regarde que les `Capacites`. Or `sonder` RESTAURE le mode qu'elle a
+    trouve — elle mesure, elle ne regle pas — donc `ansi=True` veut dire
+    « ce terminal SAIT », pas « son handle interprete les sequences MAINTENANT ».
+
+    Entre la mesure et le premier caractere peint, l'etat du handle a change.
+    Des capacites exactes, une garde qui ne mord pas, un terminal illisible, et
+    aucune exception : le defaut directeur du depot, par le seul chemin ou rien
+    ne le voit. `_capacites_a_peindre` est ce qui le ferme.
+    """
+
+    def _systeme(self, *, repose: bool):
+        from falcon.toile.capacites import Capacites
+
+        journal = []
+        capacites = Capacites(flux="stdout", interactif=True, ansi=True,
+                              couleur=True, encodage="utf-8")
+
+        def sonder(systeme):
+            journal.append("sonder")
+            return capacites
+
+        def reposer(systeme):
+            journal.append("reposer")
+            return repose
+
+        return journal, sonder, reposer
+
+    def _peindre(self, *, repose: bool):
+        """Rejoue `_capacites_a_peindre` avec la sonde et le repose injectes."""
+        import falcon.toile as toile
+        from falcon.commandes.principal import _capacites_a_peindre
+
+        journal, sonder, reposer = self._systeme(repose=repose)
+        vrais = (toile.sonder, toile.reposer_le_bit, toile.systeme_reel)
+        toile.sonder, toile.reposer_le_bit = sonder, reposer
+        toile.systeme_reel = lambda flux, nom: object()
+        try:
+            return journal, _capacites_a_peindre(io.StringIO(), "stdout")
+        finally:
+            toile.sonder, toile.reposer_le_bit, toile.systeme_reel = vrais
+
+    def test_le_bit_est_repose_avant_que_la_console_peigne(self):
+        """CONTROLE NEGATIF : retirer l'appel a `reposer_le_bit` dans
+        `_capacites_a_peindre` fait tomber ce test. La console sondait
+        `stdout`, en tirait un `PeintreColore`, et n'avait jamais repose le
+        bit : sur un conhost de Windows 10 — la cible, ou VT est ETEINT par
+        defaut — chaque ligne du navigateur serait sortie en `<-[1m`."""
+        journal, capacites = self._peindre(repose=True)
+        self.assertEqual(journal, ["sonder", "reposer"])
+        self.assertTrue(capacites.ansi)
+        self.assertTrue(capacites.couleur)
+
+    def test_un_bit_qu_on_n_a_pas_pu_reposer_se_paie_en_texte_nu(self):
+        """Et le motif le dit : « SAIT » et « interprete maintenant » ne sont
+        pas la meme chose, et c'est la seconde qui decide de peindre."""
+        _, capacites = self._peindre(repose=False)
+        self.assertFalse(capacites.ansi)
+        self.assertFalse(capacites.couleur)
+        self.assertTrue([m for m in capacites.motifs if "repose" in m])
+
+    def test_la_console_passe_par_capacites_a_peindre(self):
+        """Garde-fou sur l'AST : `_console` ne doit pas rappeler `sonder`
+        directement, ce qui reintroduirait le trou sans changer une seule
+        assertion des 166 tests de ce fichier et de `test_console`."""
+        import ast
+        import inspect
+
+        from falcon.commandes import principal
+
+        arbre = ast.parse(inspect.getsource(principal))
+        for noeud in ast.walk(arbre):
+            if not isinstance(noeud, ast.FunctionDef) or noeud.name != "_console":
+                continue
+            appels = {getattr(a.func, "id", None) for a in ast.walk(noeud)
+                      if isinstance(a, ast.Call)}
+            self.assertIn("_capacites_a_peindre", appels)
+            self.assertNotIn("sonder", appels)
+            return
+        self.fail("`_console` est introuvable : le garde-fou ne garde rien")
+
+
 if __name__ == "__main__":
     unittest.main()

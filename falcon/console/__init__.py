@@ -1,7 +1,16 @@
 """Console interactive : `python -m falcon console`.
 
 Menus numerotes sur un flux texte, sans `curses` et sans dependance : la
-machine cible est Windows, ou `curses` n'est pas fourni avec CPython.
+machine cible est Windows, ou `curses` n'est pas fourni avec CPython. Ce refus
+n'est plus une prose : `tests/test_frontieres.py` porte `MODULES_INTERDITS`, et
+c'est ce qui compte, parce que la CI est Linux — OU CURSES EXISTE. Une console
+`curses` aurait passe la suite au vert et serait morte a l'import sur la seule
+machine ou elle sert.
+
+Les menus eux-memes n'emettent aucune sequence : `rendre` produit des lignes
+nues, gelees par une fixture. La couleur, quand le terminal l'a PROUVEE, est
+posee par `falcon/toile/peintre.py` par-dessus ces lignes-la, sans en changer
+ni le nombre ni le contenu.
 
 **Sept domaines, dont un qui ecrit.** La console a ete ecrite au lot 14,
 avant le moteur, et n'a longtemps donne acces qu'a ce qui ne touchait a rien.

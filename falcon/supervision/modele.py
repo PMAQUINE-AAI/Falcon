@@ -8,10 +8,16 @@ choix du flux et du redessin appartient a `terminal.py`.
 C'est ce qui rend le lot testable sans terminal et sans capture : les tests
 comparent des chaines, pas des octets sortis d'un `tty`.
 
-**Aucune sequence ANSI, et un rendu encodable en cp1252** — memes contraintes
-que la console (decision n°15), et pour la meme raison : la machine ou ce
-reporting servira est une machine Windows, et un decor qui ne s'encode pas y
-tue le programme qu'il decore.
+**Un rendu encodable en cp1252, et aucune sequence emise ICI** — memes
+contraintes que la console, et pour la meme raison : la machine ou ce reporting
+servira est une machine Windows, et un decor qui ne s'encode pas y tue le
+programme qu'il decore.
+
+Que ce module n'emette aucune sequence ne dit plus rien du depot entier : la
+couleur y est desormais permise la ou elle a ete PROUVEE (voir
+`falcon/toile/`). Elle ne l'est pas ici parce que `ligne` rend une CHAINE que
+des tests comparent caractere par caractere, et qu'un module qui ne choisit ni
+son flux ni son terminal n'a rien lu qui lui permette de decider.
 
 **L'ETA est une moyenne GLISSANTE**, pas une moyenne generale. Un lot dont les
 premiers items sont rapides et les suivants lents donnerait, avec une moyenne
