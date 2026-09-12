@@ -59,6 +59,7 @@ lecture seule.
   composer        les CSV du classeur -> une pipeline YAML
   promouvoir      verse une capture de quarantaine au catalogue
   recolter        les entrees de registre a ecrire, d'apres les dumps
+  sonde           ce que CE terminal sait faire — mesure, jamais supposition
 
 Pour tout faire depuis un seul endroit :  python -m falcon console
 """
@@ -213,6 +214,16 @@ def analyseur() -> argparse.ArgumentParser:
     exploration.add_argument("--connexion", type=int, default=0)
     exploration.add_argument("--session", type=int, default=0)
 
+    sous.add_parser(
+        "sonde", help="ce que CE terminal sait faire (LECTURE SEULE)",
+        description="Mesure, dans CE processus et sur CE terminal, la taille "
+                    "de la fenetre et la capacite a interpreter les sequences "
+                    "ANSI. Chaque « oui » est un appel systeme qui a reussi ; "
+                    "chaque « non » nomme l'appel qui a refuse. C'est la "
+                    "commande a lancer EN PREMIER sur une machine neuve, et "
+                    "celle qu'on demande par telephone quand un affichage est "
+                    "illisible. N'ecrit rien, ne se connecte a rien.")
+
     return principal
 
 
@@ -357,6 +368,30 @@ def _diagnostiquer(options: argparse.Namespace) -> int:
     return 0
 
 
+def _sonde(options: argparse.Namespace) -> int:
+    """Le releve des deux flux, imprime sur la sortie standard.
+
+    Les DEUX, et pas seulement celui-ci : sur Windows, le bit VT est un mode
+    par HANDLE, donc une capacite mesuree sur `stdout` ne dit rien de `stderr`.
+    Le navigateur ecrira sur l'un et le direct sur l'autre ; quelqu'un qui
+    tape `falcon explorer ... 2> journal.log` doit pouvoir lire ici pourquoi
+    son journal reste propre alors que son ecran est en couleur.
+
+    Tout sort sur la SORTIE standard, y compris le releve de l'erreur standard.
+    Ecrire sur `stderr` pour parler de `stderr` melangerait la mesure et son
+    objet : `falcon sonde > sonde.txt` doit donner un fichier complet, c'est
+    tout l'interet d'une commande qu'on demande a distance.
+    """
+    from falcon.toile import rendre_sonde, sonder, systeme_reel
+
+    releves = tuple(sonder(systeme_reel(flux, nom))
+                    for flux, nom in ((sys.stdout, "stdout"),
+                                      (sys.stderr, "stderr")))
+    for ligne in rendre_sonde(releves):
+        print(ligne)
+    return 0
+
+
 def _console(options: argparse.Namespace) -> int:
     from falcon.console import Console, parcourir, racine
 
@@ -463,7 +498,7 @@ COMMANDES = {"console": _console, "diagnostiquer": _diagnostiquer,
              "inventaire": _inventaire, "brouillon": _brouillon,
              "dictionnaire": _dictionnaire, "recolter": _recolter,
              "composer": _composer, "promouvoir": _promouvoir,
-             "explorer": _explorer}
+             "explorer": _explorer, "sonde": _sonde}
 
 
 def main(arguments: list[str] | None = None) -> int:

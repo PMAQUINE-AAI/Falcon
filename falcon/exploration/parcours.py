@@ -69,9 +69,10 @@ ici ne l'a mesure. A lancer sur un mandant de qualite avant la production.
 
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from falcon.catalogue import ClefVariante, Depot, Variante, variante_de
 from falcon.controleur import Constat, Contrat, Derogation, DriverGarde
@@ -85,9 +86,16 @@ from falcon.trace import Geste, Trace
 from falcon.trace.modele import FENETRE_RACINE
 from falcon.trace.esquisse import code_transaction, vise_le_champ_de_commande
 
+from . import evenements
+from .evenements import Evenement
 from .gestes import ARGUMENT_REFUSE, ECARTE_CONFORT, TRADUIT, Traduction
 from .gestes import SANS_COUTURE as GENRE_SANS_COUTURE
 from .gestes import traduire
+
+#: Ce qu'un observateur recoit. Il ne rend rien : le parcours ne lit pas ce
+#: qu'un afficheur lui repondrait, et un afficheur qui pourrait l'arreter
+#: serait un septieme refus non declare.
+Observateur = Callable[[Evenement], None]
 
 if TYPE_CHECKING:                   # annotation seule : voir test_frontieres
     from falcon.couture import Driver
@@ -242,6 +250,16 @@ class Exploration:
 
     actions_envoyees: int = 0
     releves: int = 0
+
+    #: Combien de fois l'observateur du direct a leve, et combien de faits
+    #: n'ont donc jamais atteint l'ecran.
+    #:
+    #: Le compte est rendu au lieu d'etre avale en silence : un afficheur
+    #: muet pour toujours serait un second mensonge, plus discret que le
+    #: premier — l'utilisateur voit le direct se figer et conclut que SAP est
+    #: bloque. « Le direct s'est tu » et « il n'y avait plus rien a montrer »
+    #: ne se distinguent pas autrement.
+    pannes_d_affichage: int = 0
 
     #: Systeme, mandant et langue LUS sur l'ecran de depart.
     #:
@@ -515,7 +533,8 @@ class _Parcours:
     def __init__(self, trace: Trace, brut: "Driver", *,
                  catalogue: str | Path, plafond_gestes: int,
                  plafond_ecrans: int, registre: Registre,
-                 horloge: Horloge = maintenant):
+                 horloge: Horloge = maintenant,
+                 observateur: Observateur | None = None):
         self.trace = trace
         self.gestes = trace.gestes
         self.plafond_gestes = plafond_gestes
@@ -564,6 +583,79 @@ class _Parcours:
         #: Une action ACTIVANTE la remet a "" : elle aurait reussi sur
         #: n'importe quelle boite, donc elle n'identifie rien.
         self.derniere_cible = ""
+
+        #: A qui l'on raconte, et ce que cela a coute quand il a leve.
+        self.observateur = observateur
+        self.pannes_d_affichage = 0
+
+        #: L'origine du temps ECOULE. `time.monotonic` et pas `self.horloge` :
+        #: celle-ci nomme les dumps et date les variantes, et les tests la
+        #: figent sur une suite d'instants. La lire depuis un affichage
+        #: consommerait ses instants et decalerait les dates du catalogue —
+        #: un afficheur qui change ce qui est ecrit sur le disque.
+        self.depart_monotone = time.monotonic()
+
+    # -- ce que le parcours raconte ---------------------------------------
+
+    def chrono(self) -> int:
+        """Millisecondes ECOULEES depuis le debut du parcours.
+
+        Une mesure, jamais une prevision. Un ETA se calculerait
+        « moyenne x restants », et sur la trace de reference 46 des 90 gestes
+        partent EN BLOC quand une branche tombe : il serait faux d'un facteur
+        cinq et s'effondrerait en un pas. Un ETA faux est pire qu'un ETA
+        absent, parce qu'on planifie dessus.
+        """
+        return int((time.monotonic() - self.depart_monotone) * 1000)
+
+    def emettre(self, genre: str, **champs: Any) -> None:
+        """Pose un fait devant l'observateur, et protege le parcours de lui.
+
+        **La CONSTRUCTION de l'evenement est a l'interieur du `try`, pas au
+        site d'appel.** C'est le point le plus facile a rater : `executer` est
+        appelee depuis le corps du `try` de `_parcourir`, donc un `repr()` qui
+        leve pendant la mise en forme d'un argument y serait attrape par
+        `except Refus` ou `except Echec`, converti en `Branche` dont le motif
+        ACCUSE SAP, et `_dump_si_inconnu` ecrirait sur le disque le dump d'un
+        incident qui n'a jamais eu lieu. Le compte rendu annoncerait une panne
+        de SAP causee par une division par zero dans un afficheur. Aucune
+        exception, un resultat plausible et FAUX : le defaut directeur du
+        depot, introduit par une barre de progression.
+
+        Le placement des emissions hors de tout `try` est une SECONDE mesure,
+        independante, et non un substitut : un test AST ne voit pas a travers
+        un appel de methode, donc il ne dirait rien de `executer`. Les deux
+        ensemble, et aucune des deux seule.
+
+        **On avale, mais on COMPTE.** Un afficheur muet pour toujours serait un
+        second mensonge, plus discret : l'utilisateur voit le direct se figer et
+        conclut que SAP est bloque. `pannes_d_affichage` remonte dans
+        l'`Exploration` et `rapport.rendre` pose une ligne quand il est non nul.
+        « Le direct s'est tu » et « il n'y avait plus rien a montrer » ne se
+        distinguent pas autrement.
+
+        `KeyboardInterrupt` et `SystemExit` ne sont PAS avales, et ils ne sont
+        pas non plus « revus au tour suivant » : un KeyboardInterrupt attrape
+        est consomme, le handler a deja tourne, il n'en reste rien. On le
+        relaie. Un Ctrl-C tape pendant une emission doit arreter le parcours,
+        pas disparaitre pendant que FALCON continue de presser des boutons.
+        """
+        if self.observateur is None:
+            return
+        try:
+            evenement = Evenement(genre=genre, monotone_ms=self.chrono(),
+                                  **champs)
+            self.observateur(evenement)
+        except (KeyboardInterrupt, SystemExit):
+            # Redondante AUJOURD'HUI — `except Exception` epargne deja les
+            # `BaseException` — et gardee pour ce qu'elle dit : l'attrape-tout
+            # ci-dessous ne doit jamais etre elargi a `BaseException` « pour
+            # etre sur ». `test_un_ctrl_c_pendant_une_emission_arrete_le_
+            # parcours` est ce qui l'empeche ; cette clause est ce qui
+            # l'explique a qui relit.
+            raise
+        except Exception:
+            self.pannes_d_affichage += 1
 
     # -- releve ------------------------------------------------------------
 
@@ -617,14 +709,28 @@ class _Parcours:
             if (self.depot.pour_edition(clef) is not None
                     or self.quarantaine.pour_edition(clef) is not None):
                 self.deja_connues.append(clef)
+                self.emettre(evenements.ECRAN_CONNU, clef=str(clef),
+                             fenetre=fenetre.id, titre=variante.titre,
+                             champs=len(variante.champs),
+                             versees=len(self.versees),
+                             plafond_ecrans=self.plafond_ecrans)
                 continue
             if len(self.versees) >= self.plafond_ecrans:
                 # AVANT le versement, jamais apres : un plafond verifie apres
                 # coup laisse passer un ecran de plus que celui annonce.
                 self.plafond_ecrans_atteint = True
+                self.emettre(evenements.PLAFOND, motif="ecrans",
+                             clef=str(clef), fenetre=fenetre.id,
+                             versees=len(self.versees),
+                             plafond_ecrans=self.plafond_ecrans)
                 return False
             self.depot.mettre_en_quarantaine(variante)
             self.versees.append(clef)
+            self.emettre(evenements.ECRAN_VERSE, clef=str(clef),
+                         fenetre=fenetre.id, titre=variante.titre,
+                         champs=len(variante.champs),
+                         versees=len(self.versees),
+                         plafond_ecrans=self.plafond_ecrans)
         return True
 
     # -- incidents ---------------------------------------------------------
@@ -734,7 +840,8 @@ def explorer(trace: Trace,
              plafond_gestes: int,
              plafond_ecrans: int,
              registre: Registre | None = None,
-             horloge: Horloge = maintenant) -> Exploration:
+             horloge: Horloge = maintenant,
+             observateur: Observateur | None = None) -> Exploration:
     """Rejoue une trace en observation et alimente la quarantaine du catalogue.
 
     `brut` est un driver NU : il est enveloppe ici dans un `DriverGarde` fige
@@ -749,6 +856,14 @@ def explorer(trace: Trace,
     combien de gestes n'ont pas ete explores. Un rapport qui annonce « 35
     ecrans » apres avoir ete coupe a 20 serait exactement le resultat plausible
     et faux que ce depot traque.
+
+    `observateur` recoit un `Evenement` par fait constate, pendant que le
+    parcours court. Il est FACULTATIF et le defaut est `None` : sans lui pas
+    un octet ne change, et c'est ainsi qu'on peut affirmer qu'un afficheur
+    n'entre pour rien dans ce qui est fait a SAP. Ce qu'il leve est avale et
+    COMPTE — voir `_Parcours.emettre` — parce qu'une barre de progression n'a
+    pas a fabriquer une branche, et un direct muet n'a pas a passer pour un
+    SAP bloque.
     """
     if plafond_gestes <= 0:
         raise ExplorationImpossible(
@@ -770,11 +885,31 @@ def explorer(trace: Trace,
         trace, brut, catalogue=catalogue, plafond_gestes=plafond_gestes,
         plafond_ecrans=plafond_ecrans,
         registre=registre if registre is not None else Registre.charger(),
-        horloge=horloge)
+        horloge=horloge, observateur=observateur)
 
     depart = parcours.garde.screen()
+    parcours.emettre(
+        evenements.DEPART, source=trace.source,
+        cible=str(parcours.catalogue), total=len(parcours.gestes),
+        transaction=depart.transaction, systeme=depart.systeme,
+        mandant=depart.mandant, langue=depart.langue,
+        plafond_gestes=plafond_gestes, plafond_ecrans=plafond_ecrans)
+
     etat, raison, index = _parcourir(parcours)
     non_explores = max(0, len(parcours.gestes) - index)
+
+    # La fin est emise ICI et nulle part ailleurs. `_parcourir` a sept
+    # sorties de boucle ; une emission posee sur celle qui termine la trace
+    # ne dirait rien des six autres, et un direct qui se tait sur six fins
+    # sur sept laisserait croire a un parcours encore en cours.
+    #
+    # Avant de construire l'`Exploration`, pour que `pannes_d_affichage` y
+    # porte aussi la panne que cette derniere emission aurait causee.
+    parcours.emettre(
+        evenements.FIN, etat=etat, raison=raison, index=index,
+        total=len(parcours.gestes), actions=parcours.actions,
+        plafond_gestes=plafond_gestes, versees=len(parcours.versees),
+        plafond_ecrans=plafond_ecrans, sautes=parcours.sautes)
 
     return Exploration(
         trace=trace.source, etat=etat, catalogue=str(parcours.catalogue),
@@ -798,6 +933,7 @@ def explorer(trace: Trace,
         gestes_non_explores=non_explores,
         actions_envoyees=parcours.actions,
         releves=parcours.releves,
+        pannes_d_affichage=parcours.pannes_d_affichage,
         systeme=depart.systeme, mandant=depart.mandant, langue=depart.langue,
     )
 
@@ -818,14 +954,30 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
     total = len(p.gestes)
     while index < total:
         if p.actions >= p.plafond_gestes:
-            return PLAFOND, _plafond_gestes(p, index), index
+            raison = _plafond_gestes(p, index)
+            p.emettre(evenements.PLAFOND, motif="gestes", raison=raison,
+                      index=index, total=total, actions=p.actions,
+                      plafond_gestes=p.plafond_gestes,
+                      versees=len(p.versees),
+                      plafond_ecrans=p.plafond_ecrans)
+            return PLAFOND, raison, index
 
         geste = p.gestes[index]
+        # Le geste est ABORDE, et rien de plus : ni joue, ni refuse. Le rang
+        # est une POSITION dans le fichier, jamais un avancement.
+        p.emettre(evenements.GESTE, ordre=geste.ordre, ligne=geste.ligne,
+                  index=index, total=total, verbe=geste.verbe,
+                  cible=geste.cible, source=geste.texte_source,
+                  actions=p.actions, plafond_gestes=p.plafond_gestes,
+                  versees=len(p.versees), plafond_ecrans=p.plafond_ecrans)
 
         # -- une Entree deja envoyee par une reprise -----------------------
         if p.validation_consommee == index:
             p.validation_consommee = None
             p.validations += 1
+            p.emettre(evenements.VALIDATION, ordre=geste.ordre,
+                      ligne=geste.ligne, verbe=geste.verbe,
+                      cible=geste.cible, index=index, total=total)
             p.ordres_atteints.append(geste.ordre)
             index += 1
             continue
@@ -856,6 +1008,10 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         traduction = traduire(geste)
         if traduction.genre == ECARTE_CONFORT:
             p.confort += 1
+            p.emettre(evenements.CONFORT, ordre=geste.ordre,
+                      ligne=geste.ligne, verbe=geste.verbe,
+                      cible=geste.cible, motif=traduction.raison,
+                      index=index, total=total)
             p.ordres_atteints.append(geste.ordre)
             index += 1
             continue
@@ -895,12 +1051,18 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             p.sauvegardes.append(SauvegardeRefusee(
                 ordre=geste.ordre, ligne=geste.ligne, verbe=geste.verbe,
                 cible=geste.cible, texte_source=geste.texte_source))
+            # Le motif est calcule UNE fois : il porte `refus`, dont la mise
+            # en forme est le seul travail non trivial de ce bloc, et le faire
+            # deux fois serait deux occasions de lever au meme endroit.
+            motif = (f"la trace sauvegarde ici ({refus}). Une cartographie "
+                     f"n'ecrit pas, et la suite de cette branche se "
+                     f"rejouerait sur l'ecran d'AVANT la sauvegarde")
+            p.emettre(evenements.SAUVEGARDE_REFUSEE, ordre=geste.ordre,
+                      ligne=geste.ligne, verbe=geste.verbe,
+                      cible=geste.cible, source=geste.texte_source,
+                      index=index, total=total)
             p.interrompus += 1
-            suite = _abandonner(
-                p, geste, SAUVEGARDE,
-                f"la trace sauvegarde ici ({refus}). Une cartographie "
-                f"n'ecrit pas, et la suite de cette branche se rejouerait sur "
-                f"l'ecran d'AVANT la sauvegarde", index)
+            suite = _abandonner(p, geste, SAUVEGARDE, motif, index)
             if suite < 0:
                 return INTERROMPUE, _sans_point_de_reprise(p, geste), total
             index = suite
@@ -932,6 +1094,11 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             continue
 
         p.rejoues += 1
+        p.emettre(evenements.ENVOYE, ordre=geste.ordre, ligne=geste.ligne,
+                  verbe=geste.verbe, cible=geste.cible,
+                  appel=traduction.appel.methode, index=index, total=total,
+                  actions=p.actions, plafond_gestes=p.plafond_gestes,
+                  versees=len(p.versees), plafond_ecrans=p.plafond_ecrans)
         p.ordres_atteints.append(geste.ordre)
         if not p.relever():
             return PLAFOND, _plafond_ecrans(p, index + 1), index + 1
@@ -965,6 +1132,10 @@ def _tenter_reprise(p: _Parcours, index: int) -> int | None:
     p.gestes_de_reprise += 1
     p.ordres_atteints.append(geste.ordre)
     p.reprises.append(reprise)
+    p.emettre(evenements.REPRISE, ordre=reprise.ordre, ligne=reprise.ligne,
+              verbe=geste.verbe, reprise=reprise.demandee,
+              transaction=reprise.obtenue, acceptee=reprise.acceptee,
+              index=index, total=len(p.gestes))
     if not reprise.acceptee:
         p.branches.append(_branche(
             geste, REPRISE_REFUSEE,
@@ -992,22 +1163,71 @@ def _abandonner(p: _Parcours, geste: Geste, categorie: str, motif: str,
 
 
 def _sauter_vers_reprise(p: _Parcours, depart: int) -> int:
-    """Avance jusqu'au prochain point de reprise, en comptant les sautes."""
+    """Avance jusqu'au prochain point de reprise, en comptant les sautes.
+
+    **Les deux emissions se posent APRES la reecriture de `p.branches[-1]`**,
+    et cette ligne-la est la seule qui renseigne `reprise`. Emises avant,
+    elles annonceraient « reprise visee (aucune) » sur une branche qui
+    reprend tres bien : aucune exception, un ecran plausible et FAUX. C'est
+    la classe de defaut que ni l'enveloppe d'`emettre` ni la garde AST ne
+    voient — seul le test qui compare le flux entier a une sequence attendue
+    la voit.
+
+    Tout appelant a deja pose sa branche : `_abandonner` l'ajoute avant
+    d'appeler, et `_tenter_reprise` aussi sur une reprise refusee. C'est ce
+    qui permet de raconter ici la branche COMPLETE, sa suite comprise.
+    """
     cible = p._prochaine_reprise(depart)
     if cible is None:
+        # Rien n'est raconte ici : `_sans_point_de_reprise` va l'etre, et
+        # c'est lui qui connait le nombre de gestes emportes. Le raconter
+        # aux deux endroits doublerait la branche dans le flux.
         return -1
     p.sautes += cible - depart
     p.ordres_sautes.extend(g.ordre for g in p.gestes[depart:cible])
     p.branches[-1] = Branche(
         **{**asdict(p.branches[-1]),
            "reprise": _code_de_reprise(p.gestes[cible])})
+    _raconter_la_branche(p)
+    p.emettre(evenements.SAUT, sautes=cible - depart, index=cible,
+              total=len(p.gestes), reprise=p.branches[-1].reprise,
+              ordre=p.branches[-1].ordre)
     return cible
 
 
+def _raconter_la_branche(p: _Parcours) -> None:
+    """Emet la derniere branche posee, telle qu'elle est a cet instant.
+
+    Une fonction plutot que deux appels recopies : les deux chemins de saut
+    doivent raconter la MEME chose, et deux copies auraient diverge au premier
+    champ ajoute. Elle ne lit que `p.branches[-1]`, jamais la liste : un
+    evenement qui transporterait `p.branches` verrait sa branche changer dans
+    le dos de celui qui la tient.
+    """
+    if not p.branches:
+        return
+    branche = p.branches[-1]
+    p.emettre(evenements.BRANCHE, ordre=branche.ordre, ligne=branche.ligne,
+              verbe=branche.verbe, categorie=branche.categorie,
+              motif=branche.motif, reprise=branche.reprise,
+              total=len(p.gestes))
+
+
 def _sans_point_de_reprise(p: _Parcours, geste: Geste) -> str:
+    """Le SECOND chemin de saut, et il a l'air d'un constructeur de message.
+
+    Il n'en est pas un : il MUTE `p.sautes` et `p.ordres_sautes`. Mesure sur
+    la trace de reference, les 46 gestes sautes se repartissent en 38 par
+    `_sauter_vers_reprise` et **8 par ici**. Un compteur reconstruit depuis le
+    flux qui oublierait ce point tomberait a 38 et affirmerait « 8 gestes non
+    explores » sur un parcours qui n'en a aucun.
+    """
     restants = len(p.gestes) - geste.ordre
     p.sautes += restants
     p.ordres_sautes.extend(g.ordre for g in p.gestes[geste.ordre:])
+    _raconter_la_branche(p)
+    p.emettre(evenements.SAUT, sautes=restants, index=len(p.gestes),
+              total=len(p.gestes), ordre=geste.ordre)
     return (f"aucun code transaction apres le geste {geste.ordre:03d} : la "
             f"trace ne redonne plus de point d'entree verifiable, et repartir "
             f"sans en taper un reviendrait a deviner ou l'on est. "

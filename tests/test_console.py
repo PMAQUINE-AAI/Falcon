@@ -528,6 +528,52 @@ class TestVerification(unittest.TestCase):
         self.assertIn("pywin32", journal.texte)
         self.assertIn("pip install pywin32", journal.texte)
 
+    def test_la_sonde_du_terminal_est_INJECTEE_et_son_releve_affiche(self):
+        """L'ecran montre la mesure qu'on lui donne, et n'en fabrique aucune.
+
+        C'est la seule branche de la console qui interroge la machine plutot
+        que le code. La sonde reelle est le DEFAUT — « le defaut est le vrai »,
+        comme le lanceur et l'ouverture de session — mais elle passe par
+        `Environnement`, donc une suite peut lui jouer un terminal qui
+        n'existe pas. Sans cette injection, ce test dependrait de la facon dont
+        on lance la suite : vert dans un tube, autre chose depuis un vrai
+        terminal.
+        """
+        from falcon.toile import Capacites
+
+        releve = Capacites(flux="stdout", interactif=True, colonnes=137,
+                           lignes=44, source_taille="mesuree", ansi=True,
+                           couleur=True, encodage="utf-8",
+                           motifs=("bit VT pose, relu, mode restaure",))
+        env = Environnement(lancer=lambda a: (0, "OK"),
+                            sonde=lambda: (releve,))
+        journal = Journal(*vers(racine(), "Verification", "Sonder"),
+                          "", "0", "0")
+        parcourir(racine(env), journal.console())
+
+        self.assertIn("137 x 44", journal.texte)
+        self.assertIn("mesuree", journal.texte)
+        self.assertIn("COULEUR", journal.texte)
+        # Le motif : sans lui, « ANSI oui » ne se verifie pas a distance.
+        self.assertIn("bit VT pose, relu, mode restaure", journal.texte)
+        # Et l'ecran renvoie vers la commande qu'on demande par telephone.
+        self.assertIn("python -m falcon sonde", journal.texte)
+
+    def test_l_ecran_de_sonde_n_emet_aucune_sequence(self):
+        """On lance `sonde` PRECISEMENT quand on soupconne le terminal de ne
+        rien interpreter. Une page en couleur y serait le pire des cas."""
+        from falcon.toile import Capacites
+
+        prouve = Capacites(flux="stdout", interactif=True, colonnes=137,
+                           lignes=44, source_taille="mesuree", ansi=True,
+                           couleur=True)
+        env = Environnement(lancer=lambda a: (0, "OK"),
+                            sonde=lambda: (prouve,))
+        journal = Journal(*vers(racine(), "Verification", "Sonder"),
+                          "", "0", "0")
+        parcourir(racine(env), journal.console())
+        self.assertNotIn("\x1b", journal.texte)
+
     def test_un_echec_est_annonce_comme_tel(self):
         env = Environnement(lancer=lambda a: (1, "FAILED (failures=1)"))
         journal = Journal(*vers(racine(), "Verification", "Tout verifier"),
@@ -2157,6 +2203,7 @@ class TestLeVocabulaire(unittest.TestCase):
         "inventaire": "inventaire",
         "promouvoir": "promouv",
         "recolter": "recolt",
+        "sonde": "sonde",
     }
 
     #: Commandes dont l'absence de la console est DELIBEREE, avec le motif.

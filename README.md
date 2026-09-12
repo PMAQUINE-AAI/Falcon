@@ -68,8 +68,9 @@ Les modules livrés :
 | `falcon/trace/` | lecture des enregistrements du SAP GUI Recorder, couverture, esquisses d'écran, brouillon de pipeline |
 | `falcon/exploration/` | cartographie (§4.3, étape 2) : traduction d'un geste de trace en appel de couture, rejeu en observation sous dry-run, relevé de chaque écran traversé, compte rendu |
 | `falcon/tableur/` | les trois CSV du classeur → une pipeline YAML, relue avant d'être écrite |
-| `falcon/commandes/` | ligne de commande : `console`, `explorer`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter` — seule `console` peut **écrire** dans SAP, et `explorer` y **agit** sans y écrire |
+| `falcon/commandes/` | ligne de commande : `console`, `explorer`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter`, `sonde` — seule `console` peut **écrire** dans SAP, et `explorer` y **agit** sans y écrire |
 | `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, taxonomie, diagnostic |
+| `falcon/toile/` | ce que le terminal sait faire, **mesuré** et jamais supposé : taille de fenêtre, bit VT relu, et le seul module du dépôt où une séquence ANSI s'écrit |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,
@@ -137,7 +138,22 @@ python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
 python -m falcon dictionnaire <dossier-du-catalogue> -o dictionnaire.csv
 python -m falcon explorer trace.vbs --catalogue <dossier-du-catalogue> \
     --plafond-gestes 200 --plafond-ecrans 50
+python -m falcon sonde
 ```
+
+`sonde` est la première chose à lancer sur une machine neuve, et celle qu'on
+demande par téléphone quand un affichage est illisible. Elle mesure — dans ce
+processus-ci, sur ces flux-là — la taille de la fenêtre et la capacité à
+interpréter les séquences ANSI. Chaque « oui » est un appel système qui a
+réussi ; chaque « non » nomme l'appel qui a refusé. Rien n'y est déduit d'un
+nom de variable ni d'un numéro de version.
+
+Trois choses qu'elle ne peut pas prouver, et qui sont écrites dans
+`falcon/toile/__init__.py` plutôt que tues : que `SetConsoleMode` se comporte
+comme notre modèle de Windows le suppose (la CI est Linux), que la police de
+la console ait le glyphe de ce qu'on affiche (aucune API ne le signale), et
+que `conhost` n'ajoute pas une rangée fantôme sur une ligne pleine — d'où la
+colonne de marge, qui coûte zéro.
 
 `dictionnaire` met le catalogue **à plat**, une ligne par champ, pour qu'un
 tableur puisse proposer les écrans et les champs disponibles — ce que la spec

@@ -95,6 +95,24 @@ def _connecter() -> Any:
     return connecter()
 
 
+def _sonder_les_flux() -> tuple[Any, ...]:
+    """Mesure les DEUX flux de sortie, ici et maintenant.
+
+    Les deux, parce que sur Windows la capacite a interpreter une sequence est
+    un mode par HANDLE : ce qui est vrai de la sortie standard ne dit rien de
+    l'erreur standard. Le prix d'une seconde mesure est deux appels systeme.
+
+    C'est le seul endroit de la console qui touche le terminal, et il est
+    injecte comme le lanceur de sous-processus et l'ouverture de session : ce
+    que l'ecran AFFICHE doit etre la vraie mesure, et ce qu'une suite lui joue
+    doit pouvoir etre un terminal qui n'existe pas.
+    """
+    from falcon.toile import sonder, systeme_reel
+    return tuple(sonder(systeme_reel(flux, nom))
+                 for flux, nom in ((sys.stdout, "stdout"),
+                                   (sys.stderr, "stderr")))
+
+
 @dataclass(frozen=True)
 class Environnement:
     """Ce que la console emprunte au monde exterieur.
@@ -110,6 +128,11 @@ class Environnement:
     #: et l'ETA glissant existent depuis le lot 11 et n'avaient jamais rien
     #: affiche : personne ne les appelait.
     rapporteur: Callable[[], Any] = _rapporteur
+    #: Le releve des deux flux de sortie. Ce que « Sonder ce terminal »
+    #: montre, et rien d'autre : aucun ecran ne s'en sert pour DECIDER quoi
+    #: que ce soit, et c'est pourquoi le defaut peut etre le vrai sans rendre
+    #: le rendu de la console dependant du terminal de qui lance la suite.
+    sonde: Callable[[], tuple[Any, ...]] = _sonder_les_flux
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +334,28 @@ def ecran_verification(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def sonde(console: Console) -> str:
+        """Ce que CE terminal sait faire, mesure a l'instant ou on le demande.
+
+        L'ecran est dans « Verification et livraison » et pas ailleurs : c'est
+        une verification, au meme titre que les suites et le neutraliseur. La
+        difference est qu'elle porte sur la machine et non sur le code, et
+        c'est la seule de la console dans ce cas.
+        """
+        from falcon.toile import rendre_sonde
+
+        console.titre("Sonder ce terminal")
+        console.ecrire()
+        for ligne in rendre_sonde(env.sonde()):
+            console.ecrire(ligne)
+        console.ecrire()
+        console.ecrire("  La meme mesure en ligne de commande, celle qu'on "
+                       "demande par")
+        console.ecrire("  telephone quand un affichage est illisible :")
+        console.ecrire("      python -m falcon sonde")
+        console.pause()
+        return CONTINUER
+
     def bundle(console: Console) -> str:
         """Construit `falcon.pyz` — la livraison en un seul fichier (§6).
 
@@ -350,6 +395,9 @@ def ecran_verification(env: Environnement) -> Menu:
                    "detail test par test"),
             Entree("4", "Construire le bundle", bundle,
                    "falcon.pyz — un fichier unique executable (§6)"),
+            Entree("5", "Sonder ce terminal", sonde,
+                   "taille, ANSI, couleur : ce qui a ete MESURE ici, et par "
+                   "quel appel"),
         ))
 
 

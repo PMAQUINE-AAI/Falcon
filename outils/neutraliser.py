@@ -20,10 +20,11 @@ l'imprime. Un chiffre recopie dans une docstring se perime au premier ajout —
 celui-ci disait « sept » quand le code en verifiait huit, ce qui est
 exactement le genre d'affirmation que cet outil existe pour empecher.
 
-Cinq gardent une SESSION SAP ouverte (§5). Les autres gardent des moments ou
-aucun driver n'existe — la REPRISE, et la repetition a blanc prealable — et
-ou une garde qui cede fait rejouer un item que SAP a peut-etre deja
-enregistre.
+Cinq gardent une SESSION SAP ouverte (§5). Deux gardent des moments ou aucun
+driver n'existe — la REPRISE, et la repetition a blanc prealable — et ou une
+garde qui cede fait rejouer un item que SAP a peut-etre deja enregistre. La
+troisieme famille ne protege pas SAP du tout : voir le commentaire de la
+neuvieme cible, qui dit ce qu'elle protege a la place.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from falcon.controleur import gardes                          # noqa: E402
 from falcon.journal import lecteur
 from falcon.moteur import boucle                            # noqa: E402
 from falcon.pipeline import modele                            # noqa: E402
+from falcon.toile import peintre                              # noqa: E402
 
 #: Garde -> (porteur, attribut, suite qui doit s'en apercevoir).
 #:
@@ -70,6 +72,12 @@ CIBLES = {
     # d'affichage dans la console, donc rien ne l'appliquait et rien ne
     # pouvait la verifier.
     "8 repetition": (boucle, "garde_de_la_repetition", "tests.test_moteur"),
+    # La neuvieme n'est pas de la meme espece que les huit autres, et le dire
+    # vaut mieux que de laisser croire le contraire : elle ne refuse rien a
+    # SAP. Ce qu'elle protege est le TERMINAL — une interface qui peint la ou
+    # elle ne s'affiche pas ne degrade pas, elle rend illisible le compte rendu
+    # de ce qui vient d'etre fait dans un ERP.
+    "9 preuve": (peintre, "_exiger_la_preuve", "tests.test_toile"),
 }
 
 

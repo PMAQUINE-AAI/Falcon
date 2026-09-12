@@ -135,6 +135,22 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
     if exploration.raison:
         lignes.append(f"  raison         {exploration.raison}")
 
+    # Une seule ligne, et seulement si elle a quelque chose a dire. « Le
+    # direct s'est tu » et « il n'y avait plus rien a montrer » ne se
+    # distinguent pas a l'ecran : un afficheur qui leve et qu'on avale en
+    # silence laisse l'utilisateur conclure que SAP est bloque.
+    if exploration.pannes_d_affichage:
+        lignes += [
+            "",
+            f"  L'AFFICHAGE EN DIRECT A LEVE {exploration.pannes_d_affichage} "
+            f"fois : autant de faits ne sont",
+            "  jamais arrives a l'ecran. Le parcours, lui, n'en a rien su et "
+            "n'en a rien",
+            "  fait — ce compte rendu-ci est complet. C'est l'ecran qui a "
+            "menti par",
+            "  omission, pas lui.",
+        ]
+
     # -- les ecrans ------------------------------------------------------
     lignes += [
         "",
