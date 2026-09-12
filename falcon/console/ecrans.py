@@ -113,6 +113,18 @@ def _sonder_les_flux() -> tuple[Any, ...]:
                                    (sys.stderr, "stderr")))
 
 
+def _capacites_nues() -> Any:
+    """Le niveau NU, et rien d'autre : aucune capacite n'a ete prouvee.
+
+    Ce n'est pas un repli, c'est la mesure absente. `Capacites()` a tous ses
+    champs a faux, `peintre_pour` y rend un `PeintreNu`, et la garde n°9 refuse
+    de peindre plus haut — donc aucune sequence ne peut sortir d'une session de
+    console tant que personne n'a injecte autre chose.
+    """
+    from falcon.toile import Capacites
+    return Capacites()
+
+
 @dataclass(frozen=True)
 class Environnement:
     """Ce que la console emprunte au monde exterieur.
@@ -147,6 +159,22 @@ class Environnement:
     #: DECIDERAIT ce que la console a le droit d'emettre, et le rendu de toute
     #: la console dependrait alors du terminal de qui lance la suite.
     sonde: Callable[[], tuple[Any, ...]] = _sonder_les_flux
+    #: Ce que la console s'autorise a EMETTRE. Defaut : rien de prouve, donc
+    #: le niveau NU, donc pas un octet de decor.
+    #:
+    #: **C'est l'AUTRE champ, et il ne se fusionne pas avec `sonde`.** Celui-ci
+    #: DECIDE ce que le rendu a le droit d'emettre ; `sonde` RAPPORTE une
+    #: mesure a l'ecran et ne decide de rien. Cabler la sonde reelle ici ferait
+    #: dependre le rendu de TOUTE la console du terminal de qui lance la
+    #: suite : vert en CI, ou la sortie part dans un tube, et autre chose sur
+    #: un poste de developpement — c'est-a-dire que le chemin qui tournerait
+    #: chez l'utilisateur serait precisement celui que la CI n'exerce pas.
+    #:
+    #: Et ce defaut n'enfreint pas « le defaut est le vrai » : `Capacites()`
+    #: EST le vrai defaut. Une capacite est fausse tant qu'on ne l'a pas
+    #: mesuree, et la mesure est un geste que le programme pose — le point
+    #: d'entree de `falcon/commandes/principal.py` — pas un etat du monde.
+    capacites: Callable[[], Any] = _capacites_nues
 
 
 # ---------------------------------------------------------------------------
@@ -750,9 +778,16 @@ def confirmer(console: Console, attendu: str, *,
 
     `annonce` et `quoi` sont des PARAMETRES parce que la cartographie confirme
     autre chose — elle n'ecrit rien mais elle AGIT, et le mot attendu y est le
-    nom du fichier de trace. Recopier cette fonction pour en changer la
-    premiere phrase donnerait deux confirmations qui divergeraient, et c'est
-    la confirmation qui protege ici.
+    nom du fichier de trace. La promotion en confirme une troisieme : une
+    EMPREINTE. Recopier cette fonction pour en changer la premiere phrase
+    donnerait deux confirmations qui divergeraient, et c'est la confirmation
+    qui protege ici.
+
+    **L'invite dit « attendu », pas « nom attendu ».** Elle est la derniere
+    ligne que l'utilisateur lit avant de taper, et elle appelait « un nom » une
+    empreinte hexadecimale de seize caracteres. C'est le decalage meme que
+    `annonce` et `quoi` reparent deux lignes plus haut, et il survivait a la
+    correction sur la ligne qui compte le plus.
 
     Toute autre saisie renonce — y compris une saisie vide, une fin de flux ou
     un Ctrl-C. Le defaut est de NE RIEN faire dans un ERP.
@@ -762,7 +797,7 @@ def confirmer(console: Console, attendu: str, *,
     console.ecrire(f"  Pour confirmer, tape {quoi} en toutes lettres.")
     console.ecrire("  Toute autre reponse annule.")
     try:
-        saisie = console.lire(f"\n  nom attendu « {attendu} » : ").strip()
+        saisie = console.lire(f"\n  attendu « {attendu} » : ").strip()
     except (EOFError, KeyboardInterrupt):
         saisie = ""
     if saisie == attendu:
@@ -1925,27 +1960,38 @@ def ecran_catalogue(env: Environnement) -> Menu:
         # Confirmation par l'EMPREINTE, en toutes lettres. Deux variantes d'un
         # meme ecran ne different que par elle : un « oui » ne dirait pas
         # laquelle on a relue, et c'est precisement ce qu'on certifie ici.
+        # Le texte de l'esquisse vit dans `navigateur.py` et se relit ici :
+        # les deux ecrans qui promeuvent doivent dire la meme chose, et deux
+        # copies auraient diverge a la premiere retouche. Import LOCAL, comme
+        # tous les imports de ce fichier — et parce que `navigateur` importe
+        # `confirmer` de celui-ci a l'execution.
+        from .navigateur import TEXTE_ESQUISSE
+
         variante = ecarte.pour_edition(choisie)
+        console.ecrire()
         if variante.observee:
-            console.ecrire("\n  Promouvoir, c'est dire que TU as relu cet "
-                           "ecran.")
+            annonce = "Promouvoir, c'est dire que TU as relu cet ecran."
         else:
             # Une esquisse vient d'une TRACE : elle porte les champs touches,
             # pas les champs presents, et personne n'a vu l'ecran. La promouvoir
             # dit « j'ai vu le fichier », pas « j'ai vu l'ecran » — et
             # `pour_garde` continuera de la refuser. Le dire ici evite de faire
             # certifier a l'utilisateur quelque chose qu'il n'a pas fait.
-            console.ecrire("\n  C'est une ESQUISSE, tiree d'une trace : "
-                           "personne n'a vu cet")
-            console.ecrire("  ecran. La promouvoir la rend disponible pour "
-                           "REDIGER une")
-            console.ecrire("  pipeline, rien de plus — une garde d'identite "
-                           "la refusera")
-            console.ecrire("  toujours. Tu certifies avoir lu le FICHIER, pas "
-                           "l'ecran.")
-        console.ecrire("  Pour confirmer, tape son empreinte en toutes "
-                       "lettres.")
-        if not confirmer(console, choisie.empreinte):
+            for ligne in TEXTE_ESQUISSE:
+                console.ecrire(f"  {ligne}")
+            annonce = ("Promouvoir une esquisse, c'est certifier avoir lu le "
+                       "FICHIER.")
+
+        # `confirmer` est appelee AVEC SES DEUX PARAMETRES, et c'est une
+        # correction. Aux defauts, elle imprimait « Ceci va ECRIRE dans SAP. »
+        # sur un ecran dont le preambule dit « Rien ici n'ecrit dans SAP », et
+        # « tape le nom de la pipeline » deux lignes apres que cet ecran a
+        # annonce l'empreinte — aucune pipeline n'etant en jeu. Les deux
+        # phrases etaient fausses, et la seconde nommait le mauvais mot a
+        # taper : la ceremonie qui protege ici demandait un mot qui n'existe
+        # pas.
+        if not confirmer(console, choisie.empreinte, annonce=annonce,
+                         quoi="son empreinte"):
             console.pause()
             return CONTINUER
 
@@ -2006,12 +2052,42 @@ def ecran_catalogue(env: Environnement) -> Menu:
         console.pause()
         return CONTINUER
 
+    def naviguer_le_catalogue(console: Console) -> str:
+        """Le navigateur : voir les CHAMPS avant de certifier les avoir relus.
+
+        C'est le seul ecran de la console qui montre le contenu d'une variante
+        du catalogue. Les autres montrent le triplet, l'empreinte et un nombre
+        de champs — de quoi promouvoir sans avoir rien vu.
+
+        Le peintre est celui que `env.capacites()` a merite, et il vaut
+        `PeintreNu` tant que personne n'a rien prouve. Le gabarit est une
+        FONCTION : `naviguer` le rappelle a chaque tour, parce que Windows n'a
+        pas de `SIGWINCH` et qu'une reconnexion RDP a une autre resolution
+        redimensionne la console en pleine session.
+        """
+        from falcon.toile import gabarit_pour, peintre_pour
+
+        from .navigateur import naviguer
+
+        depot = _depot(console)
+        if depot is None:
+            return CONTINUER
+        peintre = peintre_pour(env.capacites())
+        return naviguer(console, depot,
+                        gabarit=lambda: gabarit_pour(env.capacites()),
+                        peintre=peintre)
+
     return Menu(
         titre="FALCON — catalogue d'ecrans",
         preambule=(
-            "Les deux premieres entrees lisent. La troisieme PROMEUT une\n"
-            "capture : c'est le geste par lequel tu dis avoir relu l'ecran,\n"
-            "et il se confirme par l'empreinte en toutes lettres.\n"
+            "Les entrees 1, 2 et 5 LISENT. La quatrieme ECRIT un CSV sur le\n"
+            "disque ; la troisieme PROMEUT une capture, et la cinquieme le\n"
+            "peut aussi. La cinquieme — le navigateur — est la seule a\n"
+            "montrer les CHAMPS d'une variante.\n"
+            "\n"
+            "Promouvoir, c'est dire avoir relu l'ecran : les deux entrees qui\n"
+            "le font se confirment par l'empreinte en toutes lettres, et le\n"
+            "navigateur ne le permet que depuis une fiche OUVERTE.\n"
             "\n"
             "Rien ici n'ecrit dans SAP."),
         entrees=(
@@ -2022,6 +2098,9 @@ def ecran_catalogue(env: Environnement) -> Menu:
                    "de la quarantaine au catalogue — apres relecture"),
             Entree("4", "Exporter le dictionnaire", dictionnaire,
                    "le catalogue a plat, en CSV pour le classeur"),
+            Entree("5", "Naviguer le catalogue", naviguer_le_catalogue,
+                   "les champs, la recherche, la comparaison — et la "
+                   "promotion apres lecture"),
         ))
 
 
@@ -2115,6 +2194,8 @@ def _cartographier(console: Console, env: Environnement) -> str:
     )
     from falcon.exploration.rapport import previsualisation
     from falcon.noyau import ErreurFalcon
+    from falcon.toile import gabarit_pour, peintre_pour
+    from falcon.toile.direct import EnConsole
     from falcon.trace import TraceInvalide, lire
 
     chemin = demander_chemin(console, "trace du recorder (.vbs)")
@@ -2163,12 +2244,41 @@ def _cartographier(console: Console, env: Environnement) -> str:
                      quoi="le nom du fichier de trace"):
         return CONTINUER
 
+    # Le direct, au travers de `Console.ecrire` : une ligne par fait, une fois
+    # qu'il est FAIT. Pas de bandeau collant ici — `ecrire` vaut `print`, il
+    # pose une ligne entiere, et le direct le dit lui-meme a l'ecran.
+    #
+    # Les capacites viennent de l'ENVIRONNEMENT, et son defaut est
+    # `Capacites()` : tout est faux tant que personne n'a mesure. Ce n'est pas
+    # un repli, c'est la mesure absente — et c'est `peintre_pour`, donc la
+    # garde n°9, qui en tire le niveau, jamais un `if` ecrit ici. Les
+    # reconstruire a la main donnerait deux defauts pour une seule question,
+    # et c'est toujours celui qu'on a oublie de changer qui tourne.
+    capacites = env.capacites()
+    direct = EnConsole(console, peintre_pour(capacites),
+                       gabarit_pour(capacites))
+
+    echec = ""
     try:
         _, _, compte_rendu = cartographier(
             chemin, catalogue, plafond_gestes=plafond_gestes,
-            plafond_ecrans=plafond_ecrans, esquisses=True, driver=driver)
+            plafond_ecrans=plafond_ecrans, esquisses=True, driver=driver,
+            observateur=direct)
     except ErreurFalcon as erreur:
-        console.ecrire(f"\n  {type(erreur).__name__} : {erreur}")
+        echec = f"{type(erreur).__name__} : {erreur}"
+    finally:
+        # Avant le message d'echec comme avant le compte rendu : le bilan du
+        # direct clot ce qu'il a raconte, et le poser APRES une trace
+        # d'erreur laisserait croire que l'exploration a repris apres elle.
+        #
+        # Dans un `finally`, et pour la meme raison que dans
+        # `principal._explorer` : une exception qui n'est pas une
+        # `ErreurFalcon` — celles-la sont des defauts, pas des refus — sauterait
+        # sinon par-dessus le bilan, et l'operateur verrait le direct
+        # s'interrompre en plein vol sans une ligne qui dise ou il en etait.
+        direct.clore()
+    if echec:
+        console.ecrire(f"\n  {echec}")
         console.pause()
         return CONTINUER
 

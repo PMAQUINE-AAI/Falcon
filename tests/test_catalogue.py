@@ -178,5 +178,49 @@ class TestQuarantaine(Base):
             self.depot.promouvoir(ClefVariante("X", "Y", "0", "abcdef"))
 
 
+class TestLEnTeteFaitFoiSurLeNomDeFichier(Base):
+    """`variantes(triplet)` passe par `contenu(chemin)` : la clef vient de
+    l'EN-TETE du fichier, pas du triplet demande.
+
+    C'est un changement de comportement, et il vaut mieux que l'ancien —
+    l'ancien re-etiquetait silencieusement la variante avec le triplet
+    demande, donc un fichier renomme a la main ou recopie d'un autre catalogue
+    prenait l'identite de son nom de fichier, et la garde d'identite opposait
+    ensuite un ecran a un autre. Mais aucun test ne le fixait dans un sens ni
+    dans l'autre, et un comportement que rien ne tient n'est pas un
+    comportement : c'est ce que le code fait aujourd'hui.
+
+    CONTROLE NEGATIF : re-etiqueter la variante avec le triplet DEMANDE dans
+    `variantes()` fait tomber ce test.
+    """
+
+    def _fichier_menteur(self) -> Path:
+        self.depot.enregistrer(variante_de(_ecran("wnd[0]/usr/a")))
+        chemin = self.depot.racine / "IA08__RIPLKO10__1000.yaml"
+        contenu = yaml.safe_load(chemin.read_text(encoding="utf-8"))
+        contenu["transaction"] = "IW39"
+        contenu["programme"] = "SAPLIW39"
+        contenu["dynpro"] = "2000"
+        chemin.write_text(yaml.safe_dump(contenu, allow_unicode=True),
+                          encoding="utf-8")
+        return chemin
+
+    def test_la_clef_rendue_est_celle_de_l_en_tete(self):
+        self._fichier_menteur()
+        variantes = self.depot.variantes(IA08.triplet)
+        self.assertEqual(len(variantes), 1)
+        self.assertEqual(variantes[0].clef.triplet,
+                         ("IW39", "SAPLIW39", "2000"))
+
+    def test_et_l_ecran_demande_devient_alors_INTROUVABLE(self):
+        """Le prix du refus, ecrit : `pour_edition` ne trouve plus rien sous
+        le triplet demande. Un refus vaut mieux qu'une valeur devinee — mais
+        il faut savoir que c'est celui-la."""
+        self._fichier_menteur()
+        self.assertIsNone(
+            self.depot.pour_edition(ClefVariante(*IA08.triplet,
+                                                 empreinte="0" * 16)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,9 +38,16 @@ MODULES_SAP = {"win32com", "pythoncom", "comtypes", "win32api", "win32gui"}
 # cartographie de se donner un driver nu — donc sans dry-run ni plafond de
 # sauvegardes — le jour ou ce serait commode.
 #
-# `toile` y figure pour une raison de plus, et c'est la plus forte : elle ne
-# connait pas un mot de FALCON. Un import de couture y serait la preuve que le
-# cloisonnement a cede.
+# `toile` y figure pour une raison de plus : elle ne connait pas un mot de SAP.
+# Un import de couture y serait la preuve que le cloisonnement a cede.
+#
+# « Elle ne connait pas un mot de FALCON » n'est plus vrai depuis
+# `toile/direct.py`, qui nomme des gestes, des branches, des reprises et des
+# ecrans verses, et qui importe `falcon.exploration.evenements` : celui qui
+# PEINT importe celui qui EMET, c'est la direction permise, et l'interdiction
+# inverse ci-dessous est ce qui la tient. La regle mecanique n'a pas bouge ;
+# c'est le commentaire qui la justifiait qui etait devenu faux, et une phrase
+# fausse a cote d'une regle juste est ce qui fait douter de la regle.
 COUCHES_SANS_COUTURE = ("moteur", "pipeline", "tableur", "exploration",
                         "toile")
 

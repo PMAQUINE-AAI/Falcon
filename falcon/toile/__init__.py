@@ -6,6 +6,18 @@ en lignes de texte. C'est ce cloisonnement qui permet d'y confiner la seule
 capacite du depot qui depende de la plateforme d'affichage — les sequences
 ANSI — comme `falcon/couture/sapgui.py` confine COM.
 
+**Une exception, une seule, et elle est nommee : `direct.py`.** Le paragraphe
+ci-dessus vaut pour tout ce que ce fichier EXPORTE, et pour tous les modules
+du paquet sauf celui-la. `toile/direct.py` peint le flux d'une cartographie :
+il nomme donc des gestes, des branches, des reprises et des ecrans verses, et
+il importe `falcon.exploration.evenements`. C'est la direction de dependance
+du depot — celui qui PEINT importe celui qui EMET, jamais l'inverse, et
+`test_frontieres` interdit le retour. Il n'est volontairement PAS reexporte
+ici : `falcon sonde` est la commande qu'on lance quand quelque chose ne va
+deja pas, et lui faire charger le catalogue, la taxonomie et PyYAML pour
+mesurer un terminal ajouterait a la panne toutes les facons dont ces trois-la
+peuvent echouer. On l'importe par son nom, `falcon.toile.direct`.
+
 **Le refus d'ANSI du depot n'etait pas une ascese, c'etait un refus faute de
 savoir.** `console/menu.py` le dit : la machine cible est Windows, `curses`
 n'y est pas fourni, une sequence marcherait sur la moitie des terminaux et
@@ -37,11 +49,23 @@ un `pythonw` sans descripteur fait de meme sur Windows. Un gabarit de 72 non
 mesure peut donc etre peint en couleur, et c'est bien ainsi : refuser la
 couleur parce qu'on ignore la largeur n'apprendrait la largeur a personne.
 
-**Rien ici n'ecrit nulle part.** Le choix du flux appartient a l'appelant :
-`Console.ecrire` pour le dialogue, un flux et un retour chariot pour la ligne
-collante du direct. Les deux ne peuvent pas passer par la meme porte —
-`Console.ecrire` vaut `print`, il pose une ligne entiere — et pretendre le
-contraire donnerait une abstraction qui ment sur l'un des deux cas.
+**Rien de ce qui est EXPORTE ici n'ecrit nulle part, et `direct.py` est la
+seconde moitie de l'exception nommee plus haut.** Tout ce que ce fichier
+reexporte — la sonde, les fragments, les peintres — rend du texte et laisse le
+choix du flux a l'appelant : `Console.ecrire` pour le dialogue, un flux et un
+retour chariot pour la ligne collante du direct. Les deux ne peuvent pas
+passer par la meme porte — `Console.ecrire` vaut `print`, il pose une ligne
+entiere — et pretendre le contraire donnerait une abstraction qui ment sur
+l'un des deux cas. `toile/direct.Diffuseur` ECRIT, sur le flux qu'on lui
+passe, et `toile/direct.EnConsole` appelle `Console.ecrire` : ce sont les deux
+portes, ecrites chacune a son endroit plutot qu'unifiees, et elles sont dans
+le seul module que ce paquet ne reexporte pas.
+
+**`reposer_le_bit` est la seule fonction de ce paquet qui MODIFIE l'etat du
+terminal**, et elle n'est pas une sonde : `sonder` restaure toujours le mode
+qu'elle a trouve. Reposer le bit VT est le geste de celui qui peint, et il
+lui appartient — voir sa docstring. Elle est ici, et pas dans la commande,
+parce que c'est ici que vivent les handles.
 
 **Ce que la CI ne prouvera jamais, et qu'il faut lire avant de croire un test
 vert.** Meme reserve, et meme forme, que pour `couture/sapgui.py` :
@@ -62,6 +86,16 @@ vert.** Meme reserve, et meme forme, que pour `couture/sapgui.py` :
    d'une colonne (`colonnes - 1`) est une parade a cout nul contre un
    comportement que la CI Linux ne verra jamais.
 6. Que seize couleurs SGR passent a travers une liaison RDP.
+7. Qu'un redimensionnement en cours de session soit rattrape. Windows n'a pas
+   de `SIGWINCH` : la parade est de remesurer a chaque tour de boucle, ce que
+   fait une vue qu'on reaffiche sur commande. **Le direct, lui, n'a pas de
+   tour de boucle** : il garde la largeur mesuree AU LANCEMENT, et une
+   reconnexion RDP a une autre resolution y laisse une ligne collante mal
+   cadree — mesure sur un pty ramene de 110 a 40 colonnes : les lignes se
+   replient, le retour chariot revient au debut d'une ligne REPLIEE, et
+   l'effacement laisse la moitie du bandeau a l'ecran. C'est le defaut que
+   `direct.py` dit empecher, et la garantie porte sur la largeur du
+   lancement. **Le seul recours est `--muet`.**
 
 **Le premier geste apres livraison est `falcon sonde` sur la machine cible**,
 pas `falcon explorer`. Le pire cas de ce paquet n'est pas qu'il refuse la
@@ -75,7 +109,7 @@ from .capacites import (
     LARGEUR_PLAFOND, LARGEUR_PLANCHER, LARGEUR_SANS_MESURE, MESUREE, NU,
     NOTE_DE_LECTURE, STD_ERREUR, STD_SORTIE, VT_SORTIE, Capacites,
     ConsoleWindows, Gabarit, Systeme, gabarit_pour, rendre_capacites,
-    rendre_sonde, sonder, systeme_reel,
+    rendre_sonde, reposer_le_bit, sonder, systeme_reel,
 )
 from .fragment import (
     ALERTE, ATTENUE, DANGER, ENTETE, FORMES, LIGNE, MARQUE, NEUTRE,
@@ -91,6 +125,7 @@ __all__ = [
     # la sonde
     "Systeme", "systeme_reel", "ConsoleWindows", "Capacites", "sonder",
     "rendre_capacites", "rendre_sonde", "NOTE_DE_LECTURE",
+    "reposer_le_bit",
     "Gabarit", "gabarit_pour",
     "NU", "COULEUR", "MESUREE", "DECLAREE", "INCONNUE",
     "LARGEUR_SANS_MESURE", "LARGEUR_PLANCHER", "LARGEUR_PLAFOND",

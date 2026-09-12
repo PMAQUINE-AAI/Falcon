@@ -70,7 +70,7 @@ Les modules livrés :
 | `falcon/tableur/` | les trois CSV du classeur → une pipeline YAML, relue avant d'être écrite |
 | `falcon/commandes/` | ligne de commande : `console`, `explorer`, `diagnostiquer`, `inventaire`, `brouillon`, `dictionnaire`, `composer`, `recolter`, `sonde` — seule `console` peut **écrire** dans SAP, et `explorer` y **agit** sans y écrire |
 | `falcon/console/` | menus interactifs : tests, traces, pipelines et jeux de données, **exécution**, journaux, catalogue, exports de table, taxonomie, diagnostic |
-| `falcon/toile/` | ce que le terminal sait faire, **mesuré** et jamais supposé : taille de fenêtre, bit VT relu, et le seul module du dépôt où une séquence ANSI s'écrit |
+| `falcon/toile/` | ce que le terminal sait faire, **mesuré** et jamais supposé : taille de fenêtre, bit VT relu, et le seul paquet du dépôt où une séquence ANSI s'écrit. Il ne connaît pas un mot de SAP ; `falcon/toile/direct.py` est l'exception nommée — il peint le direct d'une cartographie, donc il nomme gestes, branches, reprises et écrans versés |
 
 **Ce que le vert des tests ne prouve pas.** Aucune ligne de ce dépôt n'a
 encore parlé à un système SAP. `falcon/couture/sapgui.py` existe désormais,

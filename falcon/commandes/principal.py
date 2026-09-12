@@ -215,6 +215,17 @@ def analyseur() -> argparse.ArgumentParser:
                                   "confirmation au terminal")
     exploration.add_argument("--connexion", type=int, default=0)
     exploration.add_argument("--session", type=int, default=0)
+    # Le direct, et les deux facons de le refuser. Elles ne se recouvrent pas :
+    # `--muet` ne montre plus rien, `--sans-couleur` montre la meme chose sans
+    # decor. Aucune des deux ne change ce que le parcours FAIT.
+    exploration.add_argument("--muet", action="store_true",
+                             help="coupe le direct : rien ne s'affiche "
+                                  "pendant le rejeu, seul le compte rendu "
+                                  "sort a la fin")
+    exploration.add_argument("--sans-couleur", action="store_true",
+                             help="le meme direct, sans couleur, sans avoir "
+                                  "a argumenter pourquoi (le decor de texte "
+                                  "reste : il est en ASCII)")
 
     sous.add_parser(
         "sonde", help="ce que CE terminal sait faire (DIAGNOSTIC)",
@@ -400,7 +411,28 @@ def _sonde(options: argparse.Namespace) -> int:
 
 
 def _console(options: argparse.Namespace) -> int:
-    from falcon.console import Console, parcourir, racine
+    """La console, et le SEUL endroit ou sa geometrie se mesure vraiment.
+
+    `Environnement.capacites` a pour defaut `_capacites_nues` — tout faux —
+    et ce defaut reste : il fait dependre le rendu de la suite de rien du
+    tout, donc la CI exerce le meme chemin qu'un poste de developpement. Mais
+    « la mesure est un geste que le programme pose », et c'est ICI qu'il se
+    pose. Sans ce cablage, `gabarit_pour` rendait TOUJOURS
+    `Gabarit(72, 24, INCONNUE)` : mesure faite en pilotant `falcon.pyz console`
+    dans un pty regle a 80x24, l'accueil du navigateur imprimait « largeur 72
+    (inconnue), hauteur 24 ». Sur un Windows Terminal maximise a 200x50, le
+    navigateur employait 72 colonnes sur 200 et paginait pour 24 lignes sur
+    50, en tronquant a `~` des identifiants qui tenaient — et deux docstrings
+    affirmaient la remesure a chaque tour d'un gabarit qui etait une
+    constante.
+
+    `stdout` et non `stderr` : c'est le flux ou `Console.ecrire` ecrit, et sur
+    Windows la capacite a interpreter une sequence est un mode par HANDLE.
+    Mesurer l'un pour peindre sur l'autre serait une capacite affirmee sans
+    avoir ete mesuree.
+    """
+    from falcon.console import Console, Environnement, parcourir, racine
+    from falcon.toile import sonder, systeme_reel
 
     if not sys.stdin.isatty():
         # Une console interactive sur un flux non interactif ne peut rien
@@ -409,7 +441,12 @@ def _console(options: argparse.Namespace) -> int:
         print("`console` demande un terminal interactif. Hors terminal, "
               "utiliser `inventaire` ou `diagnostiquer`.", file=sys.stderr)
         return 2
-    return parcourir(racine(), Console())
+    # Une FONCTION, et pas une valeur : le navigateur la rappelle a chaque
+    # tour. Windows n'a pas de `SIGWINCH`, et une reconnexion RDP a une autre
+    # resolution redimensionne la console de l'hote en pleine session.
+    env = Environnement(
+        capacites=lambda: sonder(systeme_reel(sys.stdout, "stdout")))
+    return parcourir(racine(env), Console())
 
 
 def _inventaire(options: argparse.Namespace) -> int:
@@ -450,6 +487,8 @@ def _explorer(options: argparse.Namespace) -> int:
     from falcon.exploration import TERMINEE
     from falcon.exploration.rapport import previsualisation
     from falcon.taxonomie import Registre
+    from falcon.toile.capacites import reposer_le_bit, sonder, systeme_reel
+    from falcon.toile.direct import Diffuseur
     from falcon.trace import lire
 
     chemin = Path(options.trace)
@@ -485,13 +524,56 @@ def _explorer(options: argparse.Namespace) -> int:
             print("\n  Annule. Rien n'a ete fait.", file=sys.stderr)
             return 2
 
-    _, exploration, compte_rendu = cartographier(
-        chemin, options.catalogue,
-        plafond_gestes=options.plafond_gestes,
-        plafond_ecrans=options.plafond_ecrans,
-        esquisses=options.esquisses,
-        registre=Registre.avec_surcouches(*options.registre),
-        driver=driver)
+    # Le direct sort sur l'ERREUR standard, et le compte rendu sur la sortie
+    # standard. Les deux flux sont separes a dessein : `falcon explorer ... >
+    # rapport.txt` doit rendre un rapport propre, et le direct reste a
+    # l'ecran. C'est aussi pour cela que la sonde mesure `stderr` et pas
+    # `stdout` — sur Windows le bit VT est un mode par HANDLE, et une capacite
+    # mesuree sur un flux puis affirmee sur l'autre deverserait de l'ANSI dans
+    # le journal de qui tape `2> journal.log`.
+    diffuseur = None
+    if not options.muet:
+        systeme = systeme_reel(sys.stderr, "stderr")
+        # La sonde RESTAURE le mode qu'elle a trouve : elle mesure, elle ne
+        # regle pas. Reposer le bit VT avant de peindre est le geste du
+        # peintre, et `capacites.py` le dit. Sans lui, sur un conhost de
+        # Windows 10 — la cible — VT est eteint par defaut et chaque ligne du
+        # direct sortirait en `<-[1m` : des capacites vraies, un handle dont
+        # l'etat a change apres la mesure, et une garde n°9 qui ne mord pas
+        # parce qu'elle ne regarde que les capacites. Un bit qu'on n'a pas pu
+        # reposer se paie en texte nu, qui est le cas de BASE.
+        diffuseur = Diffuseur(
+            sys.stderr, sonder(systeme),
+            forcer_nu=options.sans_couleur or not reposer_le_bit(systeme))
+    try:
+        _, exploration, compte_rendu = cartographier(
+            chemin, options.catalogue,
+            plafond_gestes=options.plafond_gestes,
+            plafond_ecrans=options.plafond_ecrans,
+            esquisses=options.esquisses,
+            registre=Registre.avec_surcouches(*options.registre),
+            driver=driver, observateur=diffuseur)
+    finally:
+        # Dans un `finally` : une exploration qui leve a DEJA agi dans SAP, et
+        # elle doit rendre le terminal propre — le bandeau collant est une
+        # ligne sans saut de ligne, et la laisser en place collerait la trace
+        # de pile a sa suite.
+        if diffuseur is not None:
+            try:
+                diffuseur.clore()
+            except OSError:
+                # Le flux du direct est parti — `| more` puis `q`, la croix de
+                # la fenetre, une liaison RDP qui lache. `_Parcours.emettre`
+                # l'a deja compte et `rapport.rendre` le dit. Ce `finally`
+                # s'execute AVANT l'impression du compte rendu : laisser la
+                # levee passer emporterait le seul endroit ou vivent la
+                # partition, les branches, les reprises et les visites non
+                # atteintes — sur une exploration qui a DEJA agi dans SAP — et
+                # `main` convertirait la `BrokenPipeError` en code 0. Un
+                # succes annonce sur un travail dont personne n'a le compte
+                # rendu. Perdre le compte rendu pour un bandeau qu'on n'arrive
+                # plus a effacer serait le pire echange possible.
+                pass
 
     print()
     print(compte_rendu)

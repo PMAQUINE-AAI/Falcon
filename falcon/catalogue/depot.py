@@ -130,25 +130,109 @@ class Depot:
         chemin = self.racine / _nom_de_fichier(triplet)
         if not chemin.exists():
             return ()
-        contenu = self._lire_fichier(chemin)
-        return tuple(
-            self._variante(triplet, marque, brute)
-            for marque, brute in sorted(contenu.get("variantes", {}).items())
-        )
+        return self.contenu(chemin)[1]
 
     def triplets(self) -> Iterator[tuple[str, str, str]]:
         if not self.racine.is_dir():
             return
-        for chemin in sorted(self.racine.glob("*.yaml")):
+        for chemin in self.fichiers():
             contenu = self._lire_fichier(chemin)
             yield (contenu.get("transaction", ""), contenu.get("programme", ""),
                    str(contenu.get("dynpro", "")))
+
+    def fichiers(self) -> tuple[Path, ...]:
+        """Les fichiers de ce rayon, tries, sans en lire aucun.
+
+        **Non recursif, comme `triplets()`, et c'est le meme glob.** Un
+        sous-dossier — `quarantaine/` sous le catalogue cure, `rapports/` a
+        cote — n'en fait donc pas partie, et c'est ce qui permet d'ecrire des
+        comptes rendus dans le dossier de catalogue sans que le depot les
+        prenne pour des ecrans.
+
+        Rendre les CHEMINS plutot que les triplets est ce qui permet a
+        `catalogue/inventaire.py` de nommer un fichier illisible : `triplets()`
+        leve sur le premier casse et perd tout ce qui suit, sans jamais dire
+        lequel.
+        """
+        if not self.racine.is_dir():
+            return ()
+        return tuple(sorted(self.racine.glob("*.yaml")))
+
+    def contenu(self, chemin: str | Path) -> tuple[tuple[str, str, str],
+                                                   tuple[Variante, ...]]:
+        """Le triplet et TOUTES les variantes d'un fichier, lu UNE seule fois.
+
+        `triplets()` puis `variantes(triplet)` lisent le meme fichier deux
+        fois : la premiere passe pour en tirer le triplet, la seconde pour
+        recomposer son nom a partir de ce triplet et le relire. Sur les dix
+        fichiers de la quarantaine de reference, cela fait vingt lectures et
+        vingt analyses YAML pour dix fichiers — et le loader embarque dans
+        `falcon.pyz` est le pur-Python, jamais l'accelerateur C.
+
+        **Le chemin est celui qu'on a LU, pas celui qu'on recompose.** Un
+        fichier dont l'en-tete ne redonne pas son propre nom — renomme a la
+        main, recopie d'un autre catalogue — reste lisible ici, alors que
+        `variantes(triplet)` chercherait un nom qui n'existe pas et rendrait un
+        tuple vide : un catalogue d'aspect normal, ampute sans un mot.
+        """
+        chemin = Path(chemin)
+        contenu = self._lire_fichier(chemin)
+        triplet = (contenu.get("transaction", ""),
+                   contenu.get("programme", ""),
+                   str(contenu.get("dynpro", "")))
+        variantes = contenu.get("variantes", {})
+        # La FORME est verifiee avant d'etre parcourue, et le refus NOMME le
+        # fichier. Sans cela `variantes:` rendu comme une liste YAML sortait en
+        # « 'list' object has no attribute 'items' » — une AttributeError nue,
+        # qui ne dit pas quel fichier, qu'aucun appelant n'attrape, et qui fait
+        # tomber l'inventaire ENTIER pour un fichier sur dix. Ce module existe
+        # pour relire des fichiers ecrits ailleurs ; la forme est une donnee,
+        # pas un invariant.
+        if not isinstance(variantes, dict):
+            raise CatalogueInvalide(
+                f"{chemin} : « variantes » est un "
+                f"{type(variantes).__name__}, un dictionnaire est attendu")
+        for marque, brute in variantes.items():
+            if not isinstance(brute, dict):
+                raise CatalogueInvalide(
+                    f"{chemin} : la variante {marque!r} est un "
+                    f"{type(brute).__name__}, un dictionnaire est attendu")
+            bruts = brute.get("champs", [])
+            # `champs: 3` sortait en « 'int' object is not iterable » — une
+            # TypeError nue, sans nom de fichier, qui emportait tout le reste.
+            if not isinstance(bruts, (list, tuple)):
+                raise CatalogueInvalide(
+                    f"{chemin} : « champs » de la variante {marque!r} est un "
+                    f"{type(bruts).__name__}, une liste est attendue")
+            for brut in bruts:
+                if not isinstance(brut, dict):
+                    raise CatalogueInvalide(
+                        f"{chemin} : un champ de la variante {marque!r} est "
+                        f"un {type(brut).__name__}, un dictionnaire est "
+                        f"attendu")
+        return triplet, tuple(
+            self._variante(triplet, marque, brute)
+            for marque, brute in sorted(variantes.items()))
 
     # -- interne -----------------------------------------------------------
 
     @staticmethod
     def _lire_fichier(chemin: Path) -> dict:
-        contenu = yaml.safe_load(chemin.read_text(encoding="utf-8")) or {}
+        try:
+            brut = chemin.read_text(encoding="utf-8")
+        except UnicodeDecodeError as erreur:
+            # Le cas le plus probable sur la cible, et il n'a rien d'exotique :
+            # un YAML rouvert et resauvegarde par le Bloc-notes d'un poste
+            # Windows francais sort en cp1252. `UnicodeDecodeError` est un
+            # `ValueError`, donc ni `OSError` ni `yaml.YAMLError` ne
+            # l'attrapaient, et la console repondait par une trace de pile a la
+            # place du catalogue.
+            raise CatalogueInvalide(
+                f"{chemin} : ce fichier n'est pas de l'UTF-8 "
+                f"({erreur.reason}, octet {erreur.object[erreur.start]:#04x} "
+                f"en position {erreur.start}). Reenregistre-le en UTF-8") \
+                from erreur
+        contenu = yaml.safe_load(brut) or {}
         if not isinstance(contenu, dict):
             raise CatalogueInvalide(f"{chemin} : un dictionnaire est attendu")
         if contenu.get("version") != VERSION:

@@ -339,11 +339,25 @@ class TestAffichage(unittest.TestCase):
                                   f"en {ENCODAGE_MINIMAL} : {erreur}")
 
     def test_aucun_caractere_semi_graphique(self):
+        """Le meme perimetre que l'encodage, et pour la meme raison.
+
+        `_arbres()` ne globe que `falcon/console/*.py`. Depuis que le direct
+        ecrit sur le terminal, `falcon/toile/` compose lui aussi du texte qu'un
+        ecran imprime, et la phrase normative de `falcon/toile/__init__.py` —
+        « aucun caractere semi-graphique n'est pose nulle part » — n'etait plus
+        garantie mecaniquement pour le paquet qui ecrit. Un garde-fou dont le
+        perimetre est plus etroit que sa promesse rassure a tort.
+
+        Une console en police raster affiche un carre vide la ou la police n'a
+        pas le glyphe, SANS erreur et sans code retour : aucune API ne le
+        signale, et c'est la reserve que le decor tout-ASCII permet de ne
+        jamais lever.
+        """
         rendus = [(menu.titre, ligne)
                   for menu in _menus(racine())
                   for ligne in rendre(menu, racine=False)]
         litteraux = [(f"{module}:{noeud.lineno}", noeud.value)
-                     for module, arbre in _arbres()
+                     for module, arbre in _arbres_de_ce_qu_un_ecran_imprime()
                      for noeud in ast.walk(arbre)
                      if isinstance(noeud, ast.Constant)
                      and isinstance(noeud.value, str)]
@@ -796,6 +810,44 @@ class TestCatalogue(unittest.TestCase):
         self.assertIn("ESQUISSE", journal.texte)
         self.assertIn("personne n'a vu cet", journal.texte)
         self.assertNotIn("TU as relu cet ecran", journal.texte)
+
+    def test_la_promotion_demande_une_EMPREINTE_et_ne_parle_pas_de_pipeline(self):
+        """CONTROLE NEGATIF : revenir a `confirmer(console, choisie.empreinte)`
+        sans `annonce=` ni `quoi=` fait tomber ce test.
+
+        Aux defauts, `confirmer` imprime « Ceci va ECRIRE dans SAP. » sur un
+        ecran dont le preambule dit « Rien ici n'ecrit dans SAP », puis « tape
+        le nom de la pipeline en toutes lettres » pour un mot qui est une
+        empreinte hexadecimale et alors qu'aucune pipeline n'est en jeu. Les
+        deux phrases sont fausses, et la seconde nomme le mauvais mot a taper.
+        Le defaut avait ete corrige et rien ne le retenait.
+        """
+        empreinte = self._quarantaine_distincte()
+        rang = self._rang_de(empreinte)
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Promouvoir une capture"),
+            str(self.racine), rang, empreinte, "", "0", "0")
+        parcourir(racine(), journal.console())
+
+        self.assertIn("tape son empreinte en toutes lettres", journal.texte)
+        self.assertNotIn("ECRIRE dans SAP", journal.texte)
+        self.assertNotIn("nom de la pipeline", journal.texte)
+        self.assertIn("TU as relu cet ecran", journal.texte)
+
+    def test_les_QUATRE_lignes_du_texte_d_esquisse_sont_ecrites_ici_aussi(self):
+        """Le texte vit dans `navigateur.TEXTE_ESQUISSE` et les DEUX ecrans
+        qui promeuvent le relisent. Seule la premiere ligne etait epinglee :
+        les trois autres pouvaient diverger librement, et c'est ce texte qui
+        distingue « j'ai lu l'ecran » de « j'ai lu le fichier »."""
+        from falcon.console.navigateur import TEXTE_ESQUISSE
+
+        journal = Journal(
+            *vers(racine(), "Catalogue d'ecrans", "Promouvoir une capture"),
+            str(self.racine), "1", "", "", "0", "0")
+        parcourir(racine(), journal.console())
+        self.assertEqual(len(TEXTE_ESQUISSE), 4)
+        for ligne in TEXTE_ESQUISSE:
+            self.assertIn(ligne, journal.texte)
 
     def test_le_dictionnaire_s_exporte_depuis_la_console(self):
         """Le lot 15 s'appelle « la console pilote tout FALCON » ;
@@ -2147,8 +2199,10 @@ class TestCartographie(unittest.TestCase):
             ecrire=console.ecrire)
         parcourir(self.arbre, console)
 
+        # « attendu » et pas « nom attendu » : l'invite de `confirmer` appelait
+        # « un nom » ce qui est parfois une empreinte hexadecimale.
         confirmations = [texte for invite, texte in deja_ecrit
-                         if "nom attendu" in invite]
+                         if "attendu «" in invite]
         self.assertEqual(len(confirmations), 1,
                          "la confirmation doit etre demandee une fois")
         self.assertIn("geste(s) de SAUVEGARDE", confirmations[0])

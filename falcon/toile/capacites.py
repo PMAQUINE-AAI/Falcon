@@ -549,6 +549,67 @@ def _ansi_windows(systeme: Systeme,
     return True, MESUREE
 
 
+def reposer_le_bit(systeme: Systeme) -> bool:
+    """Repose le bit VT sur le flux qu'on va peindre, et le LAISSE pose.
+
+    **C'est le geste que `_ansi_windows` annonce et ne fait pas.** La sonde
+    restaure le mode qu'elle a trouve, parce qu'une sonde mesure et ne regle
+    pas : sur un conhost de Windows 10 ou de PowerShell 5.1 — la machine
+    cible — VT est ETEINT par defaut, et apres `sonder` il l'est de nouveau.
+    Peindre la-dessus sur la foi d'un `ansi=True` mesure une seconde plus tot
+    deverserait `<-[1m` en toutes lettres a chaque ligne : les capacites
+    seraient vraies, l'etat du handle aurait change apres la mesure, et la
+    garde n°9 ne mordrait pas puisqu'elle ne regarde que les capacites.
+    C'est le pire cas du plan — non pas qu'elle refuse, mais qu'elle accepte
+    a tort — et il ne se voit sur aucune machine de la CI.
+
+    **On ne restaure PAS.** Ce n'est pas un oubli symetrique : le peintre
+    veut que le bit reste pose pendant qu'il peint, et il n'y a pas de
+    « pendant » au sens d'un bloc — le direct ecrit sur toute la duree du
+    rejeu, et un `finally` qui le reposerait ne s'executerait pas sur un
+    CTRL_CLOSE_EVENT. Reposer un mode que l'hote avait deja pose n'aurait de
+    toute facon rien restaure.
+
+    Rend VRAI seulement si le bit EST pose au moment ou cette fonction rend
+    la main :
+
+      - hors Windows, il n'y a pas de bit : vrai, il n'y a rien a reposer et
+        `_ansi_posix` a deja dit ce qu'on savait ;
+      - sur Windows sans console a interroger — `ctypes` n'a pas pu ouvrir
+        kernel32 — c'est FAUX : on ne sait pas, et un refus vaut mieux qu'une
+        valeur devinee. L'appelant peint alors en texte nu, ce qui est le cas
+        de BASE et non un repli degrade ;
+      - sur Windows 8.1, `SetConsoleMode` refuse le bit inconnu : faux, et
+        c'est exactement ce que la sonde avait deja mesure.
+
+    L'appelant — aujourd'hui `commandes/principal.py:_explorer` — en fait un
+    `forcer_nu`. Il n'y a pas d'autre usage, et il ne doit pas y en avoir un
+    qui se contente de la valeur de retour sans peindre derriere : reposer le
+    bit est un effet sur le terminal de quelqu'un.
+    """
+    if not systeme.plateforme.startswith("win"):
+        return True
+    console = systeme.console
+    if console is None:
+        return False
+    handle = HANDLES[systeme.nom_du_flux]
+    try:
+        mode = console.lire_mode(handle)
+        if mode is None:
+            return False
+        if mode & VT_SORTIE:
+            return True
+        if not console.poser_mode(handle, mode | VT_SORTIE):
+            return False
+        verification = console.lire_mode(handle)
+    except Exception:                      # noqa: BLE001 — voir ci-dessous
+        # Meme regle que `_appeler` : ce module ne laisse pas kernel32 tuer
+        # le programme. Une exploration qui a une session SAP ouverte ne doit
+        # pas mourir sur un appel de confort d'affichage.
+        return False
+    return bool(verification is not None and verification & VT_SORTIE)
+
+
 def _ansi_posix(systeme: Systeme, motifs: list[str]) -> tuple[bool, str]:
     """Ce que POSIX permet de savoir, c'est-a-dire moins que sur Windows.
 

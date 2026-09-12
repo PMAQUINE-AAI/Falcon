@@ -30,8 +30,8 @@ from falcon.toile import (
     LARGEUR_PLAFOND, LARGEUR_SANS_MESURE, MARQUE, MESUREE, NEUTRE, NU,
     SEPARATEUR, STD_SORTIE, TONS, VIDE, Bloc, Capacites, Fragment, Gabarit, PeintreColore,
     PeintreNu, RenduRefuse, Systeme, colonnes, couper, couper_chemin,
-    gabarit_pour, peintre_pour, rendre_capacites, rendre_sonde, retirer,
-    sonder, texte_nu,
+    VT_SORTIE, gabarit_pour, peintre_pour, rendre_capacites, rendre_sonde,
+    reposer_le_bit, retirer, sonder, texte_nu,
 )
 from falcon.toile import peintre as module_peintre
 from falcon.toile import sequences
@@ -718,6 +718,104 @@ class TestLeBanc(unittest.TestCase):
                 obtenu = inspect.signature(getattr(_ConsoleKernel32, nom))
                 self.assertEqual(list(attendu.parameters),
                                  list(obtenu.parameters))
+
+
+class TestReposerLeBit(unittest.TestCase):
+    """Le geste que la sonde annonce et ne fait pas, et qui appartient au
+    lot qui PEINT.
+
+    `_ansi_windows` restaure toujours le mode d'origine : une sonde mesure,
+    elle ne regle pas. Sur la machine cible — conhost de Windows 10,
+    PowerShell 5.1 — VT est ETEINT par defaut, donc apres `sonder` il l'est de
+    nouveau. Peindre sur la foi d'un `ansi=True` mesure une seconde plus tot
+    deverse `<-[1m` a chaque ligne : les capacites sont vraies, l'etat du
+    handle a change apres la mesure, et la garde n°9 ne mord pas puisqu'elle
+    ne regarde que les capacites. C'est le pire cas nomme par le plan — non
+    pas qu'elle refuse, mais qu'elle ACCEPTE A TORT — et aucune machine de la
+    CI ne le verra.
+    """
+
+    def test_un_conhost_de_windows_10_voit_son_bit_repose(self):
+        """Le cas qui compte : mode 3 au depart, VT a zero apres `sonder`.
+
+        Sans cette fonction, le `Diffuseur` construit sur ces capacites-la
+        emettait quand meme dix sequences, et le tout premier octet ecrit sur
+        le terminal etait `<-[1m`.
+        """
+        systeme = windows_10()
+        capacites = sonder(systeme)
+        self.assertTrue(capacites.ansi)
+        self.assertEqual(capacites.niveau, COULEUR)
+        self.assertEqual(systeme.console.modes[STD_SORTIE], 0x0003,
+                         "la sonde a bien restaure le mode d'origine : sans "
+                         "cela, ce test ne prouve rien")
+
+        self.assertTrue(reposer_le_bit(systeme))
+        self.assertTrue(systeme.console.modes[STD_SORTIE] & VT_SORTIE)
+
+    def test_un_hote_qui_l_a_deja_pose_n_est_pas_retouche(self):
+        """Windows Terminal / conpty : le bit est la, on n'ecrit pas."""
+        systeme = windows_terminal()
+        systeme.console.journal.clear()
+        self.assertTrue(reposer_le_bit(systeme))
+        self.assertEqual([a for a in systeme.console.journal
+                          if a[0] == "poser"], [])
+
+    def test_windows_8_1_refuse_et_le_dit(self):
+        """`SetConsoleMode` refuse le bit inconnu : l'appelant peint nu.
+
+        C'est le meme verdict que la sonde avait deja rendu, et c'est normal :
+        ce qui n'a pas pu etre pose n'est pas pose.
+        """
+        self.assertFalse(reposer_le_bit(windows_8_1()))
+
+    def test_une_console_menteuse_est_refusee_ici_aussi(self):
+        """`SetConsoleMode` rend vrai et le bit n'est pas la a la relecture.
+
+        C'est la seule facon de transformer une lecture de documentation en
+        mesure, et elle vaut au moment de peindre autant qu'au moment de
+        sonder.
+        """
+        self.assertFalse(reposer_le_bit(windows_menteur()))
+
+    def test_sans_console_a_interroger_c_est_un_REFUS(self):
+        """Un flux redirige, un `pythonw` sans console, un `ctypes` qui n'a
+        pas pu ouvrir kernel32 : on ne SAIT pas, donc non.
+
+        Un refus vaut mieux qu'une valeur devinee — et le refus se paie en
+        texte nu, qui est le cas de BASE et non un repli degrade.
+        """
+        self.assertFalse(reposer_le_bit(windows_redirige()))
+        self.assertFalse(reposer_le_bit(Systeme(
+            plateforme="win32", variables={}, nom_du_flux="stderr",
+            fileno=2, isatty=True, encodage="cp1252", console=None)))
+
+    def test_hors_windows_il_n_y_a_pas_de_bit_a_reposer(self):
+        """POSIX n'a aucun appel qui pose ou retire l'interpretation des
+        sequences : il n'y a rien a faire, et rien a refuser."""
+        self.assertTrue(reposer_le_bit(linux_sans_couleur()))
+        self.assertTrue(reposer_le_bit(pty_muet()))
+
+    def test_un_kernel32_qui_part_en_exception_ne_tue_pas_l_exploration(self):
+        """Une exploration qui tient une session SAP ouverte ne doit pas
+        mourir sur un appel de confort d'affichage."""
+        systeme = Systeme(
+            plateforme="win32", variables={}, nom_du_flux="stdout",
+            fileno=1, isatty=True, encodage="cp1252",
+            console=_console_qui_leve(OSError(127, "procedure introuvable")))
+        self.assertFalse(reposer_le_bit(systeme))
+
+    def test_la_sonde_reste_une_sonde(self):
+        """Garde-fou : `sonder` ne doit JAMAIS laisser le bit pose.
+
+        Si elle le faisait, `reposer_le_bit` n'aurait plus rien a reposer et
+        deviendrait un chemin mort — et surtout `falcon sonde`, qui n'est
+        qu'un diagnostic, changerait le comportement d'un programme qui ne lui
+        a rien demande d'autre.
+        """
+        systeme = windows_10()
+        sonder(systeme)
+        self.assertEqual(systeme.console.modes[STD_SORTIE] & VT_SORTIE, 0)
 
 
 class TestGabarit(unittest.TestCase):
