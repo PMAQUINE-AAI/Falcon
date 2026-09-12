@@ -13,15 +13,29 @@ laisserait des caracteres parasites sur l'autre. C'est vrai TANT QU'ON NE
 MESURE PAS. Windows repond a la question depuis 2015 : on pose
 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, **on le relit**, et l'echec de
 `GetConsoleMode` est lui-meme la reponse. Un refus qu'on sait lever sur preuve
-n'est plus un plafond : c'est une garantie. La decision n°17 arrete l'ecart.
+n'est plus un plafond : c'est une garantie.
+
+**Aucune decision de `SPEC_FALCON.md` n'est encore amendee, et ce paragraphe
+ne fait pas semblant du contraire.** Les n°15 et n°16 affirment toujours
+« aucune sequence ANSI », et elles restent vraies tant que rien ne peint —
+aucun appelant de ce paquet n'emet une seule sequence aujourd'hui. Le lot qui
+peindra devra l'ecrire, sous un numero qui n'existe pas encore : la table
+s'arrete a la vingtieme. Citer la dix-septieme, qui parle de navigation entre
+unites de travail, enverrait le lecteur lire un paragraphe sans rapport et lui
+apprendrait que les docstrings de ce depot ne citent pas juste.
 
 **Deux niveaux, et pas quatre.** `NU` est le cas de BASE, pas un repli :
 `PeintreNu` est l'identite, et `PeintreColore` n'ajoute que des enveloppes
-autour des lignes que `PeintreNu` a produites. Un echelon intermediaire
-« fleches sans couleur » ou « couleur sans largeur » a ete mesure sur les
-valeurs d'un cmd.exe reel : la composition rend 0 ou tout, jamais l'entre-deux.
-Deux sur trois ne donnent pas une demi-interface, ca donne une interface
-cassee.
+autour des lignes que `PeintreNu` a produites. Il n'y a pas de demi-DECOR : le
+peintre colore n'existe qu'au-dessus du nu, et la composition d'un niveau
+intermediaire de decor rendrait une interface cassee, pas une demi-interface.
+
+La largeur et la couleur, en revanche, se mesurent SEPAREMENT et echouent
+separement. Un pty sans TIOCSWINSZ donne « taille inconnue » et « niveau
+retenu COULEUR » — mesure, pas suppose : `falcon sonde` le rend tel quel — et
+un `pythonw` sans descripteur fait de meme sur Windows. Un gabarit de 72 non
+mesure peut donc etre peint en couleur, et c'est bien ainsi : refuser la
+couleur parce qu'on ignore la largeur n'apprendrait la largeur a personne.
 
 **Rien ici n'ecrit nulle part.** Le choix du flux appartient a l'appelant :
 `Console.ecrire` pour le dialogue, un flux et un retour chariot pour la ligne

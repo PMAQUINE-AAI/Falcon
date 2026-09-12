@@ -251,8 +251,9 @@ class Exploration:
     actions_envoyees: int = 0
     releves: int = 0
 
-    #: Combien de fois l'observateur du direct a leve, et combien de faits
-    #: n'ont donc jamais atteint l'ecran.
+    #: Combien de fois l'OBSERVATEUR du direct a leve, et combien de faits
+    #: n'ont donc jamais atteint l'ecran. Lui seul : une construction
+    #: d'`Evenement` qui echoue est comptee a part, plus bas.
     #:
     #: Le compte est rendu au lieu d'etre avale en silence : un afficheur
     #: muet pour toujours serait un second mensonge, plus discret que le
@@ -260,6 +261,22 @@ class Exploration:
     #: bloque. « Le direct s'est tu » et « il n'y avait plus rien a montrer »
     #: ne se distinguent pas autrement.
     pannes_d_affichage: int = 0
+
+    #: Combien de fois FALCON n'a pas su construire son propre `Evenement`,
+    #: et le premier motif.
+    #:
+    #: Separe de `pannes_d_affichage` parce que le compte rendu ACCUSE : un
+    #: `kwarg` mal orthographie dans un appel a `emettre` y ferait ecrire
+    #: « c'est l'ecran qui a menti par omission », et enverrait l'operateur
+    #: chercher un probleme de terminal pour un defaut de ce depot-ci.
+    emissions_impossibles: int = 0
+    motif_d_emission_impossible: str = ""
+
+    #: Non vide si le flux de sortie s'est ferme pendant le parcours — le
+    #: lecteur d'un tube est parti, la fenetre a ete fermee, la liaison RDP a
+    #: lache. Ce n'est ni une panne d'afficheur ni un defaut de FALCON, et le
+    #: compte rendu le dit sur une ligne a lui.
+    coupure_d_affichage: str = ""
 
     #: Systeme, mandant et langue LUS sur l'ecran de depart.
     #:
@@ -586,7 +603,21 @@ class _Parcours:
 
         #: A qui l'on raconte, et ce que cela a coute quand il a leve.
         self.observateur = observateur
+
+        #: Combien de fois L'OBSERVATEUR a leve. Rien d'autre : voir `emettre`.
         self.pannes_d_affichage = 0
+
+        #: Combien de fois FALCON n'a pas su former son propre `Evenement`,
+        #: et le premier motif. C'est un defaut de CE fichier, jamais du
+        #: terminal, et le compte rendu ne doit pas les confondre.
+        self.emissions_impossibles = 0
+        self.motif_d_emission_impossible = ""
+
+        #: Non vide si le flux de sortie s'est ferme en cours de route. On
+        #: cesse alors d'appeler l'observateur : le lecteur est parti, ce
+        #: n'est pas une erreur du programme et ce n'est pas une panne
+        #: d'afficheur.
+        self.coupure_d_affichage = ""
 
         #: L'origine du temps ECOULE. `time.monotonic` et pas `self.horloge` :
         #: celle-ci nomme les dumps et date les variantes, et les tests la
@@ -611,40 +642,88 @@ class _Parcours:
     def emettre(self, genre: str, **champs: Any) -> None:
         """Pose un fait devant l'observateur, et protege le parcours de lui.
 
-        **La CONSTRUCTION de l'evenement est a l'interieur du `try`, pas au
-        site d'appel.** C'est le point le plus facile a rater : `executer` est
-        appelee depuis le corps du `try` de `_parcourir`, donc un `repr()` qui
-        leve pendant la mise en forme d'un argument y serait attrape par
-        `except Refus` ou `except Echec`, converti en `Branche` dont le motif
-        ACCUSE SAP, et `_dump_si_inconnu` ecrirait sur le disque le dump d'un
-        incident qui n'a jamais eu lieu. Le compte rendu annoncerait une panne
-        de SAP causee par une division par zero dans un afficheur. Aucune
-        exception, un resultat plausible et FAUX : le defaut directeur du
-        depot, introduit par une barre de progression.
+        **La CONSTRUCTION de l'evenement est a l'interieur d'un `try`, pas au
+        site d'appel.** Sans quoi une mise en forme qui leve — un `repr()`
+        sur un argument, un `kwarg` inconnu d'`Evenement` — traverserait
+        `explorer` et arreterait une cartographie qui a DEJA agi dans SAP, en
+        emportant son compte rendu, c'est-a-dire la partition, les branches et
+        les reprises. Grave, mais bruyant.
+
+        Ce qui serait pire, et muet : la meme exception levee depuis le corps
+        du `try` de `_parcourir`. Ses `except` sont TYPES — `RefusDryRun`,
+        `Refus`, `Echec` — donc une `ZeroDivisionError` n'y devient pas une
+        `Branche`, elle passe outre ; mais un afficheur leve tres bien une
+        exception de CETTE famille-la, puisqu'il appelle du code FALCON. Elle
+        y deviendrait une `Branche` dont le motif ACCUSE SAP, et
+        `_dump_si_inconnu` ecrirait sur le disque le dump d'un incident qui
+        n'a jamais eu lieu. Aucune exception, un resultat plausible et FAUX :
+        le defaut directeur du depot, introduit par une barre de progression.
 
         Le placement des emissions hors de tout `try` est une SECONDE mesure,
         independante, et non un substitut : un test AST ne voit pas a travers
         un appel de methode, donc il ne dirait rien de `executer`. Les deux
         ensemble, et aucune des deux seule.
 
-        **On avale, mais on COMPTE.** Un afficheur muet pour toujours serait un
-        second mensonge, plus discret : l'utilisateur voit le direct se figer et
-        conclut que SAP est bloque. `pannes_d_affichage` remonte dans
-        l'`Exploration` et `rapport.rendre` pose une ligne quand il est non nul.
-        « Le direct s'est tu » et « il n'y avait plus rien a montrer » ne se
-        distinguent pas autrement.
+        **On avale, mais on COMPTE — et on compte DEUX choses distinctes,
+        dans deux `try` distincts.** Un seul compteur pour les deux serait la
+        classe de defaut que ce lot existe pour ne pas introduire : « FALCON
+        n'a pas su former son propre evenement » (un `kwarg` mal orthographie,
+        un genre mal ecrit) et « l'afficheur a leve » ne sont pas la meme
+        panne, et le compte rendu ACCUSE nommement. Mesure : remplacer
+        `versees=` par `versee=` dans l'emission d'`ENVOYE` faisait ecrire
+        « l'ecran a menti par omission » soixante-sept fois, sur un terminal
+        qui n'avait rien fait de mal. Un operateur envoye chercher un probleme
+        de terminal pour une faute de frappe dans ce fichier-ci.
+
+        **Un flux qui se ferme n'est pas un afficheur fautif**, et le depot le
+        sait deja : `commandes/principal.py` attrape la meme `BrokenPipeError`
+        avec « le lecteur est parti, ce n'est pas une erreur du programme ».
+        `falcon explorer ... | more` puis `q`, la croix de la fenetre cmd.exe,
+        une deconnexion RDP : le canal se ferme, et reessayer une fois par fait
+        serait quatre cents ecritures mortes pendant qu'une session SAP tourne.
+        On cesse donc d'appeler l'observateur, et le compte rendu le DIT —
+        sans accuser personne, parce que personne n'a rien fait de mal.
 
         `KeyboardInterrupt` et `SystemExit` ne sont PAS avales, et ils ne sont
         pas non plus « revus au tour suivant » : un KeyboardInterrupt attrape
         est consomme, le handler a deja tourne, il n'en reste rien. On le
         relaie. Un Ctrl-C tape pendant une emission doit arreter le parcours,
         pas disparaitre pendant que FALCON continue de presser des boutons.
+
+        **Les quatre compteurs sont poses ICI et non aux treize sites.** Ce
+        sont des lectures d'attributs, zero trafic COM ; les laisser a chaque
+        site d'appel les rendait absents de neuf genres sur treize, et un zero
+        de `dataclass` y etait indistinguable d'un zero mesure. La ligne
+        collante du direct se serait peinte « actions 000/000 » sur une
+        exploration aux deux tiers, et une jauge qui divise par
+        `plafond_ecrans` y aurait leve une `ZeroDivisionError` — avalee ici
+        meme, comptee en panne d'afficheur, et l'ecran accuse a la place de
+        cette ligne-ci. `setdefault` et non une affectation : les sites qui
+        renseignent deja un compteur avec un sens particulier — `FIN`, qui
+        rend les totaux definitifs — gardent le leur.
         """
         if self.observateur is None:
             return
         try:
+            champs.setdefault("actions", self.actions)
+            champs.setdefault("plafond_gestes", self.plafond_gestes)
+            champs.setdefault("versees", len(self.versees))
+            champs.setdefault("plafond_ecrans", self.plafond_ecrans)
             evenement = Evenement(genre=genre, monotone_ms=self.chrono(),
                                   **champs)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as defaut:
+            # NOTRE faute, pas celle de l'ecran : un `kwarg` que `Evenement`
+            # ne connait pas, un genre absent de `GENRES`. Le motif est garde
+            # parce qu'un compte seul n'est pas actionnable — c'est le nom du
+            # `kwarg` fautif qui dit ou regarder dans ce fichier.
+            self.emissions_impossibles += 1
+            if not self.motif_d_emission_impossible:
+                self.motif_d_emission_impossible = (
+                    f"{type(defaut).__name__} : {defaut}")
+            return
+        try:
             self.observateur(evenement)
         except (KeyboardInterrupt, SystemExit):
             # Redondante AUJOURD'HUI — `except Exception` epargne deja les
@@ -654,13 +733,29 @@ class _Parcours:
             # parcours` est ce qui l'empeche ; cette clause est ce qui
             # l'explique a qui relit.
             raise
+        except OSError as coupure:
+            # `BrokenPipeError` en est une : sur Windows, `[WinError 109]` et
+            # `[WinError 232]` y sont traduits. Un disque plein en fait partie
+            # aussi, et la conclusion est la meme — reessayer n'y changera
+            # rien. On se tait pour de bon, et on dit qu'on s'est tu.
+            self.observateur = None
+            self.coupure_d_affichage = f"{type(coupure).__name__} : {coupure}"
         except Exception:
             self.pannes_d_affichage += 1
 
     # -- releve ------------------------------------------------------------
 
-    def relever(self) -> bool:
+    def relever(self, *, ordre: int = 0, index: int = 0) -> bool:
         """Releve TOUTES les fenetres ouvertes. Rend False si le plafond tombe.
+
+        `ordre` et `index` disent QUEL geste vient de faire bouger l'ecran,
+        et ils sont des PARAMETRES parce que cette methode ne peut pas les
+        deviner : elle est appelee depuis cinq endroits, dont un avant le
+        premier geste. Sans eux, les trois genres qu'elle emet portaient le
+        zero par defaut d'une `dataclass`, indistinguable d'un zero mesure —
+        et le direct ne pouvait rattacher un ecran verse a rien. Leur defaut
+        vaut zero pour le seul appel qui le merite : le releve de l'ecran de
+        DEPART, pris avant que le moindre geste n'ait ete aborde.
 
         Toutes les fenetres, pas seulement `wnd[0]` : la moitie de la trace de
         reference se passe dans `wnd[1]`, et un releve restreint a la fenetre
@@ -711,26 +806,23 @@ class _Parcours:
                 self.deja_connues.append(clef)
                 self.emettre(evenements.ECRAN_CONNU, clef=str(clef),
                              fenetre=fenetre.id, titre=variante.titre,
-                             champs=len(variante.champs),
-                             versees=len(self.versees),
-                             plafond_ecrans=self.plafond_ecrans)
+                             champs=len(variante.champs), ordre=ordre,
+                             index=index, total=len(self.gestes))
                 continue
             if len(self.versees) >= self.plafond_ecrans:
                 # AVANT le versement, jamais apres : un plafond verifie apres
                 # coup laisse passer un ecran de plus que celui annonce.
                 self.plafond_ecrans_atteint = True
                 self.emettre(evenements.PLAFOND, motif="ecrans",
-                             clef=str(clef), fenetre=fenetre.id,
-                             versees=len(self.versees),
-                             plafond_ecrans=self.plafond_ecrans)
+                             clef=str(clef), fenetre=fenetre.id, ordre=ordre,
+                             index=index, total=len(self.gestes))
                 return False
             self.depot.mettre_en_quarantaine(variante)
             self.versees.append(clef)
             self.emettre(evenements.ECRAN_VERSE, clef=str(clef),
                          fenetre=fenetre.id, titre=variante.titre,
-                         champs=len(variante.champs),
-                         versees=len(self.versees),
-                         plafond_ecrans=self.plafond_ecrans)
+                         champs=len(variante.champs), ordre=ordre,
+                         index=index, total=len(self.gestes))
         return True
 
     # -- incidents ---------------------------------------------------------
@@ -803,7 +895,7 @@ class _Parcours:
             self.actions += 1
         self.derniere_cible = ""
 
-        self.relever()
+        self.relever(ordre=geste.ordre, index=index)
         obtenue = self.garde.screen().transaction
         # Le mot ENTIER, des deux cotes : « IW3 » apparierait « IW39 », et
         # « IH0 » apparierait « IH06 » comme « IH08 ».
@@ -859,11 +951,14 @@ def explorer(trace: Trace,
 
     `observateur` recoit un `Evenement` par fait constate, pendant que le
     parcours court. Il est FACULTATIF et le defaut est `None` : sans lui pas
-    un octet ne change, et c'est ainsi qu'on peut affirmer qu'un afficheur
-    n'entre pour rien dans ce qui est fait a SAP. Ce qu'il leve est avale et
-    COMPTE — voir `_Parcours.emettre` — parce qu'une barre de progression n'a
-    pas a fabriquer une branche, et un direct muet n'a pas a passer pour un
-    SAP bloque.
+    un octet ne change, pas une emission n'est tentee, et c'est ainsi qu'on
+    peut affirmer qu'un afficheur n'entre pour rien dans ce qui est fait a
+    SAP. Ce qu'il leve est avale et COMPTE — voir `_Parcours.emettre` —
+    parce qu'une barre de progression n'a pas a fabriquer une branche, et un
+    direct muet n'a pas a passer pour un SAP bloque. Trois issues distinctes
+    y sont comptees separement, parce que le compte rendu ACCUSE et ne doit
+    pas se tromper de coupable : l'afficheur a leve, FALCON n'a pas su former
+    son propre fait, ou le flux de sortie s'est ferme.
     """
     if plafond_gestes <= 0:
         raise ExplorationImpossible(
@@ -892,8 +987,7 @@ def explorer(trace: Trace,
         evenements.DEPART, source=trace.source,
         cible=str(parcours.catalogue), total=len(parcours.gestes),
         transaction=depart.transaction, systeme=depart.systeme,
-        mandant=depart.mandant, langue=depart.langue,
-        plafond_gestes=plafond_gestes, plafond_ecrans=plafond_ecrans)
+        mandant=depart.mandant, langue=depart.langue)
 
     etat, raison, index = _parcourir(parcours)
     non_explores = max(0, len(parcours.gestes) - index)
@@ -904,12 +998,17 @@ def explorer(trace: Trace,
     # sur sept laisserait croire a un parcours encore en cours.
     #
     # Avant de construire l'`Exploration`, pour que `pannes_d_affichage` y
-    # porte aussi la panne que cette derniere emission aurait causee.
+    # porte aussi la panne que cette derniere emission aurait causee. Ce n'est
+    # pas une preference : un afficheur qui ne leve QUE sur la fin — un
+    # diffuseur dont la fermeture de flux echoue, le cas le plus vraisemblable
+    # — verrait sinon sa panne disparaitre, et l'utilisateur lirait un compte
+    # rendu qui affirme par son SILENCE que le direct lui a tout montre, alors
+    # que la ligne qui dit l'etat final ne s'est jamais affichee.
+    # `test_un_afficheur_qui_ne_leve_que_sur_la_FIN_est_quand_meme_compte` est
+    # ce qui rend ce commentaire verifiable.
     parcours.emettre(
         evenements.FIN, etat=etat, raison=raison, index=index,
-        total=len(parcours.gestes), actions=parcours.actions,
-        plafond_gestes=plafond_gestes, versees=len(parcours.versees),
-        plafond_ecrans=plafond_ecrans, sautes=parcours.sautes)
+        total=len(parcours.gestes), sautes=parcours.sautes)
 
     return Exploration(
         trace=trace.source, etat=etat, catalogue=str(parcours.catalogue),
@@ -934,6 +1033,9 @@ def explorer(trace: Trace,
         actions_envoyees=parcours.actions,
         releves=parcours.releves,
         pannes_d_affichage=parcours.pannes_d_affichage,
+        emissions_impossibles=parcours.emissions_impossibles,
+        motif_d_emission_impossible=parcours.motif_d_emission_impossible,
+        coupure_d_affichage=parcours.coupure_d_affichage,
         systeme=depart.systeme, mandant=depart.mandant, langue=depart.langue,
     )
 
@@ -956,10 +1058,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         if p.actions >= p.plafond_gestes:
             raison = _plafond_gestes(p, index)
             p.emettre(evenements.PLAFOND, motif="gestes", raison=raison,
-                      index=index, total=total, actions=p.actions,
-                      plafond_gestes=p.plafond_gestes,
-                      versees=len(p.versees),
-                      plafond_ecrans=p.plafond_ecrans)
+                      index=index, total=total)
             return PLAFOND, raison, index
 
         geste = p.gestes[index]
@@ -967,9 +1066,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         # est une POSITION dans le fichier, jamais un avancement.
         p.emettre(evenements.GESTE, ordre=geste.ordre, ligne=geste.ligne,
                   index=index, total=total, verbe=geste.verbe,
-                  cible=geste.cible, source=geste.texte_source,
-                  actions=p.actions, plafond_gestes=p.plafond_gestes,
-                  versees=len(p.versees), plafond_ecrans=p.plafond_ecrans)
+                  cible=geste.cible, source=geste.texte_source)
 
         # -- une Entree deja envoyee par une reprise -----------------------
         if p.validation_consommee == index:
@@ -1029,9 +1126,18 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
 
         # -- l'action a l'aveugle ------------------------------------------
         assert traduction.appel is not None             # garanti par TRADUIT
-        aveugle = _action_a_l_aveugle(
-            traduction.appel, tuple(f.id for f in p.garde.windows()),
-            p.derniere_cible)
+        # Les fenetres ouvertes JUSTE AVANT l'action. Une seule lecture, et
+        # elle existait deja : la garde de l'action a l'aveugle en a besoin.
+        # C'est la seule mesure de ce parcours qui connaisse les fenetres au
+        # PLURIEL, et c'est pour cela que `Evenement.fenetres` n'est
+        # renseigne que sur `ENVOYE`. La redemander pour un affichage
+        # doublerait le trafic COM sur le chemin le plus chaud, sans que
+        # `p.actions` — qui ne compte pas les lectures — n'en dise un mot :
+        # `test_l_observateur_n_ajoute_aucune_action_au_driver` fige le
+        # compte de lectures pour cette raison precise.
+        ouvertes = tuple(f.id for f in p.garde.windows())
+        aveugle = _action_a_l_aveugle(traduction.appel, ouvertes,
+                                      p.derniere_cible)
         if aveugle:
             p.interrompus += 1
             suite = _abandonner(p, geste, ACTION_AVEUGLE, aveugle, index)
@@ -1060,7 +1166,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             p.emettre(evenements.SAUVEGARDE_REFUSEE, ordre=geste.ordre,
                       ligne=geste.ligne, verbe=geste.verbe,
                       cible=geste.cible, source=geste.texte_source,
-                      index=index, total=total)
+                      motif=motif, index=index, total=total)
             p.interrompus += 1
             suite = _abandonner(p, geste, SAUVEGARDE, motif, index)
             if suite < 0:
@@ -1069,7 +1175,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
             continue
         except Refus as arret:
             # Garde ou taxonomie : l'action a eu lieu, l'ecran a pu bouger.
-            if not p.relever():
+            if not p.relever(ordre=geste.ordre, index=index):
                 return PLAFOND, _plafond_ecrans(p, index), index
             dump, entree = p._dump_si_inconnu()
             p.interrompus += 1
@@ -1082,7 +1188,7 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         except Echec as panne:
             # La couture : `ObjetIntrouvable`, `SessionPerdue`... L'etat de
             # l'ecran est incertain ; le releve est justement ce qui le dira.
-            if not p.relever():
+            if not p.relever(ordre=geste.ordre, index=index):
                 return PLAFOND, _plafond_ecrans(p, index), index
             p.interrompus += 1
             suite = _abandonner(
@@ -1097,10 +1203,9 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
         p.emettre(evenements.ENVOYE, ordre=geste.ordre, ligne=geste.ligne,
                   verbe=geste.verbe, cible=geste.cible,
                   appel=traduction.appel.methode, index=index, total=total,
-                  actions=p.actions, plafond_gestes=p.plafond_gestes,
-                  versees=len(p.versees), plafond_ecrans=p.plafond_ecrans)
+                  fenetres=ouvertes)
         p.ordres_atteints.append(geste.ordre)
-        if not p.relever():
+        if not p.relever(ordre=geste.ordre, index=index):
             return PLAFOND, _plafond_ecrans(p, index + 1), index + 1
         index += 1
 
@@ -1165,23 +1270,39 @@ def _abandonner(p: _Parcours, geste: Geste, categorie: str, motif: str,
 def _sauter_vers_reprise(p: _Parcours, depart: int) -> int:
     """Avance jusqu'au prochain point de reprise, en comptant les sautes.
 
-    **Les deux emissions se posent APRES la reecriture de `p.branches[-1]`**,
-    et cette ligne-la est la seule qui renseigne `reprise`. Emises avant,
-    elles annonceraient « reprise visee (aucune) » sur une branche qui
-    reprend tres bien : aucune exception, un ecran plausible et FAUX. C'est
-    la classe de defaut que ni l'enveloppe d'`emettre` ni la garde AST ne
-    voient — seul le test qui compare le flux entier a une sequence attendue
-    la voit.
+    **C'est ICI, et nulle part ailleurs, qu'une branche est racontee** — sur
+    les DEUX sorties, celle qui reprend et celle qui ne reprend pas. Cette
+    fonction est le seul endroit que TOUTE branche posee traverse : les deux
+    appelants (`_abandonner`, et `_tenter_reprise` sur une reprise refusee)
+    y viennent immediatement apres leur `p.branches.append`.
 
-    Tout appelant a deja pose sa branche : `_abandonner` l'ajoute avant
-    d'appeler, et `_tenter_reprise` aussi sur une reprise refusee. C'est ce
-    qui permet de raconter ici la branche COMPLETE, sa suite comprise.
+    Le contraire a ete mesure, pas conjecture. Tant que la sortie « aucune
+    reprise » se reposait sur `_sans_point_de_reprise` pour raconter, une
+    branche pouvait n'apparaitre JAMAIS dans le flux : dans `_parcourir`, le
+    test `if p.plafond_ecrans_atteint:` est evalue AVANT `if suite < 0:`, et
+    il rend PLAFOND sans jamais appeler `_sans_point_de_reprise`. Le drapeau
+    peut etre pose a cet instant precis parce que `_reprendre` appelle
+    `self.relever()` sans agir son booleen. Reproduit : une reprise refusee
+    sur un plafond d'un ecran laisse `branches == [reprise_refusee]` et un
+    flux ou ni `BRANCHE` ni `SAUT` n'apparait — le compte rendu annonce une
+    branche, le direct se termine sur un `fin` propre. Aucune exception, un
+    ecran plausible et FAUX.
+
+    **Les emissions se posent APRES la reecriture de `p.branches[-1]`**, et
+    cette ligne-la est la seule qui renseigne `reprise`. Emises avant, elles
+    annonceraient « reprise visee (aucune) » sur une branche qui reprend tres
+    bien. C'est la classe de defaut que ni l'enveloppe d'`emettre` ni la garde
+    AST ne voient — seul le test qui compare le flux entier a une sequence
+    attendue la voit.
     """
     cible = p._prochaine_reprise(depart)
     if cible is None:
-        # Rien n'est raconte ici : `_sans_point_de_reprise` va l'etre, et
-        # c'est lui qui connait le nombre de gestes emportes. Le raconter
-        # aux deux endroits doublerait la branche dans le flux.
+        # La branche est racontee ICI, et le `SAUT` qui la suit le sera par
+        # `_sans_point_de_reprise`, seul a connaitre le nombre de gestes
+        # emportes — QUAND l'appelant l'atteint. Il ne l'atteint pas
+        # toujours,
+        # et c'est toute la raison de cette ligne.
+        _raconter_la_branche(p)
         return -1
     p.sautes += cible - depart
     p.ordres_sautes.extend(g.ordre for g in p.gestes[depart:cible])
@@ -1198,14 +1319,23 @@ def _sauter_vers_reprise(p: _Parcours, depart: int) -> int:
 def _raconter_la_branche(p: _Parcours) -> None:
     """Emet la derniere branche posee, telle qu'elle est a cet instant.
 
-    Une fonction plutot que deux appels recopies : les deux chemins de saut
-    doivent raconter la MEME chose, et deux copies auraient diverge au premier
-    champ ajoute. Elle ne lit que `p.branches[-1]`, jamais la liste : un
-    evenement qui transporterait `p.branches` verrait sa branche changer dans
-    le dos de celui qui la tient.
+    Une fonction plutot que deux appels recopies : les deux sorties de
+    `_sauter_vers_reprise` doivent raconter la MEME chose, et deux copies
+    auraient diverge au premier champ ajoute. Elle ne transporte que
+    `p.branches[-1]`, jamais la liste : un evenement qui porterait
+    `p.branches` verrait sa branche changer dans le dos de celui qui le tient.
+
+    Elle REFUSE une liste vide au lieu de se taire. Le cas est aujourd'hui
+    inatteignable — ses deux appelants sont les deux sorties de
+    `_sauter_vers_reprise`, et les deux appelants de celle-ci posent leur
+    branche juste avant d'y entrer — mais un repli silencieux ferait
+    disparaitre un `BRANCHE` en laissant passer le `SAUT` qui le suit, et une
+    ligne qui manque ne se voit pas. C'est exactement le defaut que ce lot
+    vient de fermer un cran plus haut.
     """
-    if not p.branches:
-        return
+    assert p.branches, ("_raconter_la_branche sans branche posee : ses "
+                        "appelants doivent poser la branche avant d'appeler "
+                        "_sauter_vers_reprise")
     branche = p.branches[-1]
     p.emettre(evenements.BRANCHE, ordre=branche.ordre, ligne=branche.ligne,
               verbe=branche.verbe, categorie=branche.categorie,
@@ -1225,7 +1355,9 @@ def _sans_point_de_reprise(p: _Parcours, geste: Geste) -> str:
     restants = len(p.gestes) - geste.ordre
     p.sautes += restants
     p.ordres_sautes.extend(g.ordre for g in p.gestes[geste.ordre:])
-    _raconter_la_branche(p)
+    # La branche a deja ete racontee par `_sauter_vers_reprise`, qui est le
+    # seul endroit que toute branche traverse — et que l'on atteint meme
+    # quand on n'arrive jamais jusqu'ici.
     p.emettre(evenements.SAUT, sautes=restants, index=len(p.gestes),
               total=len(p.gestes), ordre=geste.ordre)
     return (f"aucun code transaction apres le geste {geste.ordre:03d} : la "

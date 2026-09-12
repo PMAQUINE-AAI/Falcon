@@ -135,10 +135,13 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
     if exploration.raison:
         lignes.append(f"  raison         {exploration.raison}")
 
-    # Une seule ligne, et seulement si elle a quelque chose a dire. « Le
+    # Trois lignes possibles, et TROIS, parce que ce paragraphe ACCUSE. « Le
     # direct s'est tu » et « il n'y avait plus rien a montrer » ne se
     # distinguent pas a l'ecran : un afficheur qui leve et qu'on avale en
-    # silence laisse l'utilisateur conclure que SAP est bloque.
+    # silence laisse l'utilisateur conclure que SAP est bloque. Mais designer
+    # l'ecran quand le fautif est FALCON, ou quand le lecteur est simplement
+    # parti, envoie l'operateur chercher un probleme de terminal qui n'existe
+    # pas — un diagnostic faux d'aspect normal, ce que ce depot traque.
     if exploration.pannes_d_affichage:
         lignes += [
             "",
@@ -149,6 +152,30 @@ def rendre(exploration: Exploration, trace: Trace) -> str:
             "  fait — ce compte rendu-ci est complet. C'est l'ecran qui a "
             "menti par",
             "  omission, pas lui.",
+        ]
+    if exploration.emissions_impossibles:
+        lignes += [
+            "",
+            f"  FALCON N'A PAS SU FORMER {exploration.emissions_impossibles} "
+            f"FAIT(S) du direct : c'est un",
+            "  defaut de FALCON, PAS de ton terminal et PAS de SAP. Le "
+            "parcours lui-meme",
+            "  n'en a rien su et ce compte rendu-ci est complet ; ce qui "
+            "manque est a",
+            "  l'ecran, et le motif est a signaler tel quel :",
+            f"    {exploration.motif_d_emission_impossible}",
+        ]
+    if exploration.coupure_d_affichage:
+        lignes += [
+            "",
+            "  LE DIRECT A ETE COUPE en cours de route : le flux de sortie "
+            "s'est ferme",
+            "  (une fenetre refermee, un `| more` quitte, une liaison "
+            "interrompue). Rien",
+            "  n'a leve chez toi ni chez nous, et le parcours n'en a rien su "
+            "— ce compte",
+            "  rendu-ci est complet.",
+            f"    {exploration.coupure_d_affichage}",
         ]
 
     # -- les ecrans ------------------------------------------------------

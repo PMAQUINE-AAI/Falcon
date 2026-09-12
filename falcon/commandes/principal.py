@@ -186,7 +186,9 @@ def analyseur() -> argparse.ArgumentParser:
     exploration.add_argument("trace", metavar="TRACE.vbs")
     exploration.add_argument("--catalogue", metavar="DOSSIER", required=True,
                              help="dossier du catalogue ; les releves vont "
-                                  "dans son sous-dossier `quarantaine`")
+                                  "dans son sous-dossier `quarantaine`, et le "
+                                  "compte rendu dans son sous-dossier "
+                                  "`rapports`")
     # Les deux plafonds sont REQUIS et sans defaut. Le §5.5 dit « rayon
     # d'action obligatoire », et le chargeur de pipeline applique deja
     # litteralement cette phrase. Un defaut serait un rayon d'action que
@@ -215,14 +217,19 @@ def analyseur() -> argparse.ArgumentParser:
     exploration.add_argument("--session", type=int, default=0)
 
     sous.add_parser(
-        "sonde", help="ce que CE terminal sait faire (LECTURE SEULE)",
-        description="Mesure, dans CE processus et sur CE terminal, la taille "
-                    "de la fenetre et la capacite a interpreter les sequences "
-                    "ANSI. Chaque « oui » est un appel systeme qui a reussi ; "
-                    "chaque « non » nomme l'appel qui a refuse. C'est la "
-                    "commande a lancer EN PREMIER sur une machine neuve, et "
-                    "celle qu'on demande par telephone quand un affichage est "
-                    "illisible. N'ecrit rien, ne se connecte a rien.")
+        "sonde", help="ce que CE terminal sait faire (DIAGNOSTIC)",
+        description="Interroge, dans CE processus et sur CE terminal, la "
+                    "taille de la fenetre et la capacite a interpreter les "
+                    "sequences ANSI. Chaque ligne porte sa provenance : "
+                    "« mesure » veut dire qu'un appel systeme a repondu, "
+                    "« declare » qu'une variable de l'hote l'affirme sans que "
+                    "rien ne le verifie — sur POSIX, ANSI ne se mesure pas, "
+                    "il se lit dans TERM. C'est la commande a lancer EN "
+                    "PREMIER sur une machine neuve, et celle qu'on demande "
+                    "par telephone quand un affichage est illisible. Ne se "
+                    "connecte a rien et n'ecrit aucun fichier ; sur Windows "
+                    "elle pose le bit VT de la console puis le restaure, ce "
+                    "qui est la seule facon de le MESURER.")
 
     return principal
 

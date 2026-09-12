@@ -15,14 +15,21 @@ vivant du parcours.** Ni `branches`, ni `versees`, ni `constats`, ni
 et un observateur qui tiendrait la liste verrait une branche changer dans son
 dos — ou en modifierait une autre.
 
-**Et rien ne se lit sur le driver.** Les fenetres ouvertes sont deja calculees
-juste avant l'action ; l'evenement les transporte. Les redemander doublerait
-le trafic COM sur le chemin le plus chaud, et ce trafic n'est PAS compte par
-`p.actions` : la docstring d'`explorer` — « `plafond_gestes` compte les ACTIONS
-envoyees au driver [...] c'est ce qu'on fait au systeme » — deviendrait fausse,
-ce qui est un defaut a part entiere ici. Un test le verifie a l'execution sur
-les evenements de la trace de reference : aucun champ n'est une liste, un
-`dict`, un `set` ou un objet du parcours.
+**Et rien ne se lit sur le driver.** Un evenement ne transporte que ce que le
+parcours avait DEJA dans la main. `fenetres` en est le cas limite, et il vaut
+d'etre dit precisement : le parcours ne lit les fenetres au pluriel qu'a un
+seul endroit, juste avant une action traduite, pour la garde de l'action a
+l'aveugle. `ENVOYE` reutilise cette lecture-la, et c'est le SEUL genre qui
+renseigne `fenetres` — partout ailleurs le tuple est vide, parce que personne
+ne l'a mesure. Le remplir ailleurs demanderait un `windows()` de plus, et ce
+trafic n'est PAS compte par `p.actions` : la docstring d'`explorer` —
+« `plafond_gestes` compte les ACTIONS envoyees au driver [...] c'est ce qu'on
+fait au systeme » — resterait vraie pendant que le trafic COM aurait double
+sur le chemin le plus chaud. `test_l_observateur_n_ajoute_aucune_action_au_
+driver` fige le compte de LECTURES pour cette raison-la.
+
+Un test verifie a l'execution, sur les evenements de la trace de reference,
+qu'aucun champ n'est une liste, un `dict`, un `set` ou un objet du parcours.
 
 **L'horloge est `time.monotonic`, jamais `p.horloge`.** Celle-ci nomme les
 dumps et date les variantes ; l'appeler depuis un affichage decalerait la
@@ -108,7 +115,10 @@ class Evenement:
     classes lui imposerait treize branchements pour produire treize lignes.
     Le prix est qu'un champ non renseigne vaut son defaut et non « absent » ;
     il est paye par `GENRES`, qui empeche au moins qu'un genre invente ne
-    traverse le flux sans bruit.
+    traverse le flux sans bruit — et par ce guide-ci, qui dit quel genre
+    renseigne quoi. **Trois champs ne veulent pas dire la meme chose selon le
+    genre**, et un peintre qui les etiquetterait uniformement ecrirait faux :
+    c'est le prix assume du type unique, et l'endroit ou il se paie.
 
     Les champs, et qui les renseigne :
 
@@ -118,15 +128,38 @@ class Evenement:
         commentaire, et le compte rendu cite les deux pour cette raison.
       - `index`, `total` : la POSITION dans la trace, jamais un avancement.
       - `appel` : la methode de couture reellement envoyee au driver.
-      - `clef`, `titre`, `fenetre`, `champs` : la variante relevee.
+      - `clef`, `titre`, `fenetre`, `champs` : la variante relevee. Les trois
+        genres qui les portent sont `ECRAN_VERSE`, `ECRAN_CONNU` et le
+        `PLAFOND` des ecrans. Ils ne portent PAS `ordre` : `relever` est
+        appelee depuis six endroits, et lui faire deviner le geste courant
+        serait une valeur plausible et fausse.
       - `actions`, `plafond_gestes`, `versees`, `plafond_ecrans` : les deux
         seuls couples dont le denominateur est un budget tape par l'humain.
-      - `transaction`, `systeme`, `mandant`, `langue` : sur QUOI l'on agit.
-      - `fenetres` : les fenetres ouvertes, deja lues par le parcours.
-      - `categorie`, `motif`, `reprise` : la branche et sa suite.
-      - `acceptee` : ce que SAP a fait du code tape.
-      - `sautes` : des gestes emportes, pas des gestes traites.
-      - `etat`, `raison` : la fin.
+        **Renseignes sur TOUS les genres**, par `_Parcours.emettre` et non par
+        les sites d'emission : un zero de `dataclass` y serait indistinguable
+        d'un zero mesure, et une jauge qui divise par un plafond a zero leve.
+      - `transaction` : le code transaction — celui de DEPART sur `DEPART`,
+        celui qu'on a OBTENU sur `REPRISE`. Deux choses, un champ.
+      - `systeme`, `mandant`, `langue` : sur QUOI l'on agit. Lus une fois, sur
+        l'ecran de depart, et portes par `DEPART` seul.
+      - `fenetres` : les fenetres ouvertes juste AVANT l'action. `ENVOYE`
+        seul le renseigne, parce que c'est le seul endroit ou le parcours les
+        a lues pour son propre compte (la garde de l'action a l'aveugle).
+        Ailleurs le tuple est VIDE — personne ne les a mesurees, et les
+        redemander au driver pour un affichage est precisement ce que ce
+        module refuse.
+      - `categorie` : la categorie de la branche. `BRANCHE` seul.
+      - `motif` : trois choses selon le genre — le motif de la branche sur
+        `BRANCHE`, « gestes » ou « ecrans » sur `PLAFOND`, la raison de
+        l'ecart sur `CONFORT`, et la phrase du refus sur
+        `SAUVEGARDE_REFUSEE`.
+      - `reprise` : le code transaction VISE sur `BRANCHE` et `SAUT` (celui
+        sur lequel la trace redonne un point d'entree), et le code DEMANDE
+        sur `REPRISE` (celui que l'explorateur vient de taper).
+      - `acceptee` : ce que SAP a fait du code tape. `REPRISE` seul.
+      - `sautes` : des gestes emportes, pas des gestes traites. `SAUT` seul.
+      - `etat`, `raison` : la fin. `FIN` seul — et `raison` aussi sur le
+        `PLAFOND` des gestes, qui porte la phrase qui sera rendue.
       - `monotone_ms` : le temps ECOULE depuis le debut du parcours. Une
         mesure, et non une estimation : un ETA serait faux d'un facteur cinq
         sur une trace ou une branche qui tombe emporte quarante gestes.

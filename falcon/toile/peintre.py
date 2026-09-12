@@ -89,6 +89,17 @@ class PeintreNu:
     niveau = NU
 
     def peindre(self, bloc: Bloc, gabarit: Gabarit) -> list[str]:
+        """Un bloc vers ses lignes. Ne meurt sur aucune marge.
+
+        **Les DEUX retraits sont bornes, et pas seulement le premier.** La
+        marge etait ecretee a `largeur - 1` ; le retrait de l'entete, qui vaut
+        deux de plus, ne l'etait pas, et `couper` recevait alors une largeur
+        nulle ou negative — mesure : une marge de 38 sur un gabarit de 40
+        levait « largeur de coupe absurde : 0 ». La borne basse `(40, 16)` de
+        la matrice des vues est exactement ce cas. Borner les deux rend une
+        ligne tronquee a la marque, ce qui se VOIT, la ou une levee en plein
+        rendu emporterait la page.
+        """
         largeur = gabarit.colonnes
         marge = min(bloc.marge, max(largeur - 1, 0))
 
@@ -98,7 +109,7 @@ class PeintreNu:
             return [" " * marge + "-" * (largeur - marge)]
         if bloc.forme == ENTETE:
             cadre = " " * marge + "=" * (largeur - marge)
-            retrait = marge + 2
+            retrait = min(marge + 2, max(largeur - 1, 0))
             return [cadre,
                     " " * retrait + couper(texte_nu(bloc), largeur - retrait),
                     cadre]

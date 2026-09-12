@@ -88,11 +88,61 @@ IMPORTEURS_ANSI_AUTORISES = {
 # une session SAP. Et surtout, une saisie qui ne passe pas par `Console.lire`
 # est invisible a `Journal` : ce serait la premiere interface non testable du
 # depot.
+#
+# `windows-curses` n'y figure PAS, bien que ce soit le paquet pip qui installe
+# curses sur Windows : un nom d'import ne porte jamais de tiret, donc l'entree
+# ne pouvait apparier aucun import. Une entree morte dans un ensemble de refus
+# est pire qu'une entree absente — elle donne l'illusion d'une protection de
+# plus. Le nom qu'on importe est `curses`, et il est la.
+#
+# Le scan ne couvre que `PAQUET`, c'est-a-dire `falcon/` : ni `outils/`, ni
+# `tests/`. C'est voulu — la livraison est `falcon/` — mais ca se dit.
 MODULES_INTERDITS = {
-    "curses", "_curses", "windows-curses",
+    "curses", "_curses",
     "rich", "blessed", "textual", "colorama", "prompt_toolkit", "urwid",
     "msvcrt", "termios", "tty",
 }
+
+
+def noms_lies(chemin: Path) -> list[tuple[str, int, bool]]:
+    """Les noms qu'un import LIE reellement, et rien d'autre.
+
+    La nuance avec `imports()` porte sur le module d'origine d'un
+    `ImportFrom` : `from falcon.toile import sonder` NOMME `falcon.toile` mais
+    ne lie qu'une fonction — le paquet reste hors de portee. `from falcon
+    import toile`, lui, lie l'objet PAQUET, et `toile.sequences.CSI` devient
+    accessible par attribut puisque `falcon/toile/__init__.py` importe
+    `.sequences`. Les deux formes rendent le meme nom dans `imports()` ; seule
+    la seconde est une fuite, et il faut donc les distinguer.
+    """
+    arbre = ast.parse(chemin.read_text(encoding="utf-8"), str(chemin))
+    differes = _lignes_sous_type_checking(arbre)
+    lies: list[tuple[str, int, bool]] = []
+    for noeud in ast.walk(arbre):
+        if isinstance(noeud, ast.Import):
+            for alias in noeud.names:
+                lies.append((alias.name, noeud.lineno,
+                             noeud.lineno in differes))
+        elif isinstance(noeud, ast.ImportFrom):
+            nom = _absolu(chemin, noeud)
+            if not nom:
+                continue
+            for alias in noeud.names:
+                lies.append((f"{nom}.{alias.name}", noeud.lineno,
+                             noeud.lineno in differes))
+    return lies
+
+
+def _donne_acces_aux_sequences(importe: str) -> bool:
+    """Ce nom met-il `falcon.toile.sequences` a portee de main ?
+
+    Vrai pour le module lui-meme — `import falcon.toile.sequences`, `from
+    falcon.toile import sequences` — et pour le PAQUET `falcon.toile` tout
+    court, dont `sequences` est un attribut. Faux pour `from falcon.toile
+    import sonder`, qui ne lie qu'une fonction : c'est pourquoi cette regle
+    s'applique aux noms LIES et non au module d'origine.
+    """
+    return importe == "falcon.toile" or importe.endswith("toile.sequences")
 
 # `toile` PEINT ; `exploration` et `moteur` EMETTENT. La direction de
 # dependance est celle du depot, et l'inverse rendrait un parcours intestable
@@ -145,18 +195,39 @@ def _absolu(chemin: Path, noeud: ast.ImportFrom) -> str:
 
 
 def imports(chemin: Path) -> list[tuple[str, int, bool]]:
-    """(module importe, ligne, sous TYPE_CHECKING) pour chaque import."""
+    """(nom importe, ligne, sous TYPE_CHECKING) pour chaque import.
+
+    **Un `ImportFrom` rend le module ET chacun des noms qu'il en tire.** Sans
+    cela, `from falcon.toile import sequences` resolvait en « falcon.toile » et
+    passait toutes les frontieres sans un bruit — mesure : la ligne posee en
+    tete de `falcon/console/menu.py` laissait les neuf tests de ce fichier au
+    vert, le module disposant alors de `sequences.CSI` et de `sequences.
+    teinter`, et le scan de litteraux ne voyant rien puisqu'il n'y a plus de
+    litteral. C'est la forme d'import la plus naturelle de Python, et c'est
+    justement elle que la regle ne voyait pas.
+
+    Le module de base est conserve EN PLUS du nom deplie : les frontieres qui
+    testent un prefixe de paquet — `falcon.couture`, `falcon.controleur` — en
+    dependent, et une regle qui ne verrait plus que les symboles laisserait
+    passer un `from falcon import couture`.
+    """
     arbre = ast.parse(chemin.read_text(encoding="utf-8"), str(chemin))
     differes = _lignes_sous_type_checking(arbre)
     trouves: list[tuple[str, int, bool]] = []
     for noeud in ast.walk(arbre):
+        if not isinstance(noeud, (ast.Import, ast.ImportFrom)):
+            continue
+        differe = noeud.lineno in differes
         if isinstance(noeud, ast.Import):
             for alias in noeud.names:
-                trouves.append((alias.name, noeud.lineno, noeud.lineno in differes))
+                trouves.append((alias.name, noeud.lineno, differe))
         elif isinstance(noeud, ast.ImportFrom):
             nom = _absolu(chemin, noeud)
-            if nom:
-                trouves.append((nom, noeud.lineno, noeud.lineno in differes))
+            if not nom:
+                continue
+            trouves.append((nom, noeud.lineno, differe))
+            for alias in noeud.names:
+                trouves.append((f"{nom}.{alias.name}", noeud.lineno, differe))
     return trouves
 
 
@@ -247,14 +318,30 @@ class TestFrontiereANSI(unittest.TestCase):
         `chr(27) + "["` ne contient aucun `\x1b` litteral : le scan ne
         broncherait pas. Ce qu'on ne peut pas cacher, c'est l'import — un
         module qui veut poser une sequence doit nommer celui qui les fabrique.
+
+        CONTROLE NEGATIF, et il en faut TROIS, parce que les trois formes
+        s'ecrivent sans effort et que seule la premiere etait vue :
+        `from falcon.toile.sequences import CSI`, `from falcon.toile import
+        sequences` et `from falcon import toile` (puis `toile.sequences.CSI`),
+        poses dans n'importe quel module de `falcon/`. Chacun doit faire
+        tomber ce test. Les deux derniers l'ont laisse vert jusqu'a ce lot :
+        `imports()` ne rendait que le module d'origine.
         """
         for module in modules_python(PAQUET):
             if module in IMPORTEURS_ANSI_AUTORISES:
                 continue
-            for importe, ligne, differe in imports(module):
+            # Deux sources, et deux regles qui ne se recouvrent pas. Sur les
+            # noms d'`imports()` on cherche le module des sequences, quelle
+            # que soit la forme de l'import. Sur les noms LIES seulement, on
+            # cherche le paquet `falcon.toile` lui-meme : `imports()` le rend
+            # aussi pour `from falcon.toile import sonder`, qui ne lie qu'une
+            # fonction et ne donne acces a rien.
+            suspects = [(n, l, d) for n, l, d in imports(module)
+                        if n.endswith("toile.sequences")]
+            suspects += [(n, l, d) for n, l, d in noms_lies(module)
+                         if _donne_acces_aux_sequences(n)]
+            for importe, ligne, differe in suspects:
                 if differe:
-                    continue
-                if not importe.endswith("toile.sequences"):
                     continue
                 with self.subTest(module=str(module.relative_to(RACINE)),
                                   ligne=ligne):
@@ -295,6 +382,11 @@ class TestFrontiereToile(unittest.TestCase):
         Un parcours qui saurait a qui il parle deviendrait intestable sans
         terminal, ce qu'il n'est pas aujourd'hui — et le rendu se mettrait a
         dependre de l'ERP.
+
+        CONTROLE NEGATIF, DEUX formes : `from falcon.toile import Gabarit` et
+        `from falcon import toile`, posees dans `falcon/exploration/`. La
+        seconde passait avant que `imports()` ne deplie les noms — elle ne
+        resolvait qu'en « falcon », qui ne commence pas par « falcon.toile ».
         """
         for couche in COUCHES_SANS_TOILE:
             for module in modules_python(PAQUET / couche):

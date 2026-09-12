@@ -18,9 +18,16 @@ moyen de le changer : elle ne construit pas le `DriverGarde`.
 C'est le seul endroit ou vivent la partition des gestes, les branches, les
 reprises et les visites non atteintes : il defilait a l'ecran, puis
 disparaissait avec la fenetre. Un `<catalogue>/rapports/` invisible du
-`Depot` — qui globe `racine/*.yaml` sans recursion — et du `.txt`, c'est-a-dire
-le texte de `rapport.rendre` verbatim : pas de format nouveau, donc pas de
-classe de defaut nouvelle.
+`Depot` — qui globe `racine/*.yaml` sans recursion — et du `.txt` : pas de
+format nouveau, donc pas de classe de defaut nouvelle.
+
+Le fichier porte le texte de `rapport.rendre` SUIVI du bloc des esquisses
+quand `--esquisses` a ete demande. Il ne porte pas la derniere ligne de ce que
+la commande imprime — « compte rendu conserve : <chemin> » — puisque cette
+ligne parle du fichier lui-meme : ecrite dedans, elle serait la seule phrase
+du document a ne rien dire de la cartographie. Le texte imprime et le texte
+conserve ne sont donc pas identiques, et le dire vaut mieux que de promettre
+un « verbatim » qu'un `read_text()` dement.
 """
 
 from __future__ import annotations
@@ -91,6 +98,13 @@ def cartographier(trace: str | Path,
     sait pas ce qu'est un terminal, et c'est ce qui lui permet de servir la
     CLI et la console sans les distinguer. Le defaut est `None`, c'est-a-dire
     le comportement d'avant au fait pres.
+
+    `horloge` ne va PAS a `explorer`, et il faut le dire ici parce que c'est
+    ce qu'on suppose en lisant la signature. Elle ne sert qu'a dater le nom du
+    compte rendu conserve. Celle du parcours est un autre objet : elle nomme
+    les dumps et date les variantes, `explorer` la tient de son propre defaut,
+    et les confondre ferait qu'une suite qui fige l'heure pour obtenir un nom
+    de fichier stable figerait du meme geste l'horodatage des captures.
     """
     chemin = Path(trace)
     lue = lire(chemin)
@@ -110,40 +124,73 @@ def cartographier(trace: str | Path,
     if esquisses:
         compte_rendu += "\n" + _verser_les_esquisses(lue, exploration,
                                                      catalogue)
-    conserve = _conserver(catalogue, chemin.name, compte_rendu, horloge)
-    compte_rendu += f"\n\n  compte rendu conserve : {conserve}"
+    conserve, refus = _conserver(catalogue, chemin.name, compte_rendu, horloge)
+    if conserve is not None:
+        compte_rendu += f"\n\n  compte rendu conserve : {conserve}"
+    else:
+        compte_rendu += (
+            f"\n\n  compte rendu NON conserve ({refus}).\n"
+            f"  RECOPIE-LE DEPUIS CET ECRAN : il est le seul endroit ou "
+            f"vivent la partition\n"
+            f"  des gestes, les branches, les reprises et les visites non "
+            f"atteintes, et\n"
+            f"  cette cartographie a DEJA agi dans SAP.")
     return lue, exploration, compte_rendu
 
 
 def _conserver(catalogue: str | Path, trace: str, texte: str,
-               horloge: Horloge) -> Path:
-    """Ecrit le compte rendu dans `<catalogue>/rapports/` et rend son chemin.
+               horloge: Horloge) -> tuple[Path | None, str]:
+    """Ecrit le compte rendu dans `<catalogue>/rapports/`.
 
-    Aucun `except` ici, et c'est delibere : le parcours vient d'ecrire des
-    variantes dans ce meme dossier de catalogue. Un disque qui refuserait le
-    compte rendu aurait deja refuse la quarantaine, et l'exploration aurait
-    leve bien avant. Avaler l'erreur rendrait un chemin de fichier qui
-    n'existe pas — une phrase d'aspect normal, et fausse.
+    Rend (chemin, refus) : l'un des deux est toujours vide.
+
+    **L'echec est NOMME, jamais leve, et surtout jamais silencieux.** La
+    justification precedente — « le parcours vient d'ecrire des variantes
+    ce meme dossier, un disque qui refuserait le compte rendu aurait deja
+    refuse la quarantaine » — a ete mesuree et elle est FAUSSE : au second
+    passage sur un catalogue deja peuple, tous les ecrans sont deja connus,
+    zero variante est versee, et `Depot` ne cree meme pas sa racine. Le
+    `mkdir` et le `write_text` d'ici sont alors la PREMIERE et la SEULE
+    ecriture de la commande, sur le chemin par defaut (`--esquisses` est
+    optionnel). Un partage en lecture seule, un fichier verrouille par
+    l'antivirus, un `rapports` deja occupe par un fichier ordinaire : un
+    `OSError` qui traverserait ici emporterait le compte rendu d'une
+    cartographie qui a deja pilote SAP pendant trois minutes — et ni
+    `ERREURS_LISIBLES` de la CLI ni le `except ErreurFalcon` de la console ne
+    connaissent `OSError`, donc l'utilisateur recevrait une pile Python a la
+    place de sa partition.
+
+    Rendre un chemin de fichier qui n'existe pas serait le defaut inverse, et
+    il reste refuse : on ne rend PAS de chemin, on rend le motif, et
+    l'appelant ecrit « NON conserve » avec lui.
 
     Le rang en suffixe reprend la parade d'`ecrire_dump` : deux cartographies
     lancees dans la meme milliseconde ecraseraient le premier compte rendu, et
     un compte rendu perdu est une partition perdue.
+
+    `trace` entre tel quel dans le nom : seul l'horodatage est desinfecte, et
+    c'est assume. Un nom de trace venu d'un disque Windows y est deja legal ;
+    un nom venu d'un partage Samba ou d'un chemin WSL pourrait porter `: ? *`,
+    et c'est justement l'`OSError` ci-dessus qui le dira, avec le nom fautif
+    dans son message.
     """
     dossier = Path(catalogue) / DOSSIER_RAPPORTS
-    dossier.mkdir(parents=True, exist_ok=True)
-
     base = f"{_pour_un_nom(horloge())}-{trace}"
-    chemin = dossier / f"{base}.txt"
-    rang = 1
-    while chemin.exists():
-        rang += 1
-        chemin = dossier / f"{base}_{rang}.txt"
+    try:
+        dossier.mkdir(parents=True, exist_ok=True)
+        chemin = dossier / f"{base}.txt"
+        rang = 1
+        while chemin.exists():
+            rang += 1
+            chemin = dossier / f"{base}_{rang}.txt"
 
-    # Le meme encodage que tout ce que ce depot ecrit, et des fins de ligne
-    # `\n` explicites : un compte rendu relu par le navigateur ne doit pas
-    # dependre de la plateforme qui l'a produit.
-    chemin.write_text(texte + "\n", encoding="utf-8", newline="\n")
-    return chemin
+        # Le meme encodage que tout ce que ce depot ecrit, et des fins de
+        # ligne `\n` explicites : un compte rendu relu par le navigateur ne
+        # doit pas dependre de la plateforme qui l'a produit.
+        chemin.write_text(texte + "\n", encoding="utf-8", newline="\n")
+    except OSError as erreur:
+        return None, f"{type(erreur).__name__} : {erreur}"
+    return chemin, ""
 
 
 def _pour_un_nom(horodatage: str) -> str:

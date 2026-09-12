@@ -20,11 +20,17 @@ l'imprime. Un chiffre recopie dans une docstring se perime au premier ajout —
 celui-ci disait « sept » quand le code en verifiait huit, ce qui est
 exactement le genre d'affirmation que cet outil existe pour empecher.
 
-Cinq gardent une SESSION SAP ouverte (§5). Deux gardent des moments ou aucun
-driver n'existe — la REPRISE, et la repetition a blanc prealable — et ou une
-garde qui cede fait rejouer un item que SAP a peut-etre deja enregistre. La
-troisieme famille ne protege pas SAP du tout : voir le commentaire de la
-neuvieme cible, qui dit ce qu'elle protege a la place.
+Cinq gardent une SESSION SAP ouverte (§5). Les autres gardent des moments ou
+aucun driver n'existe — la REPRISE, l'empreinte d'une pipeline, la repetition a
+blanc prealable — et ou une garde qui cede fait rejouer un item que SAP a
+peut-etre deja enregistre. Une derniere famille ne protege pas SAP du tout :
+voir le commentaire de la neuvieme cible, qui dit ce qu'elle protege a la
+place.
+
+Le quantificateur est volontairement NON CHIFFRE, et c'est la meme raison qu'au
+paragraphe precedent : la version chiffree de cette phrase disait « Deux » pour
+une famille qui en compte trois, donc huit cibles pour un code qui en porte
+neuf — dans l'outil meme dont le metier est de prouver qu'aucune ne manque.
 """
 
 from __future__ import annotations
@@ -59,6 +65,16 @@ from falcon.toile import peintre                              # noqa: E402
 #: se neutralise pas, donc n'est pas verifiable ici. C'est pourquoi la garde
 #: de reprise a ete extraite dans `lecteur.garde_du_monde` : lui donner un nom
 #: etait la condition pour pouvoir la retirer.
+#:
+#: ET UNE FONCTION N'ENTRE ICI QUE SI LA NEUTRALISER LA REND PERMISSIVE.
+#: `setattr(porteur, attribut, lambda *a, **k: None)` fait rendre `None` a la
+#: cible ; une fonction qui rendait un `bool` devient donc une fonction qui
+#: rend faux, ce qui est souvent PLUS restrictif. `falcon/toile/capacites.py`
+#: en porte deux exemples vivants — `_ansi_windows` et `_ansi_posix` rendent
+#: un booleen, et les neutraliser donnerait `ansi` faux, niveau NU, refus
+#: maintenu : cet outil les declarerait muettes a tort. Elles ne sont pas
+#: inscrites, et c'est pourquoi. La neuvieme, elle, LEVE — la neutraliser
+#: laisse passer, ce qui est la seule forme qui prouve quelque chose.
 CIBLES = {
     "1 identite": (gardes.DriverGarde, "_garde_identite", "tests.test_gardes"),
     "2 statut": (gardes.DriverGarde, "_garde_statut", "tests.test_gardes"),

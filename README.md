@@ -142,11 +142,24 @@ python -m falcon sonde
 ```
 
 `sonde` est la première chose à lancer sur une machine neuve, et celle qu'on
-demande par téléphone quand un affichage est illisible. Elle mesure — dans ce
-processus-ci, sur ces flux-là — la taille de la fenêtre et la capacité à
-interpréter les séquences ANSI. Chaque « oui » est un appel système qui a
-réussi ; chaque « non » nomme l'appel qui a refusé. Rien n'y est déduit d'un
-nom de variable ni d'un numéro de version.
+demande par téléphone quand un affichage est illisible. Elle interroge — dans
+ce processus-ci, sur ces flux-là — la taille de la fenêtre et la capacité à
+interpréter les séquences ANSI, et **chaque ligne porte sa provenance** :
+
+- **`mesure`** — un appel système a répondu. Sur Windows, le bit VT est posé,
+  **relu**, puis restauré : c'est cette relecture qui transforme une lecture de
+  documentation en mesure. `os.get_terminal_size` et `isatty()` en sont aussi.
+- **`declare`** — une variable de l'hôte l'affirme, et rien ne le vérifie.
+  `TERM`, `COLUMNS`, `LINES`. Sur POSIX il n'existe **aucun** appel qui réponde
+  « j'interprète les séquences » : la couleur y est donc toujours accordée sur
+  une déclaration, et la page l'écrit en toutes lettres — `ANSI oui / declare
+  par TERM, non mesure`. Un `TERM` hérité d'une session `ssh` ou d'un éditeur
+  suffit.
+
+Chaque « non » nomme l'appel qui a refusé, avec son `errno` et son message.
+La commande ne se connecte à rien et n'écrit aucun fichier ; sur Windows elle
+écrit le mode de la console (`SetConsoleMode`) avant de le restaurer, faute de
+quoi il n'y aurait rien à mesurer.
 
 Trois choses qu'elle ne peut pas prouver, et qui sont écrites dans
 `falcon/toile/__init__.py` plutôt que tues : que `SetConsoleMode` se comporte
@@ -202,6 +215,16 @@ la trace sur l'écran précédent en annonçant « IW39 exploré ».
 Les deux plafonds sont **obligatoires**. La commande montre le système et le
 mandant avant de demander le nom du fichier de trace en toutes lettres, et
 rend `0` seulement si la trace a été parcourue de bout en bout.
+
+Elle **écrit un fichier** à chaque lancement : le compte rendu est conservé
+dans `<catalogue>/rapports/<horodatage>-<trace>.txt`, en plus d'être imprimé.
+C'est le seul endroit où vivent la partition des gestes, les branches, les
+reprises et les visites non atteintes — il défilait à l'écran, puis
+disparaissait avec la fenêtre. Le dossier est invisible du dépôt, qui ne lit
+que `<catalogue>/*.yaml` sans récursion. Si le disque le refuse, le compte
+rendu est quand même rendu, avec la ligne « compte rendu NON conservé » et le
+motif : une cartographie qui vient d'agir dans SAP ne perd pas sa partition
+pour un partage en lecture seule.
 
 `diagnostiquer` est le **premier contact réel** — il se greffe sur une session
 SAP que vous avez ouverte et sur laquelle vous vous êtes authentifié

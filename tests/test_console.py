@@ -70,6 +70,26 @@ def _arbres() -> list[tuple[str, ast.Module]]:
             for chemin in sorted(Path(ecrans.__file__).parent.glob("*.py"))]
 
 
+def _arbres_de_ce_qu_un_ecran_imprime() -> list[tuple[str, ast.Module]]:
+    """Les modules de la console, PLUS ceux dont un ecran imprime le texte.
+
+    `_arbres()` ne globe que `falcon/console/*.py`. Depuis que « Sonder ce
+    terminal » affiche le texte compose par `falcon/toile/capacites.py`, ce
+    perimetre ne couvre plus tout ce qu'un ecran peut ecrire — ce que le nom
+    du test qui s'en sert promet pourtant. Un garde-fou dont le perimetre est
+    plus etroit que sa promesse est un garde-fou qui rassure a tort.
+
+    Il reste SEPARE d'`_arbres()`, et pas fusionne : la garde qui interdit un
+    `\\x1b` litteral ne doit surtout pas s'etendre a `falcon/toile/`, ou vit le
+    seul module du depot autorise a en ecrire. Deux perimetres, deux regles.
+    """
+    toile = Path(ecrans.__file__).parent.parent / "toile"
+    return _arbres() + [
+        (f"toile/{chemin.name}",
+         ast.parse(chemin.read_text(encoding="utf-8"), str(chemin)))
+        for chemin in sorted(toile.glob("*.py"))]
+
+
 def _textes_de_console() -> list[str]:
     """Toute chaine litterale des modules de la console.
 
@@ -300,8 +320,13 @@ class TestAffichage(unittest.TestCase):
         voient que le rendu des menus — titres, libelles, preambules — donc
         rien de ce qu'un ecran ecrit une fois qu'on l'a choisi. Or c'est la
         que le texte est le plus abondant, et le plus recemment ecrit.
+
+        Et le perimetre deborde de `falcon/console/` : « Sonder ce terminal »
+        imprime du texte compose dans `falcon/toile/capacites.py`, donc un
+        caractere non cp1252 pose la-bas ferait mourir un ecran de console sur
+        son propre decor — sur la seule machine ou l'outil sert.
         """
-        for module, arbre in _arbres():
+        for module, arbre in _arbres_de_ce_qu_un_ecran_imprime():
             for noeud in ast.walk(arbre):
                 if not (isinstance(noeud, ast.Constant)
                         and isinstance(noeud.value, str)):
@@ -360,12 +385,23 @@ class TestAffichage(unittest.TestCase):
         « Tout verifier » relance `outils/verifier.py` en sous-processus —
         donc cette suite, depuis cette suite. La premiere version de ce test
         a tourne jusqu'a expiration du delai.
+
+        **`sonde` est injectee pour la meme raison, et elle manquait.** Le
+        defaut du champ est la VRAIE sonde ; sans injection, ce test — le seul
+        qui parcoure tout l'arbre — appelait le vrai terminal deux fois par
+        execution de la suite. Sur Linux c'est benin ; sur Windows la suite de
+        tests posait puis restaurait le bit VT sur la console du developpeur,
+        par `ctypes` : une suite qui MUTE le terminal de qui la lance, dans un
+        depot dont c'est la ligne rouge. Et le texte imprime par cet ecran
+        varie selon le poste, donc le jour ou un test regardera ce que les
+        ecrans ecrivent, il serait vert ici et rouge ailleurs.
         """
         def refuser():
             raise SapIndisponible("pas de session dans un test")
 
         env = Environnement(lancer=lambda arguments: (0, "OK"),
-                            connecter=refuser)
+                            connecter=refuser,
+                            sonde=lambda: ())
         for menu in _menus(racine(env)):
             for entree in menu.entrees:
                 if isinstance(entree.cible, Menu):
@@ -558,6 +594,26 @@ class TestVerification(unittest.TestCase):
         self.assertIn("bit VT pose, relu, mode restaure", journal.texte)
         # Et l'ecran renvoie vers la commande qu'on demande par telephone.
         self.assertIn("python -m falcon sonde", journal.texte)
+
+    def test_une_sonde_qui_leve_coute_l_ecran_et_pas_la_session(self):
+        """Le chemin Windows passe par `ctypes` et par des handles de console.
+
+        Une exception venue de la n'a aucune raison de tuer la session : c'est
+        cet ecran-la qu'on ouvre quand quelque chose ne va deja pas, et il
+        emporterait tout ce qu'on avait sous les yeux. `env.connecter()` est
+        deja enveloppe pour la meme raison, quelques centaines de lignes plus
+        bas.
+        """
+        def casser():
+            raise OSError(127, "procedure introuvable")
+
+        env = Environnement(lancer=lambda a: (0, "OK"), sonde=casser)
+        journal = Journal(*vers(racine(), "Verification", "Sonder"),
+                          "", "0", "0")
+        parcourir(racine(env), journal.console())
+
+        self.assertIn("La sonde elle-meme a echoue", journal.texte)
+        self.assertIn("OSError", journal.texte)
 
     def test_l_ecran_de_sonde_n_emet_aucune_sequence(self):
         """On lance `sonde` PRECISEMENT quand on soupconne le terminal de ne

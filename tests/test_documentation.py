@@ -203,6 +203,38 @@ class TestReferencesDeFichiers(unittest.TestCase):
         self.assertTrue((RACINE / "SPEC_FALCON.md").exists(),
                         "la specification est le document qui fait foi")
 
+    def test_chaque_decision_citee_dans_le_code_existe_dans_la_table(self):
+        """Le code cite ses decisions par NUMERO ; encore faut-il qu'il existe.
+
+        Une vingtaine de docstrings de `falcon/` ecrivent « decision n°N » et
+        aucune n'etait verifiee. Le defaut qui a motive ce controle est vivant
+        et connu : un module affirmait « la decision n°17 arrete l'ecart » a
+        propos des sequences ANSI, alors que la n°17 s'intitule « Navigation
+        entre unites de travail » — le lecteur qui allait la lire y trouvait un
+        paragraphe sans rapport et apprenait que ce depot ne cite pas juste.
+
+        Ce test attrape le numero qui N'EXISTE PAS — une decision citee avant
+        d'etre ecrite, qui est la forme sous laquelle le defaut reapparaitra au
+        prochain lot. Il ne peut pas juger qu'un numero existant soit le BON :
+        ca, seule une relecture le dit.
+        """
+        spec = (RACINE / "SPEC_FALCON.md").read_text(encoding="utf-8")
+        connues = {int(n) for n in re.findall(r"^\|\s*(\d+)\s*\|", spec,
+                                              re.MULTILINE)}
+        self.assertTrue(connues, "la table des decisions est introuvable")
+
+        citation = re.compile(r"d[ée]cision n°(\d+)")
+        for module in sorted((RACINE / "falcon").rglob("*.py")):
+            texte = module.read_text(encoding="utf-8")
+            for numero in citation.findall(texte):
+                with self.subTest(module=str(module.relative_to(RACINE)),
+                                  decision=numero):
+                    self.assertIn(
+                        int(numero), connues,
+                        f"{module.relative_to(RACINE)} cite la decision "
+                        f"n°{numero}, absente de la table de SPEC_FALCON.md "
+                        f"(elle va de {min(connues)} a {max(connues)})")
+
 
 if __name__ == "__main__":
     unittest.main()

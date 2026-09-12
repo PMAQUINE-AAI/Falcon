@@ -130,8 +130,22 @@ class Environnement:
     rapporteur: Callable[[], Any] = _rapporteur
     #: Le releve des deux flux de sortie. Ce que « Sonder ce terminal »
     #: montre, et rien d'autre : aucun ecran ne s'en sert pour DECIDER quoi
-    #: que ce soit, et c'est pourquoi le defaut peut etre le vrai sans rendre
-    #: le rendu de la console dependant du terminal de qui lance la suite.
+    #: que ce soit. La sonde RAPPORTE, elle ne choisit rien, et c'est ce qui
+    #: permet d'en garder la vraie pour defaut — « le defaut est le vrai ».
+    #:
+    #: **C'est en revanche la SEULE surface de la console dont le rendu
+    #: depende de la machine qui l'execute**, et il faut le savoir avant
+    #: d'ecrire un test : aucun test ne doit asserter le CONTENU de cet ecran
+    #: sans injecter sa propre sonde, sinon il sera vert dans un tube et rouge
+    #: dans un terminal, pour un motif sans rapport avec ce qu'il teste. Le
+    #: test de fumee qui parcourt tout l'arbre en injecte une inerte pour
+    #: cette raison.
+    #:
+    #: AVERTISSEMENT POUR LE LOT QUI PEINDRA : `capacites` sera un AUTRE
+    #: champ, et son defaut devra rester `Capacites()` — tout faux. Les deux
+    #: ne se fusionnent pas : celui-ci RAPPORTE une mesure a l'ecran, l'autre
+    #: DECIDERAIT ce que la console a le droit d'emettre, et le rendu de toute
+    #: la console dependrait alors du terminal de qui lance la suite.
     sonde: Callable[[], tuple[Any, ...]] = _sonder_les_flux
 
 
@@ -341,12 +355,27 @@ def ecran_verification(env: Environnement) -> Menu:
         une verification, au meme titre que les suites et le neutraliseur. La
         difference est qu'elle porte sur la machine et non sur le code, et
         c'est la seule de la console dans ce cas.
+
+        **La mesure est enveloppee, comme `env.connecter()` l'est deja.** Le
+        chemin Windows passe par `ctypes` et par des handles de console ; un
+        accident doit couter CET ecran, jamais la session, avec tout ce qu'on
+        avait sous les yeux. Et c'est la page qu'on ouvre quand quelque chose
+        ne va deja pas.
         """
         from falcon.toile import rendre_sonde
 
         console.titre("Sonder ce terminal")
         console.ecrire()
-        for ligne in rendre_sonde(env.sonde()):
+        try:
+            releves = env.sonde()
+        except Exception as erreur:                    # noqa: BLE001
+            console.ecrire(f"  La sonde elle-meme a echoue : "
+                           f"{type(erreur).__name__} : {erreur}")
+            console.ecrire("  C'est un renseignement, pas une panne de "
+                           "FALCON : note-le et signale-le.")
+            console.pause()
+            return CONTINUER
+        for ligne in rendre_sonde(releves):
             console.ecrire(ligne)
         console.ecrire()
         console.ecrire("  La meme mesure en ligne de commande, celle qu'on "
@@ -396,8 +425,8 @@ def ecran_verification(env: Environnement) -> Menu:
             Entree("4", "Construire le bundle", bundle,
                    "falcon.pyz — un fichier unique executable (§6)"),
             Entree("5", "Sonder ce terminal", sonde,
-                   "taille, ANSI, couleur : ce qui a ete MESURE ici, et par "
-                   "quel appel"),
+                   "taille, ANSI, couleur : ce qui est mesure, ce qui est "
+                   "seulement declare"),
         ))
 
 
