@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Installer les dependances
+        run: python -m pip install --upgrade pip PyYAML
+      - name: Verifier
+        run: python outils/verifier.py
+
+      - name: Verifier que les gardes sont protegees
+        run: python outils/neutraliser.py
+
+      - name: Construire le bundle
+        run: python outils/embarquer.py
+
+      - name: Le bundle tourne sans site-packages
+        run: python -S falcon.pyz inventaire tests/fixtures/traces/megatrace_2026-09.vbs

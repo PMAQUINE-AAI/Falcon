@@ -1,0 +1,1915 @@
+"""Le moteur — la boucle, et les quatre regles qui la gouvernent.
+
+C'est le lot ou six sous-systemes se rencontrent enfin. Les tests portent donc
+moins sur des fonctions que sur des **enchainements** : ce que le journal
+contient apres coup, ce que la reprise fait ensuite, ce que le fichier de KO
+permet de rejouer.
+
+Le test le plus important de ce fichier est
+`test_un_item_interrompu_apres_sauvegarde_ressort_douteux`. Il exerce bout en
+bout la protection contre la double ecriture dans SAP : le controleur annonce
+la sauvegarde AVANT l'acte, l'adaptateur traduit cette annonce en etape
+marquee, le repli des etats en deduit `douteux`, et la reprise ne rejoue pas.
+Quatre modules, une seule propriete, et un defaut qui ne leve pas.
+
+Le double de driver n'etablit AUCUNE fidelite a SAP. Ces tests verifient le
+comportement du moteur ETANT DONNE une reponse de driver.
+"""
+
+from __future__ import annotations
+
+import csv
+import inspect
+import io
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+from falcon.couture.double import DriverScripte
+from falcon.donnees import lire_items
+from falcon.journal import (
+    DOUTEUX, EN_COURS, KO, OK, ExecutionDebut, ItemFin, depuis_journal, etats,
+    lire,
+)
+from falcon.moteur.boucle import _refuser_les_douteux_du_journal
+from falcon.moteur import (
+    DRY_RUN, INTERROMPU, PLAFOND, REPRISE, RUN, TERMINE, Maillon,
+    PreparationImpossible, RepetitionManquante, enchainer, executer,
+    garde_de_la_repetition,
+)
+from falcon.noyau import (
+    CHAMP_DE_COMMANDE, Fenetre, Identite, RepriseIncoherente, Statut,
+)
+from falcon.pipeline import charger, etape_python, oublier_tout
+from falcon.taxonomie import Registre
+
+IA08 = Identite(transaction="IA08", programme="RIPLKO10", dynpro="1000")
+AUTRE = Identite(transaction="CL02", programme="SAPLCLFM", dynpro="0100")
+
+ECRAN = 'ecran: {transaction: IA08, programme: RIPLKO10, dynpro: "1000"}'
+
+PIPELINE = f"""
+    version: 1
+    nom: essai
+    classe: iterative
+    cles: [site]
+    plafond_items: 50
+    plafond_sauvegardes: 50
+    etapes:
+      - nom: saisir
+        action: set
+        cible: "wnd[0]/usr/ctxtWERKS-LOW"
+        source: {{colonne: site}}
+        {ECRAN}
+      - nom: sauver
+        action: press
+        cible: "wnd[0]/tbar[0]/btn[11]"
+        sauvegarde: true
+        {ECRAN}
+    """
+
+JEU = "site,libelle\n1000,Paris\n2000,Lyon\n3000,Lille\n"
+
+#: `PIPELINE` se termine par l'indentation de sa triple-quote fermante ; y
+#: concatener une etape la decalerait. Meme piege qu'au lot 8b, meme parade.
+SOCLE = PIPELINE.rstrip() + "\n"
+
+
+def etape(*lignes: str) -> str:
+    """Un bloc d'etape, indente comme celles de `PIPELINE`."""
+    return "".join(f"      {ligne}\n" for ligne in lignes)
+
+
+#: Ce que passe un test qui n'est PAS celui de la garde de repetition.
+#:
+#: `run` exige desormais qu'une repetition a blanc ait abouti sur ces
+#: empreintes (§5.5). Les tests ci-dessous portent sur autre chose — la
+#: boucle, les plafonds, le journal — et faire preceder chacun d'un dry-run
+#: polluerait le journal et les gestes qu'ils inspectent justement.
+#:
+#: Le forcage est donc EXPLICITE et motive, exactement comme il l'est pour un
+#: utilisateur. La garde a ses propres tests, et le neutraliseur la verifie.
+SANS_REPETITION = {
+    "forcer_sans_repetition": True,
+    "motif_forcage": "Test cible sur un autre comportement que la garde de "
+                     "repetition a blanc.",
+}
+
+
+class Base(unittest.TestCase):
+
+    def setUp(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        self.racine = Path(dossier.name)
+        self.journal = self.racine / "journal.jsonl"
+        self.jeu = self.racine / "jeu.csv"
+        self.jeu.write_text(JEU, encoding="utf-8")
+        self.registre = Registre.charger()
+
+    def _pipeline(self, texte: str = PIPELINE, **options):
+        chemin = self.racine / "p.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        return charger(chemin, **options)
+
+    def _driver(self, **options) -> DriverScripte:
+        brut = DriverScripte(identite=IA08,
+                             valeurs={"wnd[0]/usr/ctxtWERKS-LOW": ""},
+                             **options)
+
+        def relire(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+
+        brut.apres_action = relire
+        return brut
+
+    def _executer(self, brut=None, **options):
+        return executer(self._pipeline(), self.jeu, brut or self._driver(),
+                        journal=self.journal, registre=self.registre,
+                        **{**SANS_REPETITION, **options})
+
+    def _etats(self):
+        return etats(lire(self.journal))
+
+
+class TestBoucle(Base):
+
+    def test_un_lot_complet_passe(self):
+        resultat = self._executer()
+        self.assertEqual(resultat.etat, TERMINE)
+        self.assertEqual(resultat.compteurs[OK], 3)
+
+    def test_chaque_item_est_une_unite_de_sauvegarde(self):
+        """Trois sites, trois items — le regroupement se declare par `cles`."""
+        items, _ = lire_items(self.jeu, ("site",))
+        self.assertEqual(len(items), 3)
+        self._executer()
+        self.assertEqual(len(self._etats()), 3)
+
+    def test_le_journal_porte_debut_et_fin_d_execution(self):
+        self._executer()
+        rapport = depuis_journal(lire(self.journal))
+        self.assertEqual(rapport.pipeline, "essai")
+        self.assertEqual(rapport.mode, RUN)
+
+    def test_le_moteur_ne_touche_jamais_un_driver_nu(self):
+        """Le driver arrive brut et repart enveloppe : toutes les actions
+        passent par le controleur, donc par les gardes."""
+        brut = self._driver()
+        self._executer(brut)
+        self.assertTrue(brut.gestes)
+        self.assertTrue(all(g[0] in ("write", "press") for g in brut.gestes))
+
+    def test_une_pipeline_volumique_est_refusee(self):
+        """La machinerie par item — journal, reprise, ETA — ne sert qu'aux
+        iteratives (§3.5). Une volumique qui en heriterait serait du
+        gaspillage, et surtout une confusion de modele."""
+        volumique = PIPELINE.replace("classe: iterative", "classe: volumique")
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(volumique), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertIn("volumique", str(capture.exception))
+
+
+class TestUnKoNInterromptPasLeLot(Base):
+    """Regle 1. Perdre trois cents items parce que le quarantieme est fautif
+    serait pire que l'absence d'automatisation."""
+
+    def _driver_fautif_au_deuxieme(self) -> DriverScripte:
+        brut = self._driver()
+        etat = {"items": 0}
+
+        def reagir(driver, geste, cible):
+            # La barre de statut se vide a chaque aller-retour : la laisser
+            # trainer ferait porter le message de l'item 2 sur l'item 3, et le
+            # test mesurerait le double au lieu du moteur.
+            driver.statut = Statut()
+            if geste == "press":
+                etat["items"] += 1
+                if etat["items"] == 2:
+                    driver.statut = Statut(type="E", id="ZZ", numero="001",
+                                           texte="refuse")
+        brut.apres_action = reagir
+        return brut
+
+    def test_un_item_ko_laisse_le_lot_continuer(self):
+        resultat = self._executer(self._driver_fautif_au_deuxieme())
+        # L'inconnu est bloquant par defaut (§5.1) : sans entree au registre,
+        # ce message arrete le lot. C'est le comportement voulu, et ce test
+        # existe pour le DIRE, pas pour le contourner.
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertEqual(resultat.compteurs[OK], 1)
+
+    def test_un_item_connu_fautif_est_perdu_et_le_lot_continue(self):
+        """Avec une entree « connue fautive » au registre, l'item sort KO et
+        les suivants passent."""
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        registre = Registre.charger(surcouche)
+        resultat = executer(self._pipeline(), self.jeu,
+                            self._driver_fautif_au_deuxieme(),
+                            journal=self.journal, registre=registre,
+                            **SANS_REPETITION)
+        self.assertEqual(resultat.etat, TERMINE)
+        self.assertEqual(resultat.compteurs[OK], 2)
+        self.assertEqual(resultat.compteurs[KO], 1)
+
+
+class TestUnArretBloquantArreteTout(Base):
+    """Regle 2 et regle 3."""
+
+    def _driver_qui_derive(self) -> DriverScripte:
+        brut = self._driver()
+        etat = {"items": 0}
+
+        def deriver(driver, geste, cible):
+            if geste == "press":
+                etat["items"] += 1
+                if etat["items"] == 2:
+                    driver.identite = AUTRE      # le modele du monde est faux
+        brut.apres_action = deriver
+        return brut
+
+    def test_une_identite_violee_interrompt(self):
+        resultat = self._executer(self._driver_qui_derive())
+        self.assertEqual(resultat.etat, INTERROMPU)
+
+    def test_l_item_interrompu_ne_recoit_pas_de_fin(self):
+        """Lui poser un `ItemFin(ko)` le rendrait terminal, donc perdu pour de
+        bon. Il reste ouvert, et le repli decide de son sort."""
+        self._executer(self._driver_qui_derive())
+        ouverts = [e for e in self._etats().values()
+                   if e.etat in (EN_COURS, DOUTEUX)]
+        self.assertTrue(ouverts)
+
+    def test_le_plafond_d_items_arrete_le_lot(self):
+        court = PIPELINE.replace("plafond_items: 50", "plafond_items: 2")
+        resultat = executer(self._pipeline(court), self.jeu, self._driver(),
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(resultat.etat, PLAFOND)
+        self.assertEqual(resultat.compteurs[OK], 2)
+
+    def test_le_plafond_de_sauvegardes_arrete_le_lot(self):
+        """La derniere barriere avant le lot entier (decision n°11)."""
+        court = PIPELINE.replace("plafond_sauvegardes: 50",
+                                 "plafond_sauvegardes: 2")
+        resultat = executer(self._pipeline(court), self.jeu, self._driver(),
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(resultat.etat, PLAFOND)
+
+
+class TestDouteux(Base):
+    """**Le test le plus important du lot.**
+
+    Un item interrompu APRES une sauvegarde reussie ne doit jamais etre
+    rejoue : le rejouer, c'est ecrire deux fois dans SAP. La protection
+    traverse quatre modules — le controleur annonce avant d'agir,
+    l'adaptateur traduit l'annonce en etape marquee, le repli en deduit
+    `douteux`, la reprise l'ecarte — et aucun maillon ne leve s'il manque.
+    """
+
+    def _driver_qui_derive_apres_sauvegarde(self) -> DriverScripte:
+        brut = self._driver()
+
+        def deriver(driver, geste, cible):
+            if geste == "press":
+                # La sauvegarde a REUSSI, puis le monde change.
+                driver.fenetres = (Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]"))
+        brut.apres_action = deriver
+        return brut
+
+    def test_un_item_interrompu_apres_sauvegarde_ressort_douteux(self):
+        self._executer(self._driver_qui_derive_apres_sauvegarde())
+        douteux = [i for i, e in self._etats().items() if e.etat == DOUTEUX]
+        self.assertEqual(len(douteux), 1, self._etats())
+
+    def test_l_annonce_precede_l_acte_dans_le_journal(self):
+        """Si l'annonce suivait l'acte, une coupure entre les deux laisserait
+        une sauvegarde reelle sans trace."""
+        brut = self._driver()
+        vus: list[str] = []
+        brut.apres_action = lambda d, geste, cible: vus.append(f"acte:{geste}")
+        self._executer(brut)
+        enregistrements = [e for e in lire(self.journal)
+                           if getattr(e, "sauvegarde", False)]
+        self.assertTrue(enregistrements)
+
+    def test_la_reprise_ne_rejoue_pas_un_douteux(self):
+        self._executer(self._driver_qui_derive_apres_sauvegarde())
+        avant = len([e for e in lire(self.journal)
+                     if e.TYPE == "item_debut"])
+        resultat = self._executer(self._driver(), mode=REPRISE)
+        rejoues = [e for e in lire(self.journal) if e.TYPE == "item_debut"]
+        # Les douteux ne repartent pas ; les non traites, si.
+        self.assertLess(len(rejoues) - avant, 3)
+        self.assertEqual(resultat.etat, TERMINE)
+
+
+class TestReprise(Base):
+
+    def test_la_reprise_ne_retraite_pas_ce_qui_est_termine(self):
+        self._executer()
+        resultat = self._executer(mode=REPRISE)
+        self.assertEqual(resultat.compteurs[OK], 0)
+        self.assertEqual(resultat.compteurs["deja_faits"], 3)
+
+    def test_la_reprise_refuse_un_jeu_modifie(self):
+        """Reprendre sur un jeu different, c'est avoir un modele du monde
+        faux : les identifiants d'item ne designent plus les memes lignes."""
+        from falcon.noyau import RepriseIncoherente
+
+        self._executer()
+        self.jeu.write_text(JEU.replace("Lille", "Lens"), encoding="utf-8")
+        with self.assertRaises(RepriseIncoherente):
+            self._executer(mode=REPRISE)
+
+    def test_un_mode_inconnu_est_refuse(self):
+        with self.assertRaises(PreparationImpossible):
+            self._executer(mode="peut-etre")
+
+
+class TestDryRun(Base):
+
+    def test_le_dry_run_n_ecrit_rien_dans_sap(self):
+        brut = self._driver()
+        resultat = self._executer(brut, mode=DRY_RUN)
+        self.assertEqual(resultat.compteurs[OK], 0)
+        self.assertEqual(len([g for g in brut.gestes if g[0] == "press"]), 0)
+
+    def test_les_items_sortent_ignores(self):
+        resultat = self._executer(mode=DRY_RUN)
+        self.assertEqual(resultat.compteurs["ignore"], 3)
+
+
+class TestCoherenceDuJeu(Base):
+    """Ce que le moteur verifie AVANT de toucher a SAP."""
+
+    def test_un_item_dont_les_lignes_se_contredisent_est_refuse(self):
+        """La premiere ligne l'emporterait, et les autres seraient perdues
+        sans un mot."""
+        self.jeu.write_text("site,libelle\n1000,Paris\n1000,Marseille\n",
+                            encoding="utf-8")
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(
+                PIPELINE.replace("{colonne: site}", "{colonne: libelle}")),
+                self.jeu, self._driver(), journal=self.journal,
+                registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertIn("ne s'accordent pas", str(capture.exception))
+
+    def test_le_controle_tombe_avant_la_premiere_action(self):
+        brut = self._driver()
+        self.jeu.write_text("site,libelle\n1000,Paris\n1000,Marseille\n",
+                            encoding="utf-8")
+        with self.assertRaises(PreparationImpossible):
+            executer(self._pipeline(
+                PIPELINE.replace("{colonne: site}", "{colonne: libelle}")),
+                self.jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(brut.gestes, [], "SAP a ete touche malgre le refus")
+
+    def test_une_valeur_de_case_ambigue_est_refusee(self):
+        """Deviner ici, c'est cocher ou decocher une case au hasard."""
+        avec_case = SOCLE + etape(
+            "- nom: cocher_mab",
+            "  action: cocher",
+            '  cible: "wnd[0]/usr/chkDY_MAB"',
+            "  source: {colonne: libelle}",
+            f"  {ECRAN}")
+        self.jeu.write_text("site,libelle\n1000,peut-etre\n", encoding="utf-8")
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(avec_case), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertIn("ni vrai ni faux", str(capture.exception))
+
+
+class TestReexportDesKo(Base):
+    """§4.7 : le fichier de KO doit etre reinjectable sans retouche."""
+
+    def test_les_ko_sont_reexportes_au_format_d_entree(self):
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        brut = self._driver()
+        def refuser(driver, geste, cible):
+            driver.statut = (Statut(type="E", id="ZZ", numero="001",
+                                    texte="non")
+                             if geste == "press" else Statut())
+        brut.apres_action = refuser
+
+        ko = self.racine / "ko.csv"
+        resultat = executer(self._pipeline(), self.jeu, brut,
+                            journal=self.journal,
+                            registre=Registre.charger(surcouche),
+                            sortie_ko=ko, **SANS_REPETITION)
+        self.assertEqual(resultat.ko, str(ko))
+
+        # Reinjectable : la lecture retire les colonnes de diagnostic.
+        items, _ = lire_items(ko, ("site",))
+        self.assertEqual(len(items), resultat.compteurs[KO])
+        self.assertNotIn("falcon_categorie", items[0].brut[0])
+
+    def test_sans_ko_aucun_fichier_n_est_ecrit(self):
+        ko = self.racine / "ko.csv"
+        resultat = self._executer(sortie_ko=ko, **SANS_REPETITION)
+        self.assertIsNone(resultat.ko)
+        self.assertFalse(ko.exists())
+
+    def _registre_fautif(self) -> Registre:
+        """Un registre ou le message d'essai est connu, fautif, non bloquant."""
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        return Registre.charger(surcouche)
+
+    def _driver_refuse_tout(self) -> DriverScripte:
+        brut = self._driver()
+
+        def refuser(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            driver.statut = (Statut(type="E", id="ZZ", numero="001",
+                                    texte="non")
+                             if geste == "press" else Statut())
+        brut.apres_action = refuser
+        return brut
+
+    def test_le_fichier_de_ko_porte_les_CINQ_colonnes_remplies(self):
+        """Deux d'entre elles ne l'etaient pas, et ce sont les deux qui
+        servent a trier.
+
+        `falcon_entree` nomme l'entree de registre qui a apparie : c'est la
+        seule facon de distinguer un `connue_fautive` reconnu d'un `inconnue`
+        qui n'a rien trouve. `falcon_sauvegardes` dit combien de fois l'item a
+        deja ecrit dans SAP — sans lui, on reinjecte a l'aveugle.
+
+        Une colonne vide dans un fichier de KO, c'est un tri que l'humain
+        devra refaire a la main : le benefice de l'automatisation annule sur
+        les cas difficiles, qui sont ceux qui coutent (§4.7).
+        """
+        ko = self.racine / "ko.csv"
+        executer(self._pipeline(), self.jeu, self._driver_refuse_tout(),
+                 journal=self.journal, registre=self._registre_fautif(),
+                 sortie_ko=ko, **SANS_REPETITION)
+
+        lignes = ko.read_text(encoding="utf-8").splitlines()
+        entete = lignes[0].split(",")
+        premiere = dict(zip(entete, next(csv.reader(lignes[1:2]))))
+        self.assertEqual(premiere["falcon_categorie"], "connue_fautive")
+        self.assertEqual(premiere["falcon_entree"], "zz_refuse")
+        self.assertTrue(premiere["falcon_message"])
+        self.assertTrue(premiere["falcon_item_id"])
+
+        # UN, et c'est tout l'interet de la colonne. L'etape refusee ETAIT la
+        # sauvegarde : l'annonce a eu lieu avant que la barre de statut ne
+        # reponde en erreur. SAP n'a probablement rien enregistre — c'est le
+        # jugement qu'un humain a inscrit au registre en posant
+        # `poursuivre: true, item: ko` — mais « probablement » n'est pas
+        # « surement », et l'humain qui reinjecte doit le voir.
+        self.assertEqual(premiere["falcon_sauvegardes"], "1")
+
+
+class TestDouteuxEtDoubleEcriture(Base):
+    """Le chemin par lequel un item deja ecrit repartait dans SAP.
+
+    Un item interrompu APRES une sauvegarde est `douteux` : le repli le dit,
+    et la reprise ne le rejoue jamais. Il partait pourtant dans le fichier de
+    KO — qui est fait pour etre reinjecte tel quel. Le canal automatique le
+    refusait, le canal papier le tendait a l'humain : troisieme chemin vers la
+    double ecriture, et le seul qui restait ouvert.
+    """
+
+    def _driver_qui_lache_apres_avoir_sauve(self) -> DriverScripte:
+        """Le troisieme press part ailleurs : c'est la sauvegarde de l'item 2,
+        et l'etape suivante du MEME item trouvera un ecran inattendu."""
+        brut = self._driver()
+        vus = {"press": 0}
+
+        def reagir(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            if geste == "press":
+                vus["press"] += 1
+                if vus["press"] == 3:
+                    driver.identite = AUTRE
+        brut.apres_action = reagir
+        return brut
+
+    def _pipeline_avec_retour(self):
+        return self._pipeline(SOCLE + etape(
+            "- nom: revenir",
+            '  action: press',
+            '  cible: "wnd[0]/tbar[0]/btn[3]"',
+            f'  {ECRAN}'))
+
+    def _lot(self):
+        ko = self.racine / "ko.csv"
+        resultat = executer(self._pipeline_avec_retour(), self.jeu,
+                            self._driver_qui_lache_apres_avoir_sauve(),
+                            journal=self.journal, registre=self.registre,
+                            sortie_ko=ko, **SANS_REPETITION)
+        replie = etats(lire(self.journal))
+        return resultat, ko, replie
+
+    def test_l_item_douteux_n_entre_PAS_dans_le_fichier_de_ko(self):
+        resultat, ko, replie = self._lot()
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertTrue(douteux, "le scenario n'a produit aucun douteux")
+
+        if not ko.exists():
+            return                      # aucun perdu du tout : deja correct
+        ecrit = ko.read_text(encoding="utf-8")
+        for item_id in douteux:
+            self.assertNotIn(item_id, ecrit)
+
+    def test_le_douteux_est_nomme_dans_le_resultat(self):
+        """Il n'est dans aucun fichier : le nommer est la seule chose qui le
+        rende visible sans relire le journal."""
+        resultat, _, replie = self._lot()
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertEqual(set(resultat.douteux), douteux)
+
+    def test_le_compteur_douteux_s_accorde_avec_le_repli(self):
+        """`ExecutionFin` et le repli lisent le meme fichier. Ils disaient
+        deux choses differentes : le compteur restait a zero quoi qu'il
+        arrive, parce qu'il n'etait incremente qu'a la cloture d'un item — et
+        un douteux n'est jamais cloture."""
+        resultat, _, replie = self._lot()
+        attendu = sum(1 for e in replie.values() if e.etat == DOUTEUX)
+        self.assertEqual(resultat.compteurs[DOUTEUX], attendu)
+        self.assertGreater(attendu, 0)
+
+    def test_un_item_interrompu_SANS_sauvegarde_reste_reinjectable(self):
+        """L'autre moitie de la regle, et elle compte autant : un item arrete
+        avant toute sauvegarde est intact. L'ecarter du fichier de KO le
+        perdrait pour rien."""
+        brut = self._driver()
+
+        def deriver(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+                driver.identite = AUTRE      # avant le moindre press
+        brut.apres_action = deriver
+
+        ko = self.racine / "ko.csv"
+        resultat = executer(self._pipeline(), self.jeu, brut,
+                            journal=self.journal, registre=self.registre,
+                            sortie_ko=ko, **SANS_REPETITION)
+        replie = etats(lire(self.journal))
+        self.assertEqual(resultat.compteurs[DOUTEUX], 0)
+        self.assertEqual(resultat.douteux, ())
+        self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
+        self.assertTrue(ko.exists(), "un item intact doit rester reinjectable")
+
+    def test_relancer_en_mode_run_sur_un_douteux_est_REFUSE(self):
+        """Le geste le plus naturel du monde, et le plus couteux.
+
+        Le mode `run` ne consultait pas le journal — c'est ce qui le distingue
+        de `resume`. Mais relancer un lot interrompu est ce que tout le monde
+        fait, et la console met « Executer » juste au-dessus de « Reprendre ».
+        L'item douteux repartait dans SAP, et le repli le reclassait `ok` :
+        apres coup, plus rien ne disait que la double ecriture avait eu lieu.
+        """
+        self._lot()                                   # laisse un douteux
+        replie = etats(lire(self.journal))
+        douteux = {i for i, e in replie.items() if e.etat == DOUTEUX}
+        self.assertTrue(douteux)
+
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline_avec_retour(), self.jeu, brut,
+                     journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        message = str(capture.exception)
+        self.assertIn("DOUTEUX", message)
+        for item_id in douteux:
+            self.assertIn(item_id, message)
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+        # Et le journal n'a pas bouge : le refus precede toute ecriture.
+        self.assertEqual(
+            {i: e.etat for i, e in etats(lire(self.journal)).items()},
+            {i: e.etat for i, e in replie.items()})
+
+    def test_un_item_EN_COURS_ne_bloque_pas_un_run(self):
+        """L'autre moitie de la regle. Un item ouvert sans avoir sauvegarde
+        est intact : le refuser interdirait de relancer un lot que rien
+        n'empeche de relancer."""
+        brut = self._driver()
+
+        def deriver(pilote, geste, cible):
+            if geste == "write":
+                pilote.valeurs[cible] = pilote.valeurs.get(cible, "")
+                pilote.identite = AUTRE          # avant le moindre press
+        brut.apres_action = deriver
+        executer(self._pipeline(), self.jeu, brut, journal=self.journal,
+                 registre=self.registre,
+                     **SANS_REPETITION)
+        replie = etats(lire(self.journal))
+        self.assertTrue(any(e.etat == EN_COURS for e in replie.values()))
+
+        resultat = self._executer()               # doit passer
+        self.assertEqual(resultat.etat, TERMINE)
+
+    def test_itemfin_porte_les_sauvegardes_DE_L_ITEM(self):
+        """Il portait le cumul du run : trois items ayant sauvegarde une fois
+        chacun s'enregistraient 1, 2, 3. Le champ dit pourtant « pour cet
+        item », et c'est sur lui qu'un humain juge s'il peut rejouer.
+
+        Le repli, lui, recompte depuis les `Etape` — c'est pour ca que rien ne
+        levait, et que la contradiction pouvait vivre.
+        """
+        self._executer()
+        fins = [e for e in lire(self.journal) if isinstance(e, ItemFin)]
+        self.assertEqual(len(fins), 3)
+        for fin in fins:
+            self.assertEqual(fin.sauvegardes, 1)
+
+    def test_itemfin_s_accorde_avec_le_repli_qui_recompte(self):
+        """Les deux sources doivent dire la meme chose sur le meme fichier."""
+        self._executer()
+        enregistrements = lire(self.journal)
+        replie = etats(enregistrements)
+        for fin in (e for e in enregistrements if isinstance(e, ItemFin)):
+            self.assertEqual(fin.sauvegardes, replie[fin.item_id].sauvegardes)
+
+
+class TestColonneAbsente(Base):
+    """Une faute de frappe dans un nom de colonne decochait tout un lot.
+
+    Une colonne absente valait la chaine vide, et la chaine vide ne leve nulle
+    part : le controle de coherence voyait {""}, de cardinalite 1, donc il
+    passait ; `cocher` trouvait "" dans FAUX, donc il decochait ; `set`
+    ecrivait "" dans le champ, donc il le vidait.
+
+    Aucune exception, un resultat plausible, et faux d'un bout a l'autre.
+    """
+
+    def test_une_colonne_absente_du_jeu_est_refusee_avant_toute_action(self):
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(PIPELINE.replace("colonne: site",
+                                                     "colonne: sitte")),
+                     self.jeu, brut, journal=self.journal,
+                     registre=self.registre,
+                     **SANS_REPETITION)
+        message = str(capture.exception)
+        self.assertIn("sitte", message)
+        self.assertIn("site", message)          # ce que le jeu porte vraiment
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+    def test_une_colonne_presente_mais_vide_reste_permise(self):
+        """« Ne touche pas a ce champ » et « vide ce champ » sont deux
+        instructions differentes pour SAP. Une colonne vide est une valeur,
+        pas une erreur : la refuser interdirait un cas legitime."""
+        self.jeu.write_text("site,libelle\n1000,\n2000,\n", encoding="utf-8")
+        resultat = executer(
+            self._pipeline(PIPELINE.replace("colonne: site",
+                                            "colonne: libelle")),
+            self.jeu, self._driver(), journal=self.journal,
+            registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(resultat.etat, TERMINE)
+
+    def test_une_colonne_absente_de_CETTE_LIGNE_seulement_est_refusee(self):
+        """Le meme defaut, une ligne plus loin, par le chemin JSONL.
+
+        `Dialecte.colonnes` est l'UNION des clefs de toutes les lignes d'un
+        JSONL. Une ligne a laquelle il manque une clef passait donc le
+        controle qui compare aux colonnes du jeu, puis valait la chaine vide
+        a l'ecriture : champ vide, case decochee, aucune exception.
+
+        L'absence reste conservee a la LECTURE, parce qu'elle porte du sens.
+        C'est ici qu'on sait que la pipeline veut ecrire cette colonne — donc
+        qu'une absence n'est plus un silence a respecter.
+        """
+        # La colonne manquante n'est PAS une colonne de clef : celles-la sont
+        # deja refusees au regroupement, par une autre garde. Ici la clef est
+        # partout, et c'est la colonne ECRITE qui manque a une ligne.
+        jeu = self.jeu.with_suffix(".jsonl")
+        jeu.write_text('{"site":"1000","libelle":"A"}\n{"site":"2000"}\n',
+                       encoding="utf-8")
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as capture:
+            executer(self._pipeline(PIPELINE.replace("colonne: site",
+                                                     "colonne: libelle")),
+                     jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertIn("libelle", str(capture.exception))
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+    def test_le_defaut_tire_sur_une_cellule_d_ESPACES(self):
+        """Le test etait `not brut`, donc « ne tire jamais sur des espaces ».
+
+        Combine a `sans_espaces_autour` — dont la docstring dit elle-meme
+        qu'« un export en laisse souvent » — le cas nominal tombait a cote :
+
+            colonne = "   ", defaut = "K75", format = [sans_espaces_autour]
+                -> ''    le defaut ne tirait pas, l'elagage vidait ensuite
+
+        Le champ SAP etait VIDE au lieu de recevoir la valeur de repli,
+        c'est-a-dire l'inverse exact de ce que `defaut` sert a garantir.
+        """
+        self.jeu.write_text("site,libelle\n1000,   \n", encoding="utf-8")
+        brut = self._driver()
+        executer(self._pipeline(SOCLE + etape(
+                     "- nom: saisir_libelle",
+                     "  action: set",
+                     '  cible: "wnd[0]/usr/ctxtWERKS-LOW"',
+                     "  source: {colonne: libelle}",
+                     '  defaut: "K75"',
+                     "  format: [sans_espaces_autour]",
+                     f"  {ECRAN}")),
+                 self.jeu, brut, journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        ecrits = [g for g in brut.gestes if g[0] == "write"]
+        self.assertTrue(ecrits, "aucune saisie")
+        self.assertEqual(ecrits[-1][-1], "K75",
+                         "le champ a ete VIDE au lieu de recevoir le repli")
+
+    def test_une_case_a_cocher_sur_colonne_absente_ne_decoche_plus_en_silence(self):
+        """Le cas le plus couteux : "" appartient a FAUX, donc chaque item
+        etait decoche, sur tout le lot, sans un mot."""
+        with self.assertRaises(PreparationImpossible):
+            executer(self._pipeline(SOCLE + etape(
+                "- nom: cocher_case",
+                "  action: cocher",
+                '  cible: "wnd[0]/usr/chkDY_LOEK"',
+                "  source: {colonne: absente}",
+                f"  {ECRAN}")),
+                self.jeu, self._driver(), journal=self.journal,
+                registre=self.registre,
+                     **SANS_REPETITION)
+
+
+class TestEchappatoirePython(Base):
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(oublier_tout)
+
+    def test_une_etape_python_recoit_le_poste_l_item_et_les_lectures(self):
+        vus: list[tuple] = []
+
+        @etape_python("noter")
+        def noter(poste, item, contexte):
+            vus.append((type(poste).__name__, item.item_id, dict(contexte)))
+
+        avec = SOCLE + etape("- nom: appeler", "  action: python",
+                             "  fonction: noter", f"  {ECRAN}")
+        executer(self._pipeline(avec), self.jeu, self._driver(),
+                 journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(len(vus), 3)
+        self.assertEqual(vus[0][0], "Poste")
+
+    def test_une_exception_d_etape_python_passe_par_la_taxonomie(self):
+        """L'inconnu y est bloquant, et c'est voulu : une extension qui leve
+        une erreur que personne n'a repertoriee arrete le lot."""
+        @etape_python("casser")
+        def casser(poste, item, contexte):
+            raise ZeroDivisionError("bug de l'extension")
+
+        avec = SOCLE + etape("- nom: casser_ici", "  action: python",
+                             "  fonction: casser", f"  {ECRAN}")
+        resultat = executer(self._pipeline(avec), self.jeu, self._driver(),
+                            journal=self.journal, registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        incidents = [e for e in lire(self.journal) if e.TYPE == "incident"]
+        self.assertTrue(incidents)
+        self.assertEqual(incidents[0].categorie, "inconnue")
+
+
+class TestChaine(Base):
+    """§3.3 : un declenchement successif, et rien de plus."""
+
+    def _maillons(self, combien: int = 2) -> list[Maillon]:
+        return [Maillon(pipeline=self._pipeline(), jeu=self.jeu,
+                        journal=self.racine / f"j{rang}.jsonl")
+                for rang in range(combien)]
+
+    def test_chaque_pipeline_a_son_journal(self):
+        """Fusionner rendrait la reprise fine impossible."""
+        resultats = enchainer(self._maillons(), self._driver(),
+                              **SANS_REPETITION,
+                              registre=self.registre)
+        self.assertEqual(len(resultats), 2)
+        self.assertNotEqual(resultats[0].journal, resultats[1].journal)
+        self.assertTrue((self.racine / "j0.jsonl").exists())
+        self.assertTrue((self.racine / "j1.jsonl").exists())
+
+    def test_le_retour_a_l_accueil_a_lieu_entre_deux_pipelines(self):
+        vus: list[str] = []
+
+        def accueil(brut, registre):
+            vus.append("accueil")
+
+        enchainer(self._maillons(3), self._driver(), registre=self.registre,
+                  **SANS_REPETITION,
+                  accueil=accueil)
+        self.assertEqual(len(vus), 2, "un retour entre chaque, pas avant la "
+                                      "premiere")
+
+    def test_le_retour_passe_par_le_champ_de_commande(self):
+        from falcon.moteur import retour_accueil
+        from falcon.noyau import CHAMP_DE_COMMANDE, RETOUR_ACCUEIL
+
+        brut = self._driver()
+        brut.valeurs[CHAMP_DE_COMMANDE] = ""
+        retour_accueil(brut, self.registre)
+        self.assertIn(("write", CHAMP_DE_COMMANDE, RETOUR_ACCUEIL),
+                      brut.gestes)
+
+    def test_le_retour_a_l_accueil_ne_peut_sauvegarder_AUCUNE_fois(self):
+        """Taper un code transaction dans le champ de commande ne sauvegarde
+        rien. Si SAP annonce une sauvegarde ici, c'est qu'on n'est pas ou l'on
+        croit — et c'est exactement ce qu'il faut arreter.
+
+        Le plafond etait a 1, sous un commentaire qui disait deja « ce geste
+        ne doit jamais sauvegarder quoi que ce soit ». La garde de rayon
+        refuse a partir de la N-ieme : un plafond a 1 en autorisait une.
+        """
+        from falcon.controleur import Contrat, DriverGarde, Poste
+        from falcon.moteur.chaine import retour_accueil
+        from falcon.noyau import PlafondAtteint
+
+        # Le geste lui-meme, tel que `retour_accueil` le pose.
+        brut = self._driver()
+        brut.valeurs[CHAMP_DE_COMMANDE] = ""
+        retour_accueil(brut, self.registre)          # ne doit pas lever
+
+        # Et la borne : sous le meme contrat, la PREMIERE sauvegarde est
+        # refusee. C'est le comportement, pas la valeur de la constante.
+        source = inspect.getsource(retour_accueil)
+        self.assertIn("plafond_sauvegardes=0", source)
+
+        garde = DriverGarde(self._driver(), self.registre,
+                            plafond_sauvegardes=0)
+        poste = Poste(garde)
+        with garde.sous_contrat(Contrat(nom="(retour accueil)",
+                                        navigation_libre=True,
+                                        sauvegarde=True)):
+            with self.assertRaises(PlafondAtteint):
+                poste.press("wnd[0]/tbar[0]/btn[11]")
+
+    def test_un_arret_bloquant_interrompt_la_chaine(self):
+        brut = self._driver()
+
+        def deriver(driver, geste, cible):
+            if geste == "press":
+                driver.identite = AUTRE
+        brut.apres_action = deriver
+
+        resultats = enchainer(self._maillons(3), brut, registre=self.registre,
+                              **SANS_REPETITION)
+        self.assertEqual(len(resultats), 1)
+        self.assertTrue(resultats[0].interrompu)
+
+    def test_aucune_donnee_ne_passe_d_une_pipeline_a_la_suivante(self):
+        """La limite qui empeche la chaine de devenir un orchestrateur.
+
+        `Resultat` ne porte que des compteurs, des etats, des chemins et des
+        identifiants d'item — rien qu'une pipeline suivante puisse consommer
+        comme donnee METIER. L'egalite est exhaustive a dessein : y ajouter un
+        champ doit etre un geste delibere, pas un effet de bord.
+
+        `douteux` porte des `item_id`, qui sont des empreintes de clef : ils
+        disent CE QUI s'est passe, pas ce qu'il y avait dans les colonnes. Et
+        `enchainer` ne les transmet a aucun maillon suivant — un test voisin
+        l'epingle. La limite tient.
+
+        **`extraits` a ete ajoute deliberement, et ce test est la ou la
+        deliberation a lieu.** Ce sont des CHEMINS, de la meme nature que `ko`
+        et `journal` : l'appelant doit ouvrir le fichier pour savoir ce qu'il
+        contient. C'est exactement le point d'arret que le §1 impose entre la
+        passe d'audit et la passe de remediation — le fichier circule par le
+        disque et par un humain, pas par la chaine.
+        """
+        import dataclasses
+
+        from falcon.moteur import Resultat
+
+        champs = {c.name for c in dataclasses.fields(Resultat)}
+        self.assertEqual(champs, {"run_id", "etat", "compteurs", "raison",
+                                  "journal", "ko", "duree_ms", "douteux",
+                                  "extraits"})
+
+    def test_les_champs_ajoutes_ne_portent_que_des_chemins(self):
+        """Le corollaire du test ci-dessus, et ce qui le rend verifiable.
+
+        « Des compteurs, des etats, des chemins et des identifiants d'item » :
+        `extraits` doit rester une suite de chaines, jamais des lignes. Un
+        `Resultat` qui porterait les LIGNES extraites ferait de la chaine un
+        orchestrateur, et la limite du §3.3 tomberait sans un mot.
+        """
+        resultat = self._executer()
+        self.assertIsInstance(resultat.extraits, tuple)
+        for chemin in resultat.extraits:
+            self.assertIsInstance(chemin, str)
+
+    def test_la_chaine_ne_transmet_pas_les_extraits(self):
+        """Un maillon ne voit pas ce que le precedent a extrait."""
+        import inspect
+
+        from falcon.moteur import chaine
+
+        source = inspect.getsource(chaine.enchainer)
+        self.assertNotIn("extraits", source)
+
+
+class TestBoutEnBout(Base):
+    """Un lot interrompu, repris, et son fichier de KO reinjecte.
+
+    C'est le seul test qui parcourt la chaine entiere : donnees -> pipeline ->
+    contrat -> gardes -> taxonomie -> journal -> repli -> reprise -> reexport.
+    Chacun de ces maillons a ses propres tests ; celui-ci verifie qu'ils
+    tiennent ensemble, ce qu'aucun d'eux ne dit.
+
+    Il reste execute contre un double qui n'etablit AUCUNE fidelite a SAP.
+    """
+
+    def _driver_qui_lache_au_deuxieme(self) -> DriverScripte:
+        brut = self._driver()
+        etat = {"presses": 0}
+
+        def lacher(driver, geste, cible):
+            driver.statut = Statut()
+            if geste != "press":
+                return
+            etat["presses"] += 1
+            if etat["presses"] == 2:
+                # Une modale surgit APRES la sauvegarde : l'item a ecrit, et
+                # le lot ne peut pas continuer.
+                driver.fenetres = (Fenetre(id="wnd[0]"), Fenetre(id="wnd[1]"))
+        brut.apres_action = lacher
+        return brut
+
+    def test_interrompu_puis_repris_puis_reinjecte(self):
+        ko = self.racine / "ko.csv"
+
+        # 1. Le lot part, traite un item, et se fait interrompre au deuxieme.
+        premier = self._executer(self._driver_qui_lache_au_deuxieme(),
+                                 sortie_ko=ko, **SANS_REPETITION)
+        self.assertEqual(premier.etat, INTERROMPU)
+        self.assertEqual(premier.compteurs[OK], 1)
+
+        # 2. Le repli classe : un termine, un douteux — il a sauve avant de
+        #    lacher — et un jamais commence.
+        etats_apres = self._etats()
+        self.assertEqual(
+            sorted(e.etat for e in etats_apres.values()), [DOUTEUX, OK])
+
+        # 3. La reprise ne rejoue NI le termine NI le douteux. Le douteux
+        #    surtout : le rejouer, c'est ecrire deux fois dans SAP.
+        seconde = self._executer(self._driver(), mode=REPRISE, sortie_ko=ko, **SANS_REPETITION)
+        self.assertEqual(seconde.etat, TERMINE)
+        self.assertEqual(seconde.compteurs[OK], 1)      # le troisieme, seul
+        self.assertEqual(seconde.compteurs["deja_faits"], 2)
+
+        # 4. Le rapport de fin se lit sur le journal partage.
+        rapport = depuis_journal(lire(self.journal))
+        self.assertEqual(rapport.pipeline, "essai")
+        self.assertEqual(rapport.mode, REPRISE)
+
+        # 5. Le douteux ressort a l'arbitrage humain, pas au flux de reprise.
+        douteux = [i for i, e in self._etats().items() if e.etat == DOUTEUX]
+        self.assertEqual(len(douteux), 1)
+
+    def test_le_fichier_de_ko_se_recharge_sans_retouche(self):
+        """§4.7 : un rapport qu'il faut retravailler a la main avant de
+        relancer annule le benefice de l'automatisation sur les cas
+        difficiles — qui sont precisement ceux qui coutent."""
+        surcouche = self.racine / "sur.yaml"
+        surcouche.write_text(textwrap.dedent("""
+            version: 1
+            entrees:
+              - nom: zz_refuse
+                categorie: connue_fautive
+                canal: statut
+                origine: falcon_observe
+                justification: "message d'essai de la suite du moteur, sans
+                  equivalent reel dans SAP"
+                correspondance: {type: "E", id: "ZZ", numero: "001"}
+                politique: {poursuivre: true, item: ko}
+            """), encoding="utf-8")
+        brut = self._driver()
+
+        def refuser(driver, geste, cible):
+            driver.statut = (Statut(type="E", id="ZZ", numero="001", texte="x")
+                             if geste == "press" else Statut())
+        brut.apres_action = refuser
+
+        ko = self.racine / "ko.csv"
+        premier = executer(self._pipeline(), self.jeu, brut,
+                           journal=self.journal,
+                           registre=Registre.charger(surcouche), sortie_ko=ko, **SANS_REPETITION)
+        self.assertEqual(premier.compteurs[KO], 3)
+
+        # Le fichier de KO se recharge tel quel, sur un journal neuf.
+        second = executer(self._pipeline(), ko, self._driver(),
+                          journal=self.racine / "reprise.jsonl",
+                          registre=self.registre,
+                     **SANS_REPETITION)
+        self.assertEqual(second.etat, TERMINE)
+        self.assertEqual(second.compteurs[OK], 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestGardeDeLaRepetition(Base):
+    """Garde 5, seconde moitie : « `dry-run` obligatoire avant tout premier
+    passage en production » (§5.5).
+
+    La specification en fait une GARDE ; le code n'en faisait qu'un ordre
+    d'affichage — la console proposait « Repetition a blanc » au-dessus de
+    « Executer », et c'etait tout. Un ordre de menu n'arrete personne.
+    """
+
+    def _run(self, **options):
+        """Un `run` NON force : c'est ce que la garde doit examiner."""
+        return executer(self._pipeline(), self.jeu, self._driver(),
+                        journal=self.journal, registre=self.registre,
+                        **options)
+
+    def _blanc(self, **options):
+        return executer(self._pipeline(), self.jeu, self._driver(),
+                        journal=self.journal, registre=self.registre,
+                        mode=DRY_RUN, **options)
+
+    def test_un_run_SANS_repetition_prealable_est_refuse(self):
+        brut = self._driver()
+        with self.assertRaises(RepetitionManquante) as capture:
+            executer(self._pipeline(), self.jeu, brut, journal=self.journal,
+                     registre=self.registre)
+        self.assertIn("repetition a blanc", str(capture.exception))
+        self.assertEqual(brut.gestes, [], "refuse AVANT la premiere action")
+
+    def test_un_run_APRES_une_repetition_qui_a_abouti_passe(self):
+        self._blanc()
+        self.assertEqual(self._run().etat, TERMINE)
+
+    def test_la_repetition_doit_porter_sur_les_MEMES_empreintes(self):
+        """L'empreinte porte sur le TEXTE. Corriger une virgule en exige une
+        nouvelle — c'est le prix d'une garde qui porte sur ce qui sera
+        REELLEMENT execute, et non sur un fichier qui portait le meme nom
+        hier."""
+        self._blanc()
+        modifiee = self._pipeline(PIPELINE.replace("plafond_items: 50",
+                                                   "plafond_items: 40"))
+        with self.assertRaises(RepetitionManquante):
+            executer(modifiee, self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre)
+
+    def test_une_repetition_sur_un_AUTRE_jeu_ne_compte_pas(self):
+        autre = self.racine / "autre.csv"
+        autre.write_text("site,libelle\n9000,Nice\n", encoding="utf-8")
+        executer(self._pipeline(), autre, self._driver(),
+                 journal=self.journal, registre=self.registre, mode=DRY_RUN)
+        with self.assertRaises(RepetitionManquante):
+            self._run()
+
+    def test_une_repetition_INTERROMPUE_ne_compte_pas(self):
+        """Elle prouve justement que quelque chose n'allait pas."""
+        fautif = self._driver()
+
+        def refuser(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            # Sur l'ECRITURE, pas sur la validation : en repetition a blanc
+            # la sauvegarde n'a pas lieu, donc un message pose sur `press`
+            # ne serait jamais vu. Un `E` que le registre ne connait pas est
+            # INCONNU, donc bloquant.
+            if geste == "write":
+                driver.statut = Statut(type="E", id="ZZ", numero="001",
+                                       texte="jamais vu")
+
+        fautif.apres_action = refuser
+        blanc = executer(self._pipeline(), self.jeu, fautif,
+                         journal=self.journal, registre=self.registre,
+                         mode=DRY_RUN)
+        self.assertEqual(blanc.etat, INTERROMPU, "la repetition a abouti")
+        with self.assertRaises(RepetitionManquante):
+            self._run()
+
+    def test_une_repetition_arretee_au_PLAFOND_compte(self):
+        """C'est le comportement normal quand le jeu est plus grand que le
+        plafond. Refuser la rendrait la garde impossible a satisfaire dans le
+        cas meme ou les plafonds servent."""
+        court = PIPELINE.replace("plafond_items: 50", "plafond_items: 1")
+        pipeline = self._pipeline(court)
+        blanc = executer(pipeline, self.jeu, self._driver(),
+                         journal=self.journal, registre=self.registre,
+                         mode=DRY_RUN)
+        self.assertEqual(blanc.etat, PLAFOND)
+        self.assertEqual(
+            executer(pipeline, self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre).etat,
+            PLAFOND)
+
+    def test_une_repetition_TUEE_n_est_pas_terminee_par_une_AUTRE(self):
+        """Une repetition tuee — Ctrl-C, poste eteint — n'ecrit aucune
+        `ExecutionFin`.
+
+        La garde prenait la premiere cloture qui SUIVAIT, sans regarder a qui
+        elle appartenait : celle d'une execution ulterieure, portant une autre
+        pipeline et un autre jeu, « terminait » la repetition avortee. Le run
+        de production partait donc sans qu'aucune repetition n'ait jamais
+        abouti sur ces empreintes.
+        """
+        from falcon.journal import Ecrivain, ExecutionFin
+
+        with Ecrivain(self.journal) as ecrivain:
+            # La repetition qu'on cherche : ouverte, jamais close.
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="tuee", mode=DRY_RUN, classe="iterative", pipeline="p",
+                pipeline_empreinte="AAAA", jeu="j.csv",
+                jeu_empreinte="JJJJ", plafond_items=3))
+            # Une execution SANS RAPPORT, close proprement.
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="autre", mode=DRY_RUN, classe="iterative",
+                pipeline="autre", pipeline_empreinte="BBBB", jeu="k.csv",
+                jeu_empreinte="KKKK", plafond_items=3))
+            ecrivain.ecrire(ExecutionFin(run_id="autre", etat="termine"))
+
+        with self.assertRaises(RepetitionManquante):
+            garde_de_la_repetition(self.journal, "AAAA", "JJJJ", RUN,
+                                   False, "")
+
+    def test_la_REPRISE_y_est_soumise_aussi(self):
+        """Le commentaire disait que `garde_du_monde` suffisait. Il avait tort.
+
+        `garde_du_monde` compare des EMPREINTES ; elle ne dit rien de
+        l'existence d'une repetition qui ait abouti. Sur un journal ne portant
+        qu'une repetition INTERROMPUE, le `run` etait refuse et la reprise
+        passait — elle ecrivait donc dans SAP sur la seule preuve d'une
+        repetition dont cette garde dit qu'elle « ne compte pas ».
+        """
+        from falcon.journal import Ecrivain, ExecutionFin
+
+        with Ecrivain(self.journal) as ecrivain:
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="tuee", mode=DRY_RUN, classe="iterative", pipeline="p",
+                pipeline_empreinte="AAAA", jeu="j.csv",
+                jeu_empreinte="JJJJ", plafond_items=3))
+            ecrivain.ecrire(ExecutionFin(run_id="tuee", etat=INTERROMPU))
+
+        for mode in (RUN, REPRISE):
+            with self.subTest(mode=mode):
+                with self.assertRaises(RepetitionManquante):
+                    garde_de_la_repetition(self.journal, "AAAA", "JJJJ", mode,
+                                           False, "")
+
+    def test_un_jeu_SANS_ITEM_ne_fonde_aucun_lot(self):
+        """« Un lot qui semble passer et n'a rien fait, ce qui est le pire des
+        resultats » — la phrase est de ce depot, et rien ne refusait ce cas.
+
+        Un export SAP qui n'a rien ramene laisse un fichier reduit a son
+        en-tete. La repetition annoncait « termine », la production aussi, et
+        cette repetition qui n'avait rien exerce SATISFAISAIT la garde 5.5 :
+        elle autorisait un run sur un jeu rempli entre-temps, sans que rien
+        n'ait jamais ete repete.
+        """
+        self.jeu.write_text("site,libelle\n", encoding="utf-8")
+        for mode in (DRY_RUN, RUN):
+            with self.subTest(mode=mode):
+                brut = self._driver()
+                with self.assertRaises(PreparationImpossible) as capture:
+                    executer(self._pipeline(), self.jeu, brut,
+                             journal=self.journal, registre=self.registre,
+                             mode=mode, **SANS_REPETITION)
+                self.assertIn("aucun item", str(capture.exception))
+                self.assertEqual(brut.gestes, [])
+
+    def test_la_repetition_a_blanc_n_est_PAS_refusee_sur_un_douteux(self):
+        """Elle n'ecrit rien : `_avant_sauvegarde` leve avant toute
+        sauvegarde. Lui refuser un item douteux interdisait d'essayer sans
+        rien ecrire au moment precis ou l'on en a besoin — et le message
+        affirmait qu'elle « ecrirait une seconde fois », ce qui ne peut pas
+        arriver."""
+        from falcon.journal import Ecrivain, ItemDebut, ItemFin
+
+        items, _ = lire_items(self.jeu, ("site",))
+        with Ecrivain(self.journal) as ecrivain:
+            ecrivain.ecrire(ExecutionDebut(
+                run_id="r", mode=RUN, classe="iterative", pipeline="essai",
+                pipeline_empreinte="X", jeu="j", jeu_empreinte="Y",
+                plafond_items=9))
+            ecrivain.ecrire(ItemDebut(run_id="r", item_id=items[0].item_id))
+            ecrivain.ecrire(ItemFin(run_id="r", item_id=items[0].item_id,
+                                    etat=DOUTEUX))
+
+        # `run` reste refuse : c'est lui qui ecrirait une seconde fois.
+        with self.assertRaises(PreparationImpossible):
+            _refuser_les_douteux_du_journal(self.journal, items, RUN)
+        # La repetition, non.
+        _refuser_les_douteux_du_journal(self.journal, items, DRY_RUN)
+
+    def test_forcer_EXIGE_un_motif(self):
+        with self.assertRaises(PreparationImpossible) as capture:
+            self._run(forcer_sans_repetition=True)
+        self.assertIn("motif", str(capture.exception))
+
+    def test_le_motif_du_forcage_de_REPRISE_est_trace_lui_aussi(self):
+        """`preparer` promettait « un motif, qui sera trace ». Il etait exige
+        puis jete, et `executer` n'exposait meme pas le parametre : la porte
+        de sortie decrite par deux docstrings n'existait dans aucune
+        commande."""
+        self._blanc()
+        self._run()
+        # Le jeu CHANGE : sans forcage, la reprise est refusee. C'est ce qui
+        # rend le test discriminant — forcer doit servir a quelque chose.
+        self.jeu.write_text("site,libelle\n1000,Paris\n2000,Nice\n",
+                            encoding="utf-8")
+        with self.assertRaises(RepriseIncoherente):
+            executer(self._pipeline(), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     mode=REPRISE)
+
+        motif = "Correction d'une faute de frappe sur un libelle, sans effet."
+        executer(self._pipeline(), self.jeu, self._driver(),
+                 journal=self.journal, registre=self.registre, mode=REPRISE,
+                 forcer_reprise=True, motif_reprise=motif,
+                 **SANS_REPETITION)
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].reprise_forcee, motif)
+
+    def test_forcer_la_reprise_EXIGE_un_motif(self):
+        self._blanc()
+        self._run()
+        self.jeu.write_text("site,libelle\n1000,Paris\n2000,Nice\n",
+                            encoding="utf-8")
+        with self.assertRaises(ValueError):
+            executer(self._pipeline(), self.jeu, self._driver(),
+                     journal=self.journal, registre=self.registre,
+                     mode=REPRISE, forcer_reprise=True, **SANS_REPETITION)
+
+    def test_le_motif_du_forcage_est_TRACE_dans_le_journal(self):
+        """Un contournement qui ne laisse pas de trace n'est pas un
+        contournement, c'est un trou."""
+        motif = "Correction urgente validee par le responsable du perimetre."
+        self._run(forcer_sans_repetition=True, motif_forcage=motif)
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].repetition_forcee, motif)
+
+    def test_un_run_NON_force_ne_laisse_aucune_trace_de_forcage(self):
+        self._blanc()
+        self._run()
+        ouvertures = [e for e in lire(self.journal)
+                      if isinstance(e, ExecutionDebut)]
+        self.assertEqual(ouvertures[-1].repetition_forcee, "")
+
+    def test_la_repetition_a_blanc_elle_meme_n_en_exige_pas(self):
+        """Sinon aucune ne pourrait jamais avoir lieu."""
+        self.assertEqual(self._blanc().etat, TERMINE)
+
+
+
+GRILLE_ALV = "wnd[1]/usr/cntlALV_CONTAINER_1/shellcont/shell"
+
+#: Trois variantes, dont deux homonymes a la casse pres.
+LIGNES_ALV = [
+    {"VARIANT": "/BCP01_1000", "TEXT": "BCP Paris"},
+    {"VARIANT": "/BCP01_2000", "TEXT": "BCP Lyon"},
+    {"VARIANT": "/bcp01_1000", "TEXT": "doublon de casse"},
+    {"VARIANT": "/BCP01_3000", "TEXT": "BCP Lille"},
+]
+
+
+class TestChoisirEtOuvrir(Base):
+    """La ligne par son CONTENU, jamais par son rang.
+
+    `couture/interface.py` porte la regle depuis toujours : « l'index depend
+    du contenu de la base au moment ou on regarde. Une pipeline qui fige un
+    index traite la mauvaise ligne des que la liste change, et ne leve pas. »
+    Ces tests sont ce qui la rend executable.
+    """
+
+    def _pipeline_grille(self, *, comparaison: str = "exact",
+                         ouvrir: bool = True) -> str:
+        etapes = etape(
+            "- nom: choisir_la_variante",
+            "  action: choisir",
+            f'  cible: "{GRILLE_ALV}"',
+            "  colonne: VARIANT",
+            "  source: {gabarit: '/BCP01_{site}'}",
+            f"  comparaison: {comparaison}",
+            f"  {ECRAN}",
+        )
+        if ouvrir:
+            etapes += etape(
+                "- nom: l_ouvrir",
+                "  action: ouvrir",
+                f'  cible: "{GRILLE_ALV}"',
+                f"  {ECRAN}",
+            )
+        return SOCLE + etapes
+
+    def _driver_grille(self) -> DriverScripte:
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = list(LIGNES_ALV)
+        return brut
+
+    def _lancer(self, texte: str, brut=None):
+        chemin = self.racine / "p.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        return executer(charger(chemin), self.jeu, brut or self._driver_grille(),
+                        journal=self.journal, registre=self.registre,
+                        **SANS_REPETITION)
+
+    def test_la_ligne_est_trouvee_par_son_contenu(self):
+        brut = self._driver_grille()
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.compteurs[OK], 3)
+        # Le site 1000 -> /BCP01_1000, rang 0 ; le site 2000 -> rang 1.
+        positions = [g for g in brut.gestes if g[0] == "grid_set_current_row"]
+        self.assertEqual([p[2] for p in positions[:2]], ["0", "1"])
+
+    def test_l_ordre_des_gestes_est_celui_que_le_piege_impose(self):
+        """CONTROLE NEGATIF : retirer `grid_set_current_row` fait tomber ce test.
+
+        `grid_double_click` agit sur la cellule COURANTE. Sans positionnement,
+        c'est la ligne 0 qui s'ouvre — sans erreur, sur une autre variante.
+        Rien d'autre que ce test ne s'en apercevrait.
+        """
+        brut = self._driver_grille()
+        self._lancer(self._pipeline_grille(), brut)
+        sur_grille = [g[0] for g in brut.gestes if g[1] == GRILLE_ALV]
+        self.assertEqual(
+            sur_grille[:3],
+            ["grid_set_current_row", "grid_select_rows", "grid_double_click"])
+
+    def test_choisir_ne_double_clique_JAMAIS(self):
+        """`choisir` selectionne, `ouvrir` ouvre. Selectionner N lignes puis
+        presser un bouton de barre est un cas reel."""
+        brut = self._driver_grille()
+        self._lancer(self._pipeline_grille(ouvrir=False), brut)
+        self.assertFalse([g for g in brut.gestes
+                          if g[0] == "grid_double_click"])
+
+    def test_aucune_ligne_abandonne_l_item_et_le_lot_continue(self):
+        """CONTROLE NEGATIF : rendre `choisir` tolerant a zero ligne.
+
+        Un site dont la variante manque ne doit pas emporter les autres — mais
+        il ne doit pas non plus passer pour traite.
+        """
+        brut = self._driver_grille()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP01_2000", "TEXT": "Lyon"}]
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.compteurs[OK], 1)
+        self.assertEqual(resultat.compteurs[KO], 2)     # 1000 et 3000
+        self.assertEqual(resultat.etat, TERMINE)
+        # Rien n'a ete selectionne pour les items perdus.
+        self.assertEqual(
+            len([g for g in brut.gestes if g[0] == "grid_select_rows"]), 1)
+
+    def test_plusieurs_lignes_abandonnent_l_item_et_nomment_les_rangs(self):
+        """CONTROLE NEGATIF : prendre le premier rang fait tomber ce test.
+
+        Prendre la premiere, c'est choisir au hasard la ligne qu'on va
+        modifier. Le refus nomme les rangs pour qu'on puisse aller voir.
+        """
+        resultat = self._lancer(self._pipeline_grille(comparaison="casse"))
+        self.assertEqual(resultat.compteurs[KO], 1)     # le site 1000
+        self.assertEqual(resultat.compteurs[OK], 2)     # 2000 et 3000
+        # `ItemAbandonne` ne produit pas d'incident : il clot l'item en KO et
+        # son motif part au fichier de KO, qui est ce qu'un humain relit.
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ItemFin" and e.etat == KO]
+        self.assertEqual(len(fins), 1)
+        self.assertIn("2 lignes portent", fins[0].incident)
+        self.assertIn("[0, 2]", fins[0].incident)
+
+    def test_une_colonne_mal_orthographiee_arrete_LE_LOT(self):
+        """Et elle ne passe PAS par la taxonomie. Defaut trouve en executant.
+
+        Sans la clause qui la fait remonter, `GrilleIllisible` tombait dans le
+        `except Exception` du bas, etait classee sur le canal « python » —
+        celui des etapes maison — et ressortait `inconnue` donc bloquante. Le
+        lot s'arretait bien, mais un dump partait, et `falcon recolter` aurait
+        propose d'ecrire une entree de registre pour une FAUTE DE FRAPPE dans
+        le YAML. Declarer « colonne VARIANTE absente » connue_benigne, c'est
+        rendre un defaut de pipeline tolerable pour toujours.
+
+        Le lot s'arrete, et c'est le bon resultat : la faute echoue
+        identiquement sur chaque item.
+        """
+        texte = SOCLE + etape(
+            "- nom: choisir_la_variante",
+            "  action: choisir",
+            f'  cible: "{GRILLE_ALV}"',
+            "  colonne: VARIANTE",
+            "  source: {colonne: site}",
+            f"  {ECRAN}",
+        )
+        brut = self._driver_grille()
+        resultat = self._lancer(texte, brut)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("VARIANTE", resultat.raison)
+        self.assertIn("VARIANT", resultat.raison)       # ce qu'elle expose
+        self.assertFalse([g for g in brut.gestes
+                          if g[0] == "grid_select_rows"])
+        # Aucun incident classe : ce n'est pas un comportement de SAP, donc
+        # rien a proposer au registre.
+        incidents = [e for e in lire(self.journal)
+                     if getattr(e, "categorie", None) is not None]
+        self.assertEqual(incidents, [])
+        # Mais l'execution s'est TERMINEE proprement : sans `ExecutionFin`,
+        # le repli des etats verrait un run jamais clos et la garde de
+        # repetition chercherait une repetition aboutie qu'elle ne trouverait
+        # pas.
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ExecutionFin"]
+        self.assertEqual(len(fins), 1)
+
+    def test_le_choix_passe_par_le_contrat_de_l_etape(self):
+        """La lecture n'echappe pas a la garde d'identite : c'est elle qui
+        distinguera un atterrissage sur la liste d'un atterrissage ailleurs."""
+        brut = self._driver_grille()
+        brut.identite = AUTRE
+        resultat = self._lancer(self._pipeline_grille(), brut)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertFalse([g for g in brut.gestes if g[1] == GRILLE_ALV])
+
+
+class TestExtraire(Base):
+    """Le fichier que la passe d'audit produit, et que l'humain relit.
+
+    Le §1 impose ce point d'arret : « passe d'audit -> fichier de constats
+    (relisible, editable) -> passe de remediation. L'humain valide le fichier
+    intermediaire avant toute ecriture. »
+    """
+
+    def _pipeline_extraction(self, *, colonnes: str = "") -> str:
+        """Une passe d'AUDIT : elle ne sauvegarde rien.
+
+        Pas batie sur `SOCLE`, et la raison est un defaut mesure : `SOCLE` se
+        termine par une etape `sauvegarde: true`, qui leve `RefusDryRun` en
+        dry-run AVANT que l'extraction ne tourne. Le test du suffixe de mode
+        passait donc a vide — aucun fichier ecrit, et `all([])` vaut True. Il
+        ne mordait pas quand on retirait le suffixe.
+
+        Une passe d'extraction ne sauvegarde pas : c'est ce qui la rend
+        exercable en dry-run, et c'est justement ce que le suffixe protege.
+        """
+        lignes = [
+            "version: 1",
+            "nom: audit_variantes",
+            "classe: iterative",
+            "cles: [site]",
+            "plafond_items: 50",
+            "plafond_sauvegardes: 50",
+            "etapes:",
+            "  - nom: variantes",
+            "    action: extraire",
+            f'    cible: "{GRILLE_ALV}"',
+        ]
+        if colonnes:
+            lignes.append(f"    colonnes: [{colonnes}]")
+        lignes.append(f"    {ECRAN}")
+        return "\n".join(lignes) + "\n"
+
+    def _lancer(self, texte: str, brut=None, **options):
+        chemin = self.racine / "p.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        brut = brut or self._driver()
+        brut.grilles.setdefault(GRILLE_ALV, list(LIGNES_ALV))
+        return executer(charger(chemin), self.jeu, brut,
+                        journal=self.journal, registre=self.registre,
+                        **{**SANS_REPETITION, **options})
+
+    # -- le fichier --------------------------------------------------------
+
+    def test_un_fichier_par_item_nomme_par_ses_clefs(self):
+        """`variantes_1000.csv`, pas un hash : ce fichier est fait pour etre
+        ouvert par un humain qui doit savoir lequel c'est."""
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(),
+                                sortie_extraction=sortie)
+        noms = sorted(p.name for p in sortie.glob("*.csv"))
+        self.assertEqual(noms, ["variantes_1000.csv", "variantes_2000.csv",
+                                "variantes_3000.csv"])
+        self.assertEqual(len(resultat.extraits), 3)
+
+    def test_le_mode_figure_dans_le_nom(self):
+        """La garde de repetition exige un dry-run avant tout run. Or une
+        pipeline d'extraction ne sauvegarde rien : `RefusDryRun` ne se
+        declenche jamais et le dry-run ECRIT le fichier. Sans le suffixe, le
+        run se ferait refuser par sa propre garde d'ecrasement, sur un fichier
+        qu'il vient d'ecrire lui-meme.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie,
+                     mode=DRY_RUN)
+        noms = sorted(p.name for p in sortie.glob("*.csv"))
+        self.assertTrue(noms, "la repetition a blanc doit ECRIRE : sans "
+                              "fichier, ce test passerait a vide")
+        self.assertTrue(all(n.endswith(".dry-run.csv") for n in noms), noms)
+        # Et le run qui suit ne bute sur rien.
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        self.assertTrue((sortie / "variantes_1000.csv").exists())
+
+    def test_les_colonnes_sont_clef_puis_grille_puis_provenance(self):
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        entete = texte.splitlines()[0].split(";")
+        self.assertEqual(entete[0], "site")            # la clef, sans prefixe
+        self.assertEqual(entete[1:3], ["VARIANT", "TEXT"])
+        self.assertTrue(all(c.startswith("falcon_") for c in entete[3:]),
+                        entete[3:])
+
+    def test_le_fichier_s_ouvre_dans_Excel(self):
+        """BOM et `;` : sans le BOM, Excel lit en ANSI et massacre les
+        accents ; sans le `;`, il pose tout en colonne A."""
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        octets = (sortie / "variantes_1000.csv").read_bytes()
+        self.assertTrue(octets.startswith(b"\xef\xbb\xbf"))
+        self.assertIn(b";", octets)
+
+    def test_la_provenance_est_sur_CHAQUE_ligne(self):
+        """Parce que quelqu'un va coller deux extractions dans le meme onglet.
+
+        Une provenance en en-tete deviendrait alors FAUSSE : un fichier
+        d'aspect normal qui affirme que tout vient du meme systeme. Une
+        provenance par ligne ne peut pas mentir comme ca.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie,
+                     systeme="QAS", mandant="200", utilisateur="DUPONT")
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        lignes = list(csv.DictReader(io.StringIO(texte), delimiter=";"))
+        self.assertTrue(lignes)
+        for ligne in lignes:
+            self.assertEqual(ligne["falcon_systeme"], "QAS")
+            self.assertEqual(ligne["falcon_mandant"], "200")
+            self.assertEqual(ligne["falcon_utilisateur"], "DUPONT")
+
+    # -- l'aller-retour, LE test du lot -----------------------------------
+
+    def test_le_fichier_extrait_se_redonne_TEL_QUEL_comme_jeu(self):
+        """CONTROLE NEGATIF : mettre la provenance en en-tete fait tomber ce
+        test immediatement — `csv.DictReader` prendrait cette ligne pour
+        l'en-tete, et le fichier cesserait d'etre redonnable.
+
+        C'est le seul test qui prouve que le point d'arret fonctionne : la
+        passe d'audit ecrit, l'humain relit, la passe de remediation consomme,
+        sans une retouche.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+
+        items, dialecte = lire_items(sortie / "variantes_1000.csv",
+                                     ("site", "VARIANT"))
+        self.assertEqual(len(items), 4)
+        # Les colonnes `falcon_` ont ete retirees : le jeu ne voit que les
+        # donnees. C'est le prix de la reinjectabilite, et il est assume.
+        self.assertNotIn("falcon_systeme", dialecte.colonnes)
+        self.assertEqual(dialecte.colonnes, ("site", "VARIANT", "TEXT"))
+        self.assertEqual([i.cle["VARIANT"] for i in items],
+                         [l["VARIANT"] for l in LIGNES_ALV])
+        self.assertEqual({i.cle["site"] for i in items}, {"1000"})
+
+    def test_aucune_apostrophe_de_protection_tableur(self):
+        """CONTROLE NEGATIF : appliquer `_pour_tableur` fait tomber ce test.
+
+        `dictionnaire.py` prefixe `'` aux cellules commencant par `=`, `+`,
+        `-` ou `@`, et sa docstring dit pourquoi c'est sur la-bas : « aucune
+        n'est relue par FALCON ». Ici c'est l'inverse — ce fichier est relu et
+        ses valeurs sont RETAPEES dans SAP. L'apostrophe partirait dans le
+        champ, et « -K75 » deviendrait « '-K75 ».
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "-K75", "TEXT": "=SOMME(A1)"}]
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), brut, sortie_extraction=sortie)
+
+        items, _ = lire_items(sortie / "variantes_1000.csv", ("VARIANT",))
+        self.assertEqual(items[0].cle["VARIANT"], "-K75")
+        self.assertEqual(items[0].brut[0]["TEXT"], "=SOMME(A1)")
+
+    # -- les refus ---------------------------------------------------------
+
+    def test_une_grille_vide_n_ecrit_AUCUN_fichier(self):
+        """CONTROLE NEGATIF : ecrire un fichier vide fait tomber ce test.
+
+        Un fichier vide avec sa provenance affirmerait « 0 resultat », qui est
+        une des deux lectures possibles — l'autre etant « SAP a ouvert l'objet
+        directement parce qu'il n'y en avait qu'un ». Il n'y a rien a
+        affirmer.
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = []
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.compteurs[KO], 3)
+        self.assertEqual(resultat.extraits, ())
+        self.assertEqual(list(sortie.glob("*.csv")), [])
+
+    def test_le_refus_nomme_les_DEUX_causes_opposees(self):
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = []
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), brut, sortie_extraction=sortie)
+        fins = [e for e in lire(self.journal)
+                if type(e).__name__ == "ItemFin" and e.etat == KO]
+        motif = fins[0].incident
+        self.assertIn("DEUX causes opposees", motif)
+        self.assertIn("n'a rien remonte", motif)
+        self.assertIn("QU'UNE ligne", motif)
+        self.assertIn("remanentes", motif)          # le piege des cases
+
+    def test_extraire_sans_dossier_de_sortie_est_refuse_au_PRE_VOL(self):
+        """Avant tout contact avec SAP : l'extraction tournerait, agirait sur
+        SAP, et son produit partirait nulle part."""
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as leve:
+            self._lancer(self._pipeline_extraction(), brut)
+        self.assertIn("partirait nulle part", str(leve.exception))
+        self.assertEqual(brut.gestes, [])
+
+    def test_un_fichier_existant_n_est_JAMAIS_ecrase(self):
+        """CONTROLE NEGATIF : retirer le refus fait tomber ce test.
+
+        C'est le fichier que l'humain vient peut-etre de relire et de
+        corriger dans Excel.
+        """
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(), sortie_extraction=sortie)
+        temoin = (sortie / "variantes_1000.csv").read_bytes()
+
+        brut = self._driver()
+        with self.assertRaises(PreparationImpossible) as leve:
+            self._lancer(self._pipeline_extraction(), brut,
+                         sortie_extraction=sortie)
+        self.assertIn("existent deja", str(leve.exception))
+        self.assertEqual(brut.gestes, [])
+        self.assertEqual((sortie / "variantes_1000.csv").read_bytes(), temoin)
+
+    def test_une_colonne_de_grille_prefixee_falcon_est_refusee(self):
+        """Elle serait retiree a la relecture, en silence : la passe suivante
+        travaillerait sur un fichier dont il manque des colonnes."""
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP", "falcon_ruse": "x"}]
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("reserve", resultat.raison)
+        self.assertEqual(list(sortie.glob("*.csv")), [])
+
+    def test_une_colonne_de_grille_qui_collisionne_avec_la_clef_est_refusee(self):
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = [{"VARIANT": "/BCP", "site": "9999"}]
+        sortie = self.racine / "extractions"
+        resultat = self._lancer(self._pipeline_extraction(), brut,
+                                sortie_extraction=sortie)
+        self.assertEqual(resultat.etat, INTERROMPU)
+        self.assertIn("au hasard", resultat.raison)
+
+    def test_les_colonnes_declarees_restreignent_le_fichier(self):
+        sortie = self.racine / "extractions"
+        self._lancer(self._pipeline_extraction(colonnes="VARIANT"),
+                     sortie_extraction=sortie)
+        texte = (sortie / "variantes_1000.csv").read_bytes().decode("utf-8-sig")
+        entete = texte.splitlines()[0].split(";")
+        self.assertEqual(entete[:2], ["site", "VARIANT"])
+        self.assertNotIn("TEXT", entete)
+
+
+class TestLesDeuxPasses(Base):
+    """Le point d'arret, de bout en bout, sans une retouche du fichier.
+
+    C'est le seul test qui prouve que le dispositif entier fonctionne :
+    la passe d'AUDIT extrait ce que SAP a trouve, le fichier s'ouvre dans
+    Excel et se relit, et la passe de REMEDIATION le consomme tel quel comme
+    jeu — en retrouvant chaque ligne par son CONTENU, jamais par son rang.
+
+    C'est aussi ce que le §1 decrit, mot pour mot : « passe d'audit -> fichier
+    de constats (relisible, editable) -> passe de remediation. L'humain valide
+    le fichier intermediaire avant toute ecriture. »
+    """
+
+    #: Une transaction par pipeline : `ecran:` est une CONSTANTE d'etape, et
+    #: le triplet change avec la transaction. Une pipeline unique qui iterait
+    #: sur six transactions devrait declarer `navigation_libre` partout,
+    #: c'est-a-dire neutraliser la garde 1 sur toute la passe.
+    #:
+    #: **L'etape qui OUVRE la modale doit la declarer**, et pas seulement
+    #: celles qui travaillent dedans : la garde des fenetres tourne APRES
+    #: l'action, donc sur l'ecran que le press vient de produire. Trouve en
+    #: ecrivant ce test, et c'est ce que la pipeline BCP reelle devra faire.
+    AUDIT = f"""
+        version: 1
+        nom: audit_bcp_ia08
+        classe: iterative
+        cles: [transaction]
+        plafond_items: 10
+        plafond_sauvegardes: 0
+        etapes:
+          - nom: ouvrir_la_boite
+            action: press
+            cible: "wnd[0]/tbar[1]/btn[17]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: chercher
+            action: set
+            cible: "wnd[1]/usr/txtV-LOW"
+            source: {{constante: "*BCP*"}}
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: executer_la_recherche
+            action: press
+            cible: "wnd[1]/tbar[0]/btn[8]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: variantes
+            action: extraire
+            cible: "{GRILLE_ALV}"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+        """
+
+    REMEDIATION = f"""
+        version: 1
+        nom: remediation_bcp_ia08
+        classe: iterative
+        cles: [transaction, VARIANT]
+        plafond_items: 10
+        plafond_sauvegardes: 10
+        etapes:
+          - nom: ouvrir_la_boite
+            action: press
+            cible: "wnd[0]/tbar[1]/btn[17]"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: choisir_la_variante
+            action: choisir
+            cible: "{GRILLE_ALV}"
+            colonne: VARIANT
+            source: {{colonne: VARIANT}}
+            comparaison: exact
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: la_charger
+            action: ouvrir
+            cible: "{GRILLE_ALV}"
+            {ECRAN}
+            fenetres: ["wnd[0]", "wnd[1]"]
+          - nom: sauver
+            action: press
+            cible: "wnd[0]/tbar[0]/btn[11]"
+            sauvegarde: true
+            {ECRAN}
+        """
+
+    def _sap(self) -> DriverScripte:
+        """La modale s'ouvre A CAUSE du press, pas avant lui.
+
+        Premiere redaction : `wnd[1]` ouverte des le depart. La garde des
+        fenetres l'a refusee sur la premiere etape, qui ne declare que
+        `wnd[0]` — et elle avait raison. Un double qui montre une modale que
+        rien n'a ouverte ne modelise pas le flux, il le contourne.
+        """
+        brut = self._driver()
+        brut.grilles[GRILLE_ALV] = list(LIGNES_ALV)
+
+        def apres(driver, geste, cible):
+            if geste == "write":
+                driver.valeurs[cible] = driver.valeurs.get(cible, "")
+            if cible.endswith("tbar[1]/btn[17]"):
+                driver.fenetres = (
+                    Fenetre(id="wnd[0]", type="GuiMainWindow"),
+                    Fenetre(id="wnd[1]", type="GuiModalWindow"))
+            if geste == "grid_double_click":
+                # Le scenario que CE test declare : charger la variante ferme
+                # la boite. Ce n'est pas une affirmation sur SAP — le double
+                # « n'etablit aucune fidelite » — c'est le scenario dans
+                # lequel on veut voir le moteur se comporter. Sans lui, la
+                # sauvegarde qui suit verrait une modale que rien n'a fermee,
+                # et la garde des fenetres aurait raison de refuser.
+                driver.fenetres = (Fenetre(id="wnd[0]",
+                                           type="GuiMainWindow"),)
+
+        brut.apres_action = apres
+        return brut
+
+    def _lancer(self, texte, jeu, journal, brut, **options):
+        chemin = self.racine / f"{abs(hash(texte))}.yaml"
+        chemin.write_text(textwrap.dedent(texte), encoding="utf-8")
+        return executer(charger(chemin), jeu, brut, journal=journal,
+                        registre=self.registre, **{**SANS_REPETITION, **options})
+
+    def test_l_audit_extrait_et_la_remediation_le_consomme_TEL_QUEL(self):
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "audit.jsonl",
+                             self._sap(), sortie_extraction=sortie)
+        self.assertEqual(audit.etat, TERMINE, audit.raison)
+        self.assertEqual(len(audit.extraits), 1)
+
+        # Le fichier n'est PAS retouche : il part tel quel comme jeu.
+        extrait = Path(audit.extraits[0])
+        self.assertEqual(extrait.name, "variantes_IA08.csv")
+
+        sap = self._sap()
+        remediation = self._lancer(self.REMEDIATION, extrait,
+                                   self.racine / "remediation.jsonl", sap)
+        self.assertEqual(remediation.etat, TERMINE, remediation.raison)
+        self.assertEqual(remediation.compteurs[OK], len(LIGNES_ALV))
+
+        # Chaque variante a ete retrouvee par son CONTENU : les rangs
+        # positionnes suivent l'ordre des lignes du fichier, pas un index fige.
+        positions = [int(g[2]) for g in sap.gestes
+                     if g[0] == "grid_set_current_row"]
+        self.assertEqual(positions, list(range(len(LIGNES_ALV))))
+
+    def test_l_humain_peut_supprimer_des_lignes_entre_les_deux(self):
+        """Le point d'arret sert a ca : une recherche qui ramene trop se
+        corrige AVANT d'ecrire dans SAP, pas apres."""
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "a.jsonl",
+                             self._sap(), sortie_extraction=sortie)
+
+        # Ce qu'un humain fait dans Excel : il garde deux lignes sur quatre.
+        extrait = Path(audit.extraits[0])
+        texte = extrait.read_bytes().decode("utf-8-sig")
+        lignes = texte.splitlines(keepends=True)
+        extrait.write_bytes("".join(lignes[:3]).encode("utf-8-sig"))
+
+        sap = self._sap()
+        remediation = self._lancer(self.REMEDIATION, extrait,
+                                   self.racine / "r.jsonl", sap)
+        self.assertEqual(remediation.compteurs[OK], 2)
+        self.assertEqual(
+            len([g for g in sap.gestes if g[1].endswith("tbar[0]/btn[11]")]), 2)
+
+    def test_la_provenance_survit_a_la_relecture_humaine(self):
+        """Elle est sur chaque ligne, donc une suppression de lignes ne la
+        perd pas — et un collage de deux extractions ne la falsifie pas."""
+        jeu_audit = self.racine / "transactions.csv"
+        jeu_audit.write_text("transaction\nIA08\nIW39\n", encoding="utf-8")
+        sortie = self.racine / "extractions"
+        audit = self._lancer(self.AUDIT, jeu_audit, self.racine / "a.jsonl",
+                             self._sap(), sortie_extraction=sortie,
+                             systeme="QAS", mandant="200", utilisateur="X")
+
+        self.assertEqual(len(audit.extraits), 2)
+        colle = []
+        for rang, chemin in enumerate(audit.extraits):
+            texte = Path(chemin).read_bytes().decode("utf-8-sig")
+            lignes = texte.splitlines()
+            colle += lignes if rang == 0 else lignes[1:]
+
+        # Chaque ligne dit de quelle transaction elle vient, meme melangees.
+        lues = list(csv.DictReader(io.StringIO("\n".join(colle)),
+                                   delimiter=";"))
+        self.assertEqual({l["transaction"] for l in lues}, {"IA08", "IW39"})
+        self.assertEqual({l["falcon_systeme"] for l in lues}, {"QAS"})

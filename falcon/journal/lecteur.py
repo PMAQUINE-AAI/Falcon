@@ -1,0 +1,257 @@
+"""Relecture du journal, repli des etats, et preparation d'une reprise."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Sequence
+
+from falcon.noyau import JournalCorrompu, RepriseIncoherente
+
+from .enregistrement import (
+    DOUTEUX, EN_COURS, TERMINAUX, Enregistrement, Etape, ExecutionDebut,
+    ItemDebut, ItemFin, depuis_dict,
+)
+
+
+def lire(chemin: str | Path) -> list[Enregistrement]:
+    """Relit un journal de bout en bout.
+
+    Tolere une DERNIERE ligne tronquee — c'est la signature d'une coupure
+    pendant l'ecriture, et l'evenement perdu est celui qu'on allait ecrire.
+    Refuse une ligne tronquee ailleurs : la, le fichier ne dit plus ce qui a
+    ete fait, et reprendre dessus serait travailler sur un passe faux.
+    """
+    chemin = Path(chemin)
+    if not chemin.exists():
+        return []
+
+    contenu = chemin.read_text(encoding="utf-8")
+    if not contenu:
+        return []
+
+    lignes = contenu.split("\n")
+    complet = contenu.endswith("\n")
+    if complet:
+        lignes.pop()                      # le dernier morceau est vide
+
+    enregistrements: list[Enregistrement] = []
+    for rang, ligne in enumerate(lignes, start=1):
+        derniere = rang == len(lignes)
+        if not ligne.strip():
+            continue
+        try:
+            donnees = json.loads(ligne)
+        except json.JSONDecodeError as erreur:
+            if derniere and not complet:
+                break                     # coupure pendant l'ecriture : toleree
+            raise JournalCorrompu(
+                f"{chemin}, ligne {rang} : illisible ({erreur})") from erreur
+        enregistrements.append(depuis_dict(donnees))
+
+    return enregistrements
+
+
+@dataclass(frozen=True)
+class EtatItem:
+    item_id: str
+    etat: str
+    sauvegardes: int = 0
+
+
+def etats(enregistrements: Iterable[Enregistrement]) -> dict[str, EtatItem]:
+    """Replie le journal en un etat par item. Le dernier fait foi.
+
+    Un item ouvert et jamais referme est `en_cours` — sauf si une etape de
+    sauvegarde a reussi entre-temps : il devient alors `douteux`, parce que
+    SAP a peut-etre enregistre et que le rejouer serait une double ecriture.
+    """
+    ouverts: set[str] = set()
+    sauvegardes: dict[str, int] = {}
+    fins: dict[str, str] = {}
+    courant: str | None = None
+
+    for enregistrement in enregistrements:
+        if isinstance(enregistrement, ItemDebut):
+            ouverts.add(enregistrement.item_id)
+            sauvegardes.setdefault(enregistrement.item_id, 0)
+            fins.pop(enregistrement.item_id, None)      # nouvelle tentative
+            courant = enregistrement.item_id
+        elif isinstance(enregistrement, Etape) and enregistrement.sauvegarde:
+            # `Etape.item_id` est facultatif — une pipeline volumique n'a pas
+            # d'items du tout. Mais entre un ItemDebut et son ItemFin, une
+            # sauvegarde appartient forcement a l'item ouvert : la rattacher
+            # est le seul moyen d'eviter qu'un oubli de `item_id` fasse
+            # basculer l'item de « jamais rejoue » a « rejoue ».
+            porteur = enregistrement.item_id or courant
+            if porteur is not None:
+                sauvegardes[porteur] = sauvegardes.get(porteur, 0) + 1
+        elif isinstance(enregistrement, ItemFin):
+            fins[enregistrement.item_id] = enregistrement.etat
+            if courant == enregistrement.item_id:
+                courant = None
+
+    resultat: dict[str, EtatItem] = {}
+    for item_id in ouverts | set(fins):
+        compte = sauvegardes.get(item_id, 0)
+        if item_id in fins:
+            etat = fins[item_id]
+        elif compte > 0:
+            etat = DOUTEUX
+        else:
+            etat = EN_COURS
+        resultat[item_id] = EtatItem(item_id, etat, compte)
+    return resultat
+
+
+@dataclass(frozen=True)
+class Reprise:
+    """Ce que la reprise a decide, avant toute action."""
+
+    a_traiter: tuple[str, ...]
+    douteux: tuple[str, ...]
+    etats: dict[str, EtatItem]
+
+    #: Items du jeu courant deja termines. Ne compte QUE le jeu courant :
+    #: `etats` couvre tout le journal, executions et jeux confondus, et
+    #: melanger les deux pouvait donner un compteur superieur au nombre
+    #: d'items a traiter.
+    deja_faits: int = 0
+
+
+def garde_du_monde(ouvertures: Sequence[ExecutionDebut],
+                   pipeline_empreinte: str,
+                   jeu_empreinte: str, forcer: bool) -> None:
+    """La garde d'identite, appliquee a la REPRISE.
+
+    Elle porte un nom et vit dans une fonction a elle pour une raison
+    mecanique : `outils/neutraliser.py` retire chaque garde tour a tour et
+    exige que la suite tombe. Une garde ecrite en ligne au milieu de
+    `preparer` n'a pas de nom, donc ne se neutralise pas, donc n'etait pas
+    verifiee — et c'est exactement ce qui a laisse vivre le contournement par
+    empreinte vide.
+
+    Deux refus, et le premier ne cede pas a `forcer` : forcer sert a passer
+    outre un ecart CONSTATE, avec un motif trace. Il ne peut pas servir a
+    passer outre une comparaison qui n'a pas eu lieu.
+
+    ELLE PORTE SUR TOUTES LES OUVERTURES, et c'est le coeur de la correction.
+
+    La version precedente comparait `ouvertures[0]` — la PREMIERE. Or le
+    journal est partage entre executions : c'est ce qui rend la reprise
+    possible. L'etat qu'on reprend a donc ete produit par la DERNIERE
+    ouverture, pas par la premiere, et `journal/rapport.py` le dit deja en
+    toutes lettres pour la provenance.
+
+    La garde etait donc exactement inversee. Sur un journal ou un premier run
+    (pipeline A, jeu J) precede un second run corrige (pipeline B, jeu K)
+    interrompu, elle REFUSAIT la reprise avec B/K — le monde qui a
+    reellement produit l'etat — et ACCEPTAIT la reprise avec A/J, c'est-a-dire
+    rejouer un item ouvert par B sous une pipeline et un jeu perimes. Une
+    garde qui autorise precisement ce qu'elle existe pour interdire.
+
+    Prendre la derniere aurait suffi a retourner le cas. On les compare
+    TOUTES, parce que c'est strictement plus sur et que ca ne coute rien : un
+    journal dont les ouvertures ne s'accordent pas a ete ecrit par plusieurs
+    mondes, et aucune des deux ne peut fonder une reprise coherente. Le cas
+    n'arrive que si quelqu'un est deja passe en `forcer` ; le lui redemander,
+    avec un motif trace, est le bon prix.
+    """
+    # `if empreinte and ...` traitait « je ne sais pas » comme « c'est
+    # pareil ». Or ne pas savoir sur quoi on reprend est precisement le cas ou
+    # il ne faut pas reprendre.
+    for quoi, valeur in (("pipeline", pipeline_empreinte),
+                         ("jeu", jeu_empreinte)):
+        if not str(valeur).strip():
+            raise RepriseIncoherente(
+                f"empreinte de {quoi} vide : la reprise ne peut pas verifier "
+                f"que le monde n'a pas change depuis. Une empreinte absente "
+                f"n'est pas une empreinte identique")
+
+    if forcer:
+        return
+
+    ecarts = []
+    for rang, origine in enumerate(ouvertures, start=1):
+        if origine.pipeline_empreinte != pipeline_empreinte:
+            ecarts.append(f"ouverture {rang} ({origine.mode}) : pipeline "
+                          f"{origine.pipeline_empreinte!r} -> "
+                          f"{pipeline_empreinte!r}")
+        if origine.jeu_empreinte != jeu_empreinte:
+            ecarts.append(f"ouverture {rang} ({origine.mode}) : jeu "
+                          f"{origine.jeu_empreinte!r} -> {jeu_empreinte!r}")
+    if ecarts:
+        raise RepriseIncoherente(
+            "reprise refusee, le monde a change depuis : " + " ; ".join(ecarts))
+
+
+def preparer(chemin: str | Path,
+             items: Sequence[str],
+             *,
+             pipeline_empreinte: str,
+             jeu_empreinte: str,
+             forcer: bool = False,
+             motif: str = "") -> Reprise:
+    """Prepare une reprise sur un journal existant.
+
+    `items` est la suite ordonnee des identifiants du jeu courant. Les
+    identifiants sont calcules a partir des colonnes de clef declarees par la
+    pipeline, jamais a partir du rang de la ligne : un fichier de KO reinjecte
+    n'a plus les memes rangs, et la reprise doit rester juste malgre ca.
+
+    La comparaison des empreintes est la garde d'identite appliquee a la
+    reprise. Passer outre demande `forcer` ET un motif.
+
+    Ce motif est trace par l'ECRIVAIN, dans `ExecutionDebut.reprise_forcee` —
+    pas ici : cette fonction lit un journal, elle ne l'ecrit pas. La version
+    precedente de ce paragraphe promettait « un motif, qui sera trace » sans
+    que personne ne l'ecrive nulle part, et `executer` n'exposait meme pas le
+    parametre : le motif etait exige puis jete, et la porte de sortie que deux
+    docstrings decrivaient n'existait dans aucune commande. Une reprise
+    refusee etait une impasse.
+
+    Les empreintes n'ont deliberement PAS de valeur par defaut : les omettre
+    est une `TypeError` a l'appel, pas un silence. La version precedente les
+    laissait vides et gardait la comparaison derriere un `if`, si bien qu'un
+    `preparer(chemin, items)` distrait ne verifiait rien — la garde la plus
+    severe du dispositif s'obtenait a l'envers, par omission.
+
+    ET LA CORRECTION S'ETAIT ARRETEE LA. Rendre le parametre obligatoire
+    empeche de l'OMETTRE ; ca n'empeche pas de passer une chaine vide, et le
+    `if` que ce paragraphe accusait est reste. Une empreinte vide ne faisait
+    donc pas lever la garde : elle la sautait. Elle est refusee ici, avant
+    toute comparaison.
+    """
+    enregistrements = lire(chemin)
+
+    if forcer and not motif.strip():
+        raise ValueError("forcer une reprise exige un motif")
+
+    # Un journal absent ou muet ne fonde AUCUNE reprise.
+    #
+    # `lire` rend une liste vide pour un fichier qui n'existe pas. La suite
+    # concluait alors « rien n'a ete fait, tout est a traiter » — et la
+    # reprise se degradait en execution complete, sans un mot. Un chemin mal
+    # tape lancait donc un lot entier la ou l'utilisateur croyait n'en
+    # reprendre que la fin.
+    ouvertures = [e for e in enregistrements if isinstance(e, ExecutionDebut)]
+    if not ouvertures:
+        raise RepriseIncoherente(
+            f"{chemin} ne porte aucune execution : il n'y a rien a reprendre. "
+            f"Un journal absent ou vide ne dit pas « tout est a faire », il "
+            f"dit qu'on ne sait pas ce qui a ete fait. Pour lancer un lot "
+            f"neuf, c'est le mode `run`")
+
+    garde_du_monde(ouvertures, pipeline_empreinte, jeu_empreinte, forcer)
+
+    connus = etats(enregistrements)
+    a_traiter = tuple(i for i in items
+                      if connus.get(i) is None
+                      or connus[i].etat not in TERMINAUX)
+    douteux = tuple(i for i in items
+                    if connus.get(i) is not None and connus[i].etat == DOUTEUX)
+    faits = sum(1 for i in items
+                if connus.get(i) is not None and connus[i].etat in TERMINAUX)
+    return Reprise(a_traiter=a_traiter, douteux=douteux, etats=connus,
+                   deja_faits=faits)

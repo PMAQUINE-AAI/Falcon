@@ -1,0 +1,78 @@
+# =====================================================================
+# Registre des erreurs connues
+#
+# CE FICHIER EST VOLONTAIREMENT PRESQUE VIDE.
+#
+# La taxonomie se recolte, elle ne se specifie pas. Les pieges de terrain du
+# projet precedent n'ont pas ete prevus : ils ont ete rencontres, chacun au
+# prix d'un cycle de developpement. Pretendre ecrire ici d'avance un
+# traitement d'erreur exhaustif reviendrait a pretendre connaitre des
+# comportements que seul le systeme reel revele.
+#
+# Une entree s'ajoute APRES avoir observe la signature, depuis le dump que
+# l'incident inconnu a produit. Jamais par anticipation.
+#
+# Aucune des entrees ci-dessous n'invente d'identifiant de message SAP : elles
+# portent toutes sur des signaux que FALCON produit lui-meme (gardes,
+# exceptions typees). Les entrees a base de messageId/messageNumber viendront
+# du terrain.
+#
+# Champs obligatoires : nom, categorie, canal, origine, justification.
+# `categorie` vaut connue_benigne ou connue_fautive. `inconnue` ne se declare
+# pas : c'est ce qu'on obtient quand rien n'apparie, et c'est bloquant.
+# =====================================================================
+
+version: 1
+
+entrees:
+
+  - nom: ia08_selection_vide_sans_message
+    categorie: connue_fautive
+    canal: garde
+    correspondance:
+      garde: statut
+      attendu: "S"
+      observe: ""
+    politique:
+      poursuivre: true
+      item: ko
+    origine: eagleloader
+    rencontree_le: "2026-08-30"
+    justification: >
+      Sans case de type de gamme cochee, IA08 ne remonte rien ET n'emet aucun
+      message. L'absence de resultat n'est donc pas une preuve d'absence de
+      donnees. C'est la garde de statut, via un statut attendu non satisfait,
+      qui rattrape ce silence : sans elle, une extraction vide passerait pour
+      une extraction reussie.
+
+  - nom: relecture_divergente
+    categorie: connue_fautive
+    canal: garde
+    correspondance:
+      garde: relecture
+    politique:
+      poursuivre: true
+      item: ko
+    origine: eagleloader
+    justification: >
+      La valeur relue apres ecriture ne correspond pas a la valeur ecrite.
+      Ecrire sans que ca prenne est une classe de bug deja rencontree, et elle
+      est silencieuse : SAP n'emet rien. L'item est marque KO et le lot
+      continue, parce qu'un champ qui refuse une valeur ne dit rien des items
+      suivants.
+
+  - nom: session_perdue
+    categorie: connue_fautive
+    canal: com
+    correspondance:
+      exception: SessionPerdue
+    politique:
+      poursuivre: false
+      item: ko
+      arreter_chaine: true
+    origine: eagleloader
+    justification: >
+      La session SAP ne repond plus. Rien ne peut etre repris dessus, et les
+      items suivants echoueraient tous de la meme facon : on arrete la chaine
+      plutot que de derouler un lot entier en KO. L'item en cours part en KO ;
+      s'il avait deja sauvegarde, le repli du journal le classera douteux.

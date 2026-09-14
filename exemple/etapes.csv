@@ -1,0 +1,6 @@
+﻿rang;nom;action;cible;ecran;source_genre;source_valeur;format;defaut;statut_attendu;sauvegarde;comparaison;fenetres;fonction;colonne;colonnes
+10;saisir_site;set;wnd[0]/usr/ctxtWERKS-LOW;IA08::RIPLKO10::1000;colonne;site;majuscules;;;non;;;;;
+20;saisir_variante;set;wnd[0]/usr/ctxtVARIANT;IA08::RIPLKO10::1000;gabarit;/BCP01_{site};majuscules;;;non;;;;;
+30;saisir_equipement;set;wnd[0]/usr/ctxtEQUNR;IA08::RIPLKO10::1000;colonne;equipement;sans_espaces_autour, zeros:18;;;non;;;;;
+40;executer;press;wnd[0]/tbar[1]/btn[8];IA08::RIPLKO10::1000;;;;;;non;;;;;
+50;sauver;press;wnd[0]/tbar[0]/btn[11];IA08::RIPLKO10::1000;;;;;;oui;;;;;

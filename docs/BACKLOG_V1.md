@@ -1,0 +1,290 @@
+# Backlog V1 — état des lots
+
+Fichier de pilotage de la boucle de travail. Il est versionné parce qu'un état
+gardé en session ne survivrait pas au conteneur : c'est ici, et nulle part
+ailleurs, que se lit l'avancement.
+
+Référence : [SPEC_FALCON.md](../SPEC_FALCON.md). Les numéros de section entre
+parenthèses y renvoient.
+
+## Protocole d'une itération
+
+1. Lire ce fichier, prendre le **premier lot non fait dont les dépendances sont
+   satisfaites**. Un lot par itération, jamais deux à moitié.
+2. L'implémenter, avec ses tests.
+3. Lancer la vérification. Si elle n'est pas verte : ni commit, ni case cochée.
+4. Commiter, pousser sur la branche courante, cocher la ligne ici même dans le
+   même commit.
+
+```bash
+python outils/verifier.py       # les deux suites, FALCON et l'archive
+python outils/neutraliser.py    # chaque garde retirée doit faire tomber la suite (7)
+```
+
+La seconde commande existe parce qu'une garde couverte par des tests qui
+passent n'est pas une garde vérifiée : le test passerait aussi si la garde ne
+faisait rien.
+
+## Garde-fous
+
+- `historique/` n'est jamais modifié.
+- **Aucun comportement SAP n'est inventé.** Un lot qui exige une trace réelle
+  ou un système réel s'arrête et le dit, plutôt que de deviner. Un mock nourri
+  d'hypothèses confirme les hypothèses (§3.7).
+- Tout écart de périmètre par rapport à la spec est inscrit au §8 dans le même
+  commit que le code qui l'introduit.
+- Une pipeline ne peut jamais désactiver une garde (§5.2). Si un lot rend ça
+  possible, le lot est faux.
+
+## Lots
+
+Légende : `[ ]` à faire · `[~]` en cours · `[x]` fait · `[!]` bloqué
+
+| # | État | Lot | Dépend de | Critère d'acceptation |
+|---|---|---|---|---|
+| 0 | `[x]` | Squelette : arborescence, `pyproject.toml`, tests de frontière, CI | — | la vérification est verte sur un dépôt neuf |
+| 1 | `[x]` | Modèles et interface de couture, erreurs typées (§3.4) | 0 | surface épinglée à **18** méthodes (décision n°14) ; une implémentation partielle ne s'instancie pas ; `Refus` n'hérite pas d'`Echec` |
+| 2 | `[x]` | Journal : schéma JSONL, écriture append-only, reprise (§3.3) | 1 | 30 tests sur cinq axes ; un item interrompu **après** sauvegarde sort en `douteux` et n'est jamais rejoué ; reprise refusée sur jeu modifié |
+| 3 | `[x]` | Taxonomie : registre YAML, classement, inconnu bloquant (§5.1) | 2 | 30 tests ; `Registre.__init__` n'accepte que `entrees` ; joker et catégorie `inconnue` refusés au chargement ; ambiguïté détectée **au chargement** ; registre livré à 3 entrées, aucune n'inventant de message SAP |
+| 4 | `[x]` | Les cinq gardes + dérogations, sur un driver factice (§5) | 1, 3 | 45 tests ; toute méthode de couture est classée **lecture ou mutation**, exhaustivement ; `python outils/neutraliser.py` prouve en CI que chaque garde retirée fait tomber la suite ; `Poste` n'expose que la surface de `Driver` |
+| 5 | `[x]` | Rapport de fin + réexport des KO au format d'entrée (§4.7) | 2 | 24 tests ; aller-retour prouvé champ à champ **et** octet pour octet une fois le diagnostic retiré ; dialecte (BOM, délimiteur, fins de ligne, ordre des colonnes) conservé |
+| 6 | `[x]` | Parseur de trace VBScript (§4.1) | 0, **traces réelles** | 66 tests ; `megatrace_2026-09.vbs` lue intégralement, zéro ligne non appariée ; aller-retour geste ↔ ligne **et** fichier entier octet pour octet ; `.press()` **refusée** (décision n°13) |
+| 7a | `[x]` | Esquisses d'écran depuis une trace (§3.1, §4.1) | 6, 9 | 23 tests ; découpage en visites sans perte ni recouvrement ; `pour_garde` refuse l'esquisse **même promue**, et son empreinte ne peut pas valoir celle d'un relevé |
+| 7b | `[x]` | Brouillon de pipeline depuis une trace (§4.3) | 6, 8b | 24 tests ; `MegaTrace` produit 75 étapes que `charger(brouillon=True)` accepte et que `charger()` refuse ; le générateur n'émet **jamais** `navigation_libre` ; 22 gestes non rejouables et 7 sélections ALV par index signalés |
+| 8 | `[x]` | Pipeline : modèle, chargement, validation (§3.2) | 1 | 53 tests ; `vkey` porte sa touche, une source `lue` est validée au chargement, `fonction: TODO` ne charge qu'en brouillon ; chaque refus nomme le fichier, le rang et le nom de l'étape ; la frontière pipeline→contrôleur mord en import absolu **et** relatif |
+| 9 | `[x]` | Catalogue : modèle, empreinte de variante, dépôt YAML (§3.1) | 1 | 20 tests ; deux rendus du même dynpro donnent deux variantes ; `pour_garde` refuse une esquisse **et** une variante absente ; quarantaine avec promotion explicite |
+| 10 | `[x]` | Moteur itératif + chaîne de pipelines (§3.3) | 2, 4, 8b | 33 tests, dont deux **bout en bout** — un lot interrompu, repris, et son fichier de KO rechargé sans retouche ; un KO au milieu du lot ne l'interrompt pas ; une garde d'identité arrête la chaîne ; un item interrompu **après** sauvegarde ressort `douteux` de bout en bout et la reprise ne le rejoue pas ; le jeu est vérifié **avant** la première action |
+| 11 | `[x]` | Reporting terminal stdlib + ETA glissant (§4.6) | 10 | 25 tests ; muet hors terminal ; rendu = fonction pure, aucun test ne capture de terminal ; ETA glissant qui **se tait** tant qu'il n'est pas fiable |
+| 12a | `[x]` | Format d'export, provenance, conservation, delta (§3.6) | — | 28 tests ; provenance **refusée incomplète avant écriture** ; un dossier par système, fichier horodaté ; delta par clef déclarée, jamais par rang |
+| 12b | `[~]` | Navigation `SE16N` (§3.6) | 12a, **carte d'écran relevée** | 15 tests ; mécanique livrée et exercée contre le double ; la carte est livrée **vide** et l'export refuse avant toute navigation. **Reste** : relever la carte sur un poste réel — et rien de ce que je peux faire ici ne le débloque |
+| 13 | `[~]` | Implémentation `win32com` de la couture + CLI + bundle (§6) | 1 | driver écrit, import paresseux, traduction d'erreurs testée contre un faux COM ; la conformité réelle **skippe avec motif**, et `verifier.py` liste ce qui n'a pas tourné. `python -m falcon diagnostiquer` est le premier contact, en **lecture seule par construction**. Bundle livré : `python outils/embarquer.py` produit un `falcon.pyz` qui tourne **sans `site-packages`**. Le paquet s'installe aussi par `pip` depuis ce lot : `packages` récursif et `package-data`, vérifiés en construisant une roue. **Reste** : la validation sur un poste réel |
+| 14 | `[x]` | Console interactive : tests, traces, catalogue, diagnostic | 6, 9, 13 | 28 tests ; une session complète se rejoue sans terminal ; le décor s'encode en cp1252 ; aucun écran n'atteint une méthode mutante (vérifié sur l'AST) |
+| 15 | `[x]` | La console pilote tout FALCON | 8, 10, 12a, 14 | 111 tests. « Pipelines et données » : une pipeline se relit étape par étape avec ses plafonds, ses navigations libres et ses dérogations motivées **avant** tout lancement. « Journaux » : rapport, états, douteux nommés par leur clef, et un réexport des KO **reprojeté depuis le journal**, douteux exclus, cinq colonnes de diagnostic remplies. « Exports de table » : conservation avec provenance, delta contre le précédent, et la carte SE16N qui dit ce qui lui manque. « Exécuter » : répétition à blanc, run, reprise et chaîne, chacune précédée d'un récapitulatif complet et d'une **confirmation en toutes lettres** — le nom de la pipeline, jamais un `o/n` ; le `Rapporteur` du lot 11 est enfin branché. Racine à **sept branches**, bundle construit depuis le menu. Un test de fumée traverse tout l'arbre : aucun écran ne meurt sur une fin de flux, et **aucun menu qui mène à une écriture ne se dit inoffensif** |
+
+| 16 | `[x]` | Un automatisme = un YAML, jamais un commit | 8, 10 | composition déclarative livrée : `gabarit` compose depuis plusieurs colonnes, `format` applique un **registre fermé** de transformations dans l'ordre déclaré, `defaut` remplace une valeur vide. Et le chaînon qui manquait : `falcon/tableur/` convertit les trois CSV du classeur en pipeline YAML, **relue avant d'être écrite**, avec une émission déterministe à l'octet. Classeur `.xlsx` + module VBA livrés. **Limite assumée** : `action: python` exige toujours d'éditer le dépôt |
+
+## Ce qui bloque, et sur quoi
+
+**Plus rien n'est bloqué.** Le lot 6 l'a été jusqu'à l'arrivée d'un
+enregistrement réel : l'archive documentait `.press()`, le recorder écrit
+`.press`. Refuser de trancher par hypothèse était le bon choix — la trace a
+tranché, et dans l'autre sens que la documentation.
+
+Écart assumé par rapport au critère d'origine, qui demandait de couvrir les
+deux formes : `.press()` est **refusée**, pas tolérée (décision n°13). Accepter
+une forme que le recorder ne produit pas, ce serait lire sans le savoir un
+fichier retouché à la main — et rejouer sur un système réel ce que personne
+n'a enregistré.
+
+Ce que la trace a appris, et qui n'était pas déductible :
+
+| | |
+|---|---|
+| `selectedRows = "0"` est une **chaîne**, `currentCellRow = 4` un **entier** | sur le même shell ALV. Normaliser les deux produit un rejeu que SAP refuse |
+| `doubleClickCurrentCell` agit sur la cellule **courante** | omettre `currentCellRow` double-clique la première ligne, sans lever |
+| la sélection ALV se fait **par index** | l'index dépend du contenu de la base à l'enregistrement : un brouillon qui le rejoue traite la mauvaise variante, en silence. Le lot 7 doit marquer ces gestes non rejouables |
+| vider `ENAME-LOW` **élargit** la recherche de variantes | le premier bloc de la trace ne le fait pas : ses résultats ne sont pas comparables aux quatre autres |
+| les cases `DY_*` sont repositionnées **après** le chargement de la variante | le piège des cases rémanentes, observé plutôt que déduit |
+
+Les cinq sont épinglés par des tests dans `tests/test_trace.py`, sur la trace
+elle-même — pas sur une reformulation.
+
+**Ce que le parseur ne fera jamais** — et la nuance qui a changé depuis.
+
+Le recorder enregistre des actions : ni l'identité des écrans traversés, ni
+les champs présents. Une trace **lue** ne peut donc pas peupler le catalogue :
+elle produit une *esquisse*, que `Depot.pour_garde` refuse déjà de servir
+(lot 9). Cela reste vrai de la lecture, mot pour mot.
+
+Ce qui a changé, c'est qu'une trace **rejouée** le peut. `falcon explorer`
+(`falcon/exploration/`) la rejoue en observation, relève chaque écran traversé
+sur le système réel et le verse en **quarantaine**. Ce ne sont plus des
+conjectures : ce sont des relevés, avec leur vrai triplet et tous leurs champs
+présents.
+
+La distinction tient toujours, et elle est visible à l'œil nu dans le YAML :
+`programme: "?"` d'un côté, le programme réel de l'autre. Ce qui vient de la
+lecture reste une esquisse ; ce qui vient du rejeu est un relevé. Le catalogue
+**curé**, lui, ne se peuple toujours que par une promotion, c'est-à-dire par
+un humain qui dit avoir relu l'écran.
+
+~~Reste demandé : la **convention de nommage des variantes**. Trois ou quatre
+noms réels suffisent. Ça bloquera la pipeline d'audit.~~
+
+**Cette dette n'existe plus, et elle n'aurait jamais dû exister.** Un nom de
+variante composé s'écrit `source: {gabarit: "/BCP01_{site}"}` — la convention
+n'a pas à remonter jusqu'à nous, et c'était précisément le grief :
+« il ne faut pas faire un programme spécifique pour les variantes, c'est à moi
+de le renseigner. » Demander une convention pour la coder était le symptôme,
+pas la solution.
+
+## Tout piloter depuis un seul endroit
+
+```bash
+python -m falcon console
+```
+
+Menus numérotés : vérification (les deux suites, le neutraliseur, une suite au
+choix), traces du recorder (couverture, écrans conjecturés, gestes
+significatifs), pipelines et données (charger et valider, relire un brouillon,
+inspecter un jeu, **puis exécuter**), journaux (rapport de fin, états des
+items, douteux à arbitrer, réexport des KO), catalogue (curé et quarantaine), exports de table
+(conservation, delta, carte SE16N), session SAP (diagnostic en lecture seule).
+**Trois écrans écrivent dans SAP** — « Exécuter », « Reprendre » et
+« Enchaîner » — après confirmation du nom de la pipeline en toutes lettres.
+Tout le reste lit. Cette ligne affirmait le contraire depuis le lot
+d'exécution, et se trouvait deux écrans sous le tableau qui la démentait :
+un texte rassurant à l'endroit exact où quelqu'un décide qu'il peut cliquer
+sans réfléchir.
+
+**La console avait sept lots de retard.** Elle a été écrite au lot 14, avant
+que le moteur, le volumique et le reporting existent : les lots 10 à 13 étaient
+inatteignables autrement qu'en écrivant du Python. Le lot 15 comble cet écart,
+en commençant délibérément par les écrans qui ne touchent à rien.
+
+La commande exige un terminal interactif et le dit sinon : hors terminal,
+`inventaire` et `diagnostiquer` restent scriptables.
+
+## Le premier contact réel, quand tu voudras
+
+Sur un poste Windows, SAP GUI ouvert et connecté, scripting activé des deux
+côtés (client : Options > Accessibilité et scripting ; serveur :
+`sapgui/user_scripting`) :
+
+```bash
+pip install pywin32
+python -m falcon diagnostiquer
+python -m falcon diagnostiquer --catalogue <dossier-du-catalogue>
+```
+
+La commande n'écrit rien dans SAP — elle ne reçoit qu'une façade sans `write`,
+sans `press` et sans `vkey`. Avec `--catalogue`, elle verse le relevé en
+quarantaine : ce serait le **premier écran `observee` du projet**, et le point
+de départ de la cartographie.
+
+Ce qu'elle apprendra, et que rien ici ne peut deviner : les noms d'attributs
+COM tiennent-ils, l'arbre des contrôles se parcourt-il, un shell répond-il aux
+attributs facultatifs. Si un nom est faux, l'erreur sera lisible et nommée —
+c'est tout ce que ce dépôt peut garantir sans système.
+
+## Mode dégradé : quand la vérification locale est impossible
+
+Il est arrivé que l'outillage d'exécution du conteneur soit indisponible, donc
+que la suite ne puisse pas tourner sur place. La règle dans ce cas :
+
+- pousser quand même — le conteneur est éphémère, et perdre le travail est
+  pire que le livrer non vérifié sur une branche de développement ;
+- **le dire dans le message de commit**, sans ambiguïté ;
+- ne cocher la ligne qu'une fois la CI verte sur le commit poussé, la CI
+  lançant la même commande dans un environnement propre ;
+- ne jamais présenter une relecture à l'œil comme une vérification.
+
+Ce mode reste l'exception. Enchaîner plusieurs lots à l'aveugle en comptant
+sur la CI pour rattraper reviendrait à déplacer la boucle de vérification hors
+de portée, ce qui est précisément ce que ce projet cherche à éviter.
+
+## Ce que la revue adversariale a corrigé
+
+Une revue indépendante des lots 2 à 5 a trouvé huit défauts réels, tous de la
+classe qui compte ici : **aucun ne lève d'exception**. J'ai reproduit chacun
+avant de corriger, et chaque correction porte son test de non-régression.
+
+| # | Défaut | Conséquence en production |
+|---|---|---|
+| C1 | une sauvegarde réussie suivie d'une garde qui lève ne laissait aucune trace | item classé `en_cours`, donc rejoué : **double écriture** |
+| C2 | `Etape.item_id` facultatif — une sauvegarde sans lui n'était comptée pour personne | idem, et l'oubli d'un champ optionnel suffisait |
+| C3 | le compte de sauvegardes n'accompagnait pas le fichier de KO | l'humain relançait un item ayant déjà écrit, sans le savoir |
+| E1 | une relecture divergente ne faisait **rien** empêcher | on sauvegardait un écran dont le champ critique n'avait pas pris |
+| E2 | tout préfixe passait pour une « normalisation » | écrire `1000` et relire `1` était accepté : valeur fausse écrite en silence |
+| E4a | deux contextes simultanément vrais n'étaient pas détectés | l'ordre du fichier YAML décidait de la politique appliquée |
+| E4b | une surcouche projet pouvait assouplir le registre commun | `session_perdue` rendue bénigne par un fichier, sans motif ni trace |
+| M5 | les tests de frontière ignoraient les imports relatifs | `from ..couture.sapgui import …` passait toutes les frontières |
+| M6 | colonne dupliquée, ligne trop longue ou trop courte, clé JSONL absente | données corrompues ou perdues à la réinjection, sans erreur |
+
+Trois corrections ont demandé un niveau de plus dans le modèle :
+
+**`ItemAbandonne`**, un `Refus` distinct d'`ArretBloquant`. Il manquait le
+moyen d'exprimer « cet item est perdu, le lot continue » — qui est pourtant la
+définition même de `connue_fautive`. Sans lui, chaque appelant aurait dû se
+souvenir d'inspecter les constats après chaque appel : le « recopié puis
+oublié » que la couture existe pour supprimer.
+
+**Les modes de comparaison** passent de `exact`/`tronque_casse` à
+`exact`/`casse`/`prefixe`. Le défaut n'accepte plus que la casse et les
+espaces ; la troncature doit être déclarée étape par étape. La charge de la
+preuve revient à qui sait, pas au défaut.
+
+**L'annonce avant l'acte.** Une sauvegarde est journalisée *avant* d'être
+tentée. C'est la seule chose qui survive à une garde qui lève au milieu.
+
+### Deuxième passe : les neuf constats restants
+
+Les quatre moyens et les cinq mineurs de la même revue, fermés dans un second
+temps. Le séquencement n'était pas libre : `Contrat` devait être refermé
+**avant** le lot 8, qui mappe du YAML de pipeline sur cet objet.
+
+| # | Défaut | Conséquence |
+|---|---|---|
+| M1 | `Contrat` offrait trois neutralisations sans trace, dont une **par défaut** | une étape distraite désarmait la garde qui attrape le plus de dérives |
+| M2 | la garde de reprise était optionnelle par défaut | `preparer(chemin, items)` ne vérifiait rien et ne levait rien |
+| M3 | `write`, `set_checked`, `table_scroll` ne relevaient ni fenêtre ni statut | un popup surgi là était attribué à la mauvaise étape |
+| M4 | déclarer `statut_attendu` tuait la liste blanche de messages | renforcer une étape produisait son affaiblissement |
+| m1 | `Reprise.deja_faits` mélangeait deux périmètres | compteur pouvant dépasser le nombre d'items à traiter |
+| m2 | rapport : première ouverture, dernière clôture | provenance d'un run, durée d'un autre |
+| m3 | `Derogation.portee` déclarée et jamais lue | une dérogation d'étape valait pour tout le contrat |
+| m4 | deux dumps de la même milliseconde s'écrasaient | un incident qu'on ne pourra jamais classer |
+| m5 | plafond en sauvegardes là où la spec dit items | écart non inscrit — décision n°11 |
+
+Le principe retenu pour M1 est celui de tout le dispositif : **les trois
+relâchements restent possibles, mais deviennent des décisions au lieu de
+s'obtenir par omission**, et les trois laissent une trace posée une fois par
+étape. C'est la différence entre une décision et un oubli.
+
+## Questions ouvertes qui toucheront un lot
+
+Reprises du §8 de la spec, avec le lot qu'elles concernent :
+
+| Question | Lot | Défaut retenu à défaut d'arbitrage |
+|---|---|---|
+| définition de « champ critique » pour la garde 4 | 4 | relecture de **tout** champ écrit, exclusion nommée et motivée |
+| ~~convention de conservation des exports~~ | 12a | **tranché** : un dossier par système, fichier horodaté à nom triable, delta contre le plus récent |
+| unité de travail du cas 1 : six pipelines ou item composite | ~~10~~ | **ne bloque plus le moteur** : les deux formes sont exprimables — six pipelines, c'est la chaîne ; un item composite, c'est une déclaration de `cles`. L'arbitrage porte sur la définition de la pipeline du cas 1 |
+| boucle sur les lignes **à l'intérieur** d'un item | à venir | le cas 2 (CL02, N caractéristiques dans une classe) l'exigera. Le moteur refuse aujourd'hui un item dont les lignes se contredisent sur une colonne lue, plutôt que d'en choisir une au hasard |
+| ~~format d'entrée des constats~~ | 5 | **tranché** : CSV et JSONL acceptés en entrée, le dialecte lu est celui réécrit |
+
+## Ce que la revue de conception a changé
+
+Une revue indépendante de l'architecture a produit cinq corrections que
+j'intègre. Elles ne sont pas cosmétiques.
+
+**1. La couture du §3.4 était trop étroite pour le cas 1 lui-même.** Elle
+n'offrait ni `select`, ni accès ALV, ni accès table control — alors que
+l'audit du cas 1 lit une grille ALV, et que le corollaire du piège des cases
+rémanentes impose de positionner explicitement les trois cases de IA08 à
+chaque appel. Les huit méthodes ne suffisaient donc pas à exprimer la première
+pipeline livrée. **Tranché : décision n°9, couture élargie à 15 méthodes**,
+figée au lot 1.
+
+**2. L'identité d'un item ne peut pas être l'index de ligne.** Le §4.7 exige
+que le fichier de KO soit réinjectable ; réinjecté, il n'a plus les mêmes
+index. Toute pipeline itérative devra donc déclarer ses colonnes de clé, et
+l'identifiant d'item sera l'empreinte de ces colonnes. C'est aussi ce qui rend
+opérante l'unité d'itération du §3.3 : regrouper trois cents caractéristiques
+en quarante classes devient une déclaration de clé, pas une gymnastique dans
+la boucle.
+
+**3. Un item interrompu après sa sauvegarde n'est pas rejouable.** Rejouer
+aveuglément, c'est la double écriture. D'où un état `douteux` distinct de
+`en_cours`, versé au fichier à arbitrer plutôt qu'au flux de reprise.
+
+**4. Le réexport des KO tient par une convention de préfixe.** Les colonnes de
+diagnostic ajoutées sont préfixées `falcon_`, et la lecture les retire. Le
+fichier est ainsi enrichi pour l'humain *et* réinjectable sans retouche — les
+deux exigences du §4.7 en même temps.
+
+**5. Les douze pièges n'amorcent pas douze entrées de taxonomie.** La plupart
+ne sont pas des messages SAP : le piège 4 est une règle de résolution, le 5
+est la garde 1 elle-même, les 6 et 7 sont des méthodes de couture, et les 1,
+2, 10, 11, 12 sont des étapes échappatoires. Le registre s'amorce à trois ou
+quatre entrées. Prétendre l'amorcer à douze serait exactement la
+spécification anticipée que le §5.1 proscrit.

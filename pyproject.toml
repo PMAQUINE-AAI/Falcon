@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falcon"
+version = "0.1.0"
+description = "Framework d'automatisation SAP Front End (SAP GUI Scripting)"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0"]
+
+# PyYAML est la seule dependance d'execution. Le reporting terminal est en
+# stdlib : la livraison est un fichier unique (SPEC_FALCON.md, §6), et chaque
+# dependance supplementaire est une piece a embarquer dans le bundle.
+
+# `packages = ["falcon"]` ne RECURSE PAS : un `pip install .` livrait
+# `falcon/__init__.py` et aucun des quinze sous-paquets. Le mode de livraison
+# retenu est le zipapp (§6), donc le trou etait latent — mais un
+# `pip install -e .` pour developper donnait un import casse, sans un mot.
+[tool.setuptools.packages.find]
+include = ["falcon*"]
+
+# Les YAML livres AVEC le paquet, et pas seulement le code.
+#
+# Sans cette ligne, une roue construite depuis ce depot ne portait AUCUN
+# fichier de donnees : `Registre.charger()` ne trouvait pas `registre.yaml`,
+# donc un FALCON installe par `pip` n'avait plus de taxonomie du tout. C'est
+# le meme defaut que celui corrige sur le bundle — « falcon.pyz ne pouvait
+# lire aucun de ses propres YAML » — par l'autre chemin de livraison.
+[tool.setuptools.package-data]
+falcon = ["**/*.yaml"]

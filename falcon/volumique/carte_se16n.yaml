@@ -1,0 +1,48 @@
+# Carte d'ecran de SE16N — LIVREE VIDE, ET C'EST VOULU.
+#
+# Les identifiants ci-dessous ne sont pas dans ce depot et ne sont pas dans la
+# trace fournie. Les ecrire de memoire produirait un module qui a l'air
+# complet et qui echoue au premier appel reel, avec une erreur que personne ne
+# saurait rattacher a une conjecture faite six mois plus tot.
+#
+# Tant que des marqueurs « TODO » subsistent ici, `exporter_table` REFUSE de
+# tourner et nomme ce qui manque.
+#
+# Pour la remplir, sur un poste Windows avec SAP GUI ouvert :
+#
+#     python -m falcon diagnostiquer            # sur l'ecran de selection
+#     python -m falcon diagnostiquer            # apres execution, sur la liste
+#
+# La commande rend l'identite de l'ecran (transaction / programme / dynpro) et
+# l'identifiant complet de chaque champ. Recopier ici.
+
+version: 1
+
+# Ecran de saisie du nom de table.
+ecran_selection:
+  transaction: TODO
+  programme: TODO
+  dynpro: TODO
+
+# Champ ou se saisit le nom de la table.
+champ_table: TODO
+
+# Bouton ou touche qui lance l'extraction.
+bouton_executer: TODO
+
+# Ecran de resultat, apres execution.
+ecran_resultat:
+  transaction: TODO
+  programme: TODO
+  dynpro: TODO
+
+# Grille ALV portant les lignes extraites.
+grille: TODO
+
+# Criteres de selection : nom metier -> identifiant du champ.
+#
+# Vide, et pas par oubli. Les criteres de SE16N vivent dans un table control
+# dont la disposition n'a pas ete relevee : conjecturer une position, ce
+# serait filtrer sur autre chose que ce qu'on croit. Un critere demande sans
+# entree ici fait echouer l'export, en le nommant.
+criteres: {}

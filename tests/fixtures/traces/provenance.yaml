@@ -1,0 +1,30 @@
+# Provenance des traces du depot.
+#
+# La provenance est ici, dans un manifeste, et non en en-tete des .vbs : une
+# trace observee doit rester l'enregistrement EXACT que le recorder a produit,
+# a l'octet pres. Y ajouter des lignes de commentaire en ferait un fichier
+# retouche, et l'aller-retour octet pour octet — le seul controle serieux du
+# parseur — ne prouverait plus rien.
+#
+# source : observee | synthetique
+#   observee     — sortie brute du SAP GUI Recorder sur un systeme reel
+#   synthetique  — ecrite pour ce depot, pour exercer un cas precis
+#
+# Le decompte des deux est affiche par tests/test_trace.py, pour qu'on sache
+# toujours quelle part du parseur est validee contre du reel.
+
+version: 1
+
+traces:
+
+  megatrace_2026-09.vbs:
+    source: observee
+    date: "2026-09-05"
+    origine: >-
+      Poste de l'utilisateur, SAP GUI Recorder, enregistrement brut non
+      reformate. Quatre transactions (IH06, IH08, IW39, IW29) et le flux
+      « Obtenir variante » complet, sauvegarde comprise.
+    remarques: >-
+      UTF-16LE avec BOM, fins de ligne CRLF, 104 lignes. Un seul caractere
+      non-ASCII : le « ç » de "/nIW2ç", faute de frappe AZERTY corrigee a la
+      ligne suivante — conservee telle quelle, c'est du terrain.
