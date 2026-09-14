@@ -8,7 +8,10 @@ from .erreurs import (
     EcartIdentite, FenetreImprevue, PlafondAtteint, RepriseIncoherente,
 )
 from .horloge import Horloge, horloge_figee, maintenant
-from .types import Champ, Ecran, Fenetre, Identite, Statut, empreinte
+from .types import (
+    FENETRE_PRINCIPALE, Champ, Ecran, Fenetre, Identite, Statut, empreinte,
+    fenetre_de,
+)
 from .vocabulaire import (
     CHAMP_DE_COMMANDE, COMPARAISONS, DEROGEABLES, FENETRE, GARDES, IDENTITE,
     MOTIF_MINIMAL, PORTEE_TOTALE, RAYON, RELECTURE, RETOUR_ACCUEIL,
@@ -23,6 +26,7 @@ __all__ = [
     "IncidentBloquant", "ItemAbandonne",
     "PlafondAtteint", "RepriseIncoherente",
     "Champ", "Ecran", "Fenetre", "Identite", "Statut", "empreinte",
+    "fenetre_de", "FENETRE_PRINCIPALE",
     "Horloge", "horloge_figee", "maintenant",
     "GARDES", "IDENTITE", "STATUT", "FENETRE", "RELECTURE", "RAYON",
     "DEROGEABLES", "MOTIF_MINIMAL", "PORTEE_TOTALE", "COMPARAISONS",

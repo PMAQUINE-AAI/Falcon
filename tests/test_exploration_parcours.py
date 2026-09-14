@@ -23,7 +23,9 @@ from falcon.catalogue import Depot, clef_de
 from falcon.controleur.gardes import BOUTON_SAUVEGARDE, VKEY_SAUVEGARDE
 from falcon.couture.double import DriverScripte
 from falcon.exploration import parcours as P
-from falcon.noyau import CHAMP_DE_COMMANDE, Champ, Ecran, Fenetre, Identite
+from falcon.noyau import (
+    CHAMP_DE_COMMANDE, Champ, Ecran, Fenetre, Identite, fenetre_de,
+)
 from falcon.taxonomie import Registre
 from falcon.trace import lire
 from falcon.trace.vbs import decouper
@@ -32,6 +34,9 @@ from tests.test_trace import MEGATRACE
 
 #: Un registre vide de surcouche : celui du depot, tel qu'il est livre.
 REGISTRE = Registre.charger()
+
+#: La trace de reference, lue une fois.
+TRACE = lire(MEGATRACE)
 
 
 def trace_de(lignes: str, nom: str = "essai.vbs"):
@@ -81,15 +86,23 @@ class SapDePapier(DriverScripte):
     # -- observation -----------------------------------------------------
 
     def fields(self, fenetre: str = "wnd[0]") -> Ecran:
+        # La clef est le NOM canonique, parce que `findById` accepte les deux
+        # ecritures d'une meme fenetre — `wnd[0]` et
+        # `/app/con[0]/ses[0]/wnd[0]`. Ce n'est pas une commodite de double :
+        # toutes les traces du recorder emploient la forme courte et SAP les
+        # execute, donc la forme longue qu'il REND designe la meme chose.
+        # Le double l'ignorait, et c'est pour ca qu'aucun test n'a vu le
+        # defaut de K62/060.
+        cle = fenetre_de(fenetre) or fenetre
         return Ecran(identite=self.identite, fenetre=fenetre,
-                     champs=self.par_fenetre.get(fenetre, ()),
-                     titre=f"{self.identite.transaction} {fenetre}")
+                     champs=self.par_fenetre.get(cle, ()),
+                     titre=f"{self.identite.transaction} {cle}")
 
     # -- actions ----------------------------------------------------------
 
     def vkey(self, n: int, fenetre: str = "wnd[0]") -> None:
         super().vkey(n, fenetre)
-        if n == 0 and fenetre == "wnd[0]":
+        if n == 0 and (fenetre_de(fenetre) or fenetre) == "wnd[0]":
             self._demarrer()
 
     def _demarrer(self) -> None:
@@ -913,6 +926,103 @@ class TestLaPrevisualisation(unittest.TestCase):
         self.assertEqual(apercu.confort,
                          len([g for g in trace.gestes if not g.significatif]))
         self.assertEqual(apercu.reprises_possibles, len(apercu.codes))
+
+
+class TestLIdentifiantAbsoluDeSAP(unittest.TestCase):
+    """Le defaut qui a tue la premiere exploration reelle, sur K62/060.
+
+    `couture/sapgui.py` fait `str(objet.Id)`. SAP GUI rend un chemin ABSOLU —
+    `/app/con[0]/ses[0]/wnd[0]` — la ou les traces du recorder, les pipelines
+    et TOUTES les fixtures de ce depot ecrivent `wnd[0]`. Les deux designent
+    la meme fenetre et `findById` accepte les deux.
+
+    Rien ne les rapprochait. Trois sites comparaient donc la forme longue a la
+    forme courte et concluaient « ce n'est pas wnd[0] ». Sur une session
+    parfaitement normale — une seule fenetre, aucune modale — l'exploration a
+    ete refusee au DEUXIEME geste, zero action envoyee, au motif qu'« une
+    fenetre autre que wnd[0] est ouverte ».
+
+    Aucune exception. Un refus parfaitement argumente. Et faux.
+
+    **Ces tests existent parce que leur absence EST la cause.** Le double
+    ecrivait la forme courte, comme tout le depot ; personne n'avait jamais
+    fait tourner une seule ligne contre la forme que SAP rend vraiment.
+    """
+
+    ABSOLU = "/app/con[0]/ses[0]/wnd[0]"
+    ABSOLU_MODALE = "/app/con[0]/ses[0]/wnd[1]"
+
+    def _sap(self, *ids: str) -> DriverScripte:
+        sap = SapDePapier()
+        sap.fenetres = tuple(
+            Fenetre(id=i, type="GuiMainWindow" if i.endswith("wnd[0]")
+                    else "GuiModalWindow")
+            for i in ids)
+        return sap
+
+    # -- le noyau ---------------------------------------------------------
+
+    def test_les_deux_ecritures_nomment_la_meme_fenetre(self):
+        self.assertEqual(fenetre_de(self.ABSOLU), "wnd[0]")
+        self.assertEqual(fenetre_de("wnd[0]"), "wnd[0]")
+        self.assertEqual(fenetre_de(self.ABSOLU_MODALE), "wnd[1]")
+
+    def test_la_fenetre_principale_absolue_n_est_pas_une_modale(self):
+        """C'est ce que `diagnostiquer` imprime, et c'etait « modale »."""
+        self.assertFalse(Fenetre(id=self.ABSOLU).modale)
+        self.assertTrue(Fenetre(id=self.ABSOLU_MODALE).modale)
+
+    def test_un_identifiant_qu_on_ne_sait_pas_situer_ne_s_arrondit_pas(self):
+        """Ni principale — ce serait accepter une modale — ni modale — ce
+        serait refuser une session normale. On rend `""` et l'appelant voit
+        l'identifiant brut."""
+        self.assertEqual(fenetre_de("un truc"), "")
+        self.assertFalse(Fenetre(id="un truc").modale)
+
+    # -- l'exploration ----------------------------------------------------
+
+    def test_une_session_normale_en_forme_absolue_explore(self):
+        """LE test. CONTROLE NEGATIF : remettre `ouvertes != ("wnd[0]",)` dans
+        `_Parcours._reprendre` le fait tomber, avec zero action envoyee et
+        l'exploration arretee au deuxieme geste — le rapport de K62/060."""
+        sap = self._sap(self.ABSOLU)
+        with tempfile.TemporaryDirectory() as bac:
+            resultat = P.explorer(TRACE, sap, catalogue=bac,
+                                  plafond_gestes=500, plafond_ecrans=500,
+                                  registre=REGISTRE)
+        self.assertGreater(resultat.actions_envoyees, 0,
+                           "aucune action : la reprise a ete refusee sur une "
+                           "session qui n'avait qu'une fenetre")
+        self.assertTrue(resultat.reprises)
+        self.assertTrue(resultat.reprises[0].acceptee)
+
+    def test_une_VRAIE_modale_en_forme_absolue_est_toujours_refusee(self):
+        """La correction ne relache rien : c'est l'autre moitie du controle.
+
+        Si elle ne faisait que rendre la comparaison permissive, ce test
+        passerait aussi — d'ou son existence.
+        """
+        sap = self._sap(self.ABSOLU, self.ABSOLU_MODALE)
+        with tempfile.TemporaryDirectory() as bac:
+            resultat = P.explorer(TRACE, sap, catalogue=bac,
+                                  plafond_gestes=500, plafond_ecrans=500,
+                                  registre=REGISTRE)
+        self.assertEqual(resultat.etat, P.INTERROMPUE)
+        self.assertEqual(resultat.actions_envoyees, 0)
+
+    def test_le_refus_CITE_les_fenetres_qu_il_a_vues(self):
+        """Sans ca, il a fallu deduire la cause du reste du rapport.
+
+        CONTROLE NEGATIF : retirer `p.fenetres_du_refus` du message le fait
+        tomber. Un refus qui ne dit pas ce qu'il a vu oblige a deviner.
+        """
+        sap = self._sap(self.ABSOLU, self.ABSOLU_MODALE)
+        with tempfile.TemporaryDirectory() as bac:
+            resultat = P.explorer(TRACE, sap, catalogue=bac,
+                                  plafond_gestes=500, plafond_ecrans=500,
+                                  registre=REGISTRE)
+        self.assertIn(self.ABSOLU, resultat.raison)
+        self.assertIn(self.ABSOLU_MODALE, resultat.raison)
 
 
 if __name__ == "__main__":

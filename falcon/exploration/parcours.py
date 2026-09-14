@@ -78,8 +78,8 @@ from falcon.catalogue import ClefVariante, Depot, Variante, variante_de
 from falcon.controleur import Constat, Contrat, Derogation, DriverGarde
 from falcon.controleur.gardes import est_sauvegarde
 from falcon.noyau import (
-    CHAMP_DE_COMMANDE, Echec, Horloge, PORTEE_TOTALE, Refus, RefusDryRun,
-    maintenant,
+    CHAMP_DE_COMMANDE, Echec, FENETRE_PRINCIPALE, Horloge, PORTEE_TOTALE,
+    Refus, RefusDryRun, fenetre_de, maintenant,
 )
 from falcon.taxonomie import INCONNUE, Registre, ecrire_dump
 from falcon.trace import Geste, Trace
@@ -519,7 +519,9 @@ def _action_a_l_aveugle(appel, ouvertes: tuple[str, ...],
                     f"Une ecriture, elle, aurait leve — c'est pourquoi la "
                     f"premiere action dans une modale doit nommer un champ")
         return ""
-    if appel.methode in METHODES_AVEUGLES and ouvertes != ("wnd[0]",):
+    if (appel.methode in METHODES_AVEUGLES
+            and tuple(fenetre_de(f) or f for f in ouvertes)
+                != (FENETRE_PRINCIPALE,)):
         intruses = [f for f in ouvertes if f != "wnd[0]"]
         return (f"touche destinee a wnd[0] alors que {intruses} est/sont "
                 f"ouverte(s) : c'est la fenetre au premier plan qui la "
@@ -600,6 +602,12 @@ class _Parcours:
         #: Une action ACTIVANTE la remet a "" : elle aurait reussi sur
         #: n'importe quelle boite, donc elle n'identifie rien.
         self.derniere_cible = ""
+
+        #: Les identifiants BRUTS des fenetres, quand une reprise a ete
+        #: refusee. Bruts a dessein : c'est la seule facon de distinguer
+        #: « une modale etait ouverte » de « deux ecritures de la meme
+        #: fenetre ont ete comparees ». Voir `noyau/types.fenetre_de`.
+        self.fenetres_du_refus: tuple[str, ...] = ()
 
         #: A qui l'on raconte, et ce que cela a coute quand il a leve.
         self.observateur = observateur
@@ -882,7 +890,13 @@ class _Parcours:
         geste = self.gestes[index]
         code = _code_de_reprise(geste)
         ouvertes = tuple(f.id for f in self.garde.windows())
-        if ouvertes != ("wnd[0]",):
+        if tuple(fenetre_de(f) or f for f in ouvertes) != (FENETRE_PRINCIPALE,):
+            # Les IDENTIFIANTS BRUTS sont retenus, pas les noms : c'est eux
+            # qu'il faut voir pour savoir si une modale etait vraiment ouverte
+            # ou si l'on vient de comparer deux ecritures de la meme fenetre.
+            # Ce refus a mordu sur K62/060 sans dire ce qu'il avait vu, et il
+            # a fallu le deduire du reste du rapport.
+            self.fenetres_du_refus = ouvertes
             return None
 
         with self.garde.sous_contrat(_contrat(geste)):
@@ -1089,12 +1103,19 @@ def _parcourir(p: _Parcours) -> tuple[str, str, int]:
                 repris = suite if suite is not None and suite > index else index + 1
                 return PLAFOND, _plafond_ecrans(p, repris), repris
             if suite is None:
+                # Le message CITE les identifiants. Sa premiere redaction se
+                # contentait de « une fenetre autre que wnd[0] est ouverte » :
+                # sur K62/060 il a fallu deduire du RESTE du rapport que la
+                # session etait normale et que FALCON comparait deux ecritures
+                # de la meme fenetre. Un refus qui ne dit pas ce qu'il a vu
+                # oblige a deviner, et deviner est ce que ce depot refuse.
+                vues = ", ".join(repr(f) for f in p.fenetres_du_refus) or "(aucune)"
                 return (INTERROMPUE,
-                        f"reprise refusee au geste {geste.ordre:03d} : une "
-                        f"fenetre autre que wnd[0] est ouverte, le champ de "
-                        f"commande n'y est pas atteignable. Fermer une modale "
-                        f"demanderait d'inventer un geste que la trace ne "
-                        f"contient pas", index)
+                        f"reprise refusee au geste {geste.ordre:03d} : le "
+                        f"champ de commande n'est atteignable que depuis "
+                        f"wnd[0], et les fenetres ouvertes sont {vues}. "
+                        f"Fermer une modale demanderait d'inventer un geste "
+                        f"que la trace ne contient pas", index)
             if suite < 0:
                 return (INTERROMPUE, _sans_point_de_reprise(p, geste),
                         total)

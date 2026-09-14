@@ -28,6 +28,7 @@ C'est `soustype` qui distingue un vrai editeur d'une barre d'outils.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -144,13 +145,72 @@ class Statut:
         return self.type == ""
 
 
+#: Le segment de fenetre dans un identifiant SAP, cherche en SOUS-CHAINE.
+#:
+#: **Ancrer au debut etait le defaut, et il a mordu sur un vrai systeme.**
+#: `couture/sapgui.py` fait `str(objet.Id)` ; SAP GUI rend un chemin ABSOLU —
+#: `/app/con[0]/ses[0]/wnd[0]` — la ou les traces du recorder, les pipelines et
+#: toutes les fixtures de ce depot ecrivent `wnd[0]`. Les deux formes designent
+#: la meme fenetre, et `findById` accepte les deux : c'est une difference
+#: d'ECRITURE, pas de sens.
+#:
+#: Tant que rien ne les rapprochait, tout ce depot comparait la forme longue a
+#: la forme courte et concluait « ce n'est pas wnd[0] ». Sur K62/060, une
+#: session parfaitement normale — une seule fenetre ouverte, aucune modale —
+#: a donc vu son exploration refusee au deuxieme geste, au motif qu'« une
+#: fenetre autre que wnd[0] est ouverte ». Aucune exception, un refus
+#: parfaitement argumente, et FAUX.
+#:
+#: `catalogue/inventaire.py` avait deja trouve et contourne le meme ecart pour
+#: son propre affichage. Le contournement local est ce qui a permis au defaut
+#: de survivre ailleurs : la regle vit desormais ICI, au noyau, et les trois
+#: sites qui comparent des fenetres l'appellent.
+_SEGMENT_DE_FENETRE = re.compile(r"wnd\[\d+\]")
+
+#: La fenetre principale, dans la forme canonique de ce depot.
+FENETRE_PRINCIPALE = "wnd[0]"
+
+
+def fenetre_de(identifiant: str) -> str:
+    """`wnd[N]` lu dans un identifiant SAP, quelle qu'en soit l'ecriture.
+
+    Rend la chaine VIDE quand l'identifiant n'en nomme aucune — et c'est un
+    refus, pas un defaut. Rendre `wnd[0]` serait l'affirmation exacte que la
+    modale rend dangereuse : un controle qu'on ne sait pas situer ne doit pas
+    etre repute etre dans la fenetre principale.
+
+    On prend la PREMIERE occurrence : un identifiant SAP est un chemin, et sa
+    fenetre est le segment le plus haut. Aucun identifiant reel n'en porte deux,
+    mais « la premiere » est une regle, « la seule » serait une supposition.
+    """
+    trouve = _SEGMENT_DE_FENETRE.search(identifiant)
+    return trouve.group(0) if trouve else ""
+
+
 @dataclass(frozen=True)
 class Fenetre:
-    id: str                     # wnd[0], wnd[1]...
+    id: str                     # wnd[0], ou /app/con[0]/ses[0]/wnd[0]
     type: str = ""              # GuiMainWindow | GuiModalWindow
     titre: str = ""
     texte: str = ""
 
     @property
+    def nom(self) -> str:
+        """`wnd[N]`, la forme que ce depot ecrit partout ailleurs.
+
+        Vide si l'identifiant n'en nomme aucune — voir `fenetre_de`.
+        """
+        return fenetre_de(self.id)
+
+    @property
     def modale(self) -> bool:
-        return self.id != "wnd[0]"
+        """VRAI seulement si l'on a LU une fenetre qui n'est pas la principale.
+
+        Un identifiant qu'on ne sait pas situer rend FAUX : « je ne sais pas »
+        ne se journalise pas comme « c'est une modale ». Le nommer modale
+        ferait refuser une session normale ; le nommer principale ferait
+        accepter une modale. Entre les deux, la seule issue honnete est que
+        l'appelant voie l'identifiant brut — et les refus le citent desormais.
+        """
+        nom = self.nom
+        return bool(nom) and nom != FENETRE_PRINCIPALE

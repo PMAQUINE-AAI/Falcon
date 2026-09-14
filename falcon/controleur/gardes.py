@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterator
 from falcon.couture import Driver
 from falcon.noyau import (
     VERDICTS, Ecran, EcartIdentite, Fenetre, FenetreImprevue, Identite,
-    PlafondAtteint, RefusDryRun, Statut,
+    PlafondAtteint, RefusDryRun, Statut, fenetre_de,
 )
 from falcon.taxonomie import Registre, Signature, Verdict, appliquer
 
@@ -190,15 +190,25 @@ class DriverGarde(Driver):
 
     def _garde_fenetres(self) -> None:
         """Garde 3. Une fenetre non prevue par l'etape arrete tout."""
+        # Le NOM canonique, pas l'identifiant brut. SAP GUI rend un chemin
+        # absolu — `/app/con[0]/ses[0]/wnd[0]` — et les contrats, eux, sont
+        # ecrits `wnd[0]` : comparer les deux faisait de la fenetre principale
+        # une intruse a chaque etape, sur chaque pipeline, sur tout systeme
+        # reel. Voir `noyau/types.fenetre_de`.
+        #
+        # Un identifiant qu'on ne sait pas situer reste INTRUS sous sa forme
+        # brute : « je ne sais pas ou je suis » ne s'arrondit pas a « je suis
+        # dans la fenetre attendue ».
         ouvertes = tuple(f.id for f in self.__brut.windows())
-        intruses = [f for f in ouvertes if f not in self._contrat.fenetres_attendues]
+        noms = tuple(fenetre_de(f) or f for f in ouvertes)
+        intruses = [f for f in noms if f not in self._contrat.fenetres_attendues]
         if not intruses:
             return
 
         derogation = self._contrat.derogation_pour("fenetre")
         detail = {"attendues": list(self._contrat.fenetres_attendues),
-                  "ouvertes": list(ouvertes), "intruses": intruses,
-                  "etape": self._contrat.nom}
+                  "ouvertes": list(noms), "identifiants": list(ouvertes),
+                  "intruses": intruses, "etape": self._contrat.nom}
         if derogation is not None:
             self._noter(Constat(garde="fenetre", verdict="derogee",
                                 detail=detail, derogation=derogation))

@@ -176,6 +176,73 @@ class TestGarde3Fenetres(unittest.TestCase):
         self.assertEqual([(c.garde, c.verdict) for c in garde.constats],
                          [("fenetre", "elargie")])
 
+    #: L'identifiant que SAP GUI rend vraiment, mesure sur K62/060.
+    ABSOLU = "/app/con[0]/ses[0]/wnd[0]"
+    ABSOLU_MODALE = "/app/con[0]/ses[0]/wnd[1]"
+
+    def test_la_fenetre_principale_en_forme_ABSOLUE_n_est_pas_une_intruse(self):
+        """Le defaut le plus large du depot, et il ne levait que sur un vrai SAP.
+
+        `couture/sapgui.py` fait `str(objet.Id)` et SAP GUI rend un chemin
+        ABSOLU. Les contrats, eux, sont ecrits `wnd[0]` — c'est ce que le §3.2
+        demande et ce que toutes les fixtures portent. La garde comparait donc
+        la forme longue a la forme courte et declarait la fenetre PRINCIPALE
+        intruse : **chaque etape de chaque pipeline aurait leve
+        `FenetreImprevue` sur tout systeme reel**, et aucun test ne le voyait
+        parce que le double ecrit la forme courte.
+
+        CONTROLE NEGATIF : remplacer `noms = tuple(fenetre_de(f) or f ...)` par
+        `noms = ouvertes` dans `_garde_fenetres` fait tomber ce test.
+        """
+        brut = DriverScripte(identite=IA08,
+                             fenetres=(Fenetre(id=self.ABSOLU),))
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            garde.press("bouton")
+        self.assertEqual(garde.constats, [])
+
+    def test_une_VRAIE_modale_en_forme_absolue_arrete_toujours_tout(self):
+        """L'autre moitie : la correction ne doit rien relacher.
+
+        Une correction qui se contenterait de rendre la comparaison permissive
+        passerait le test precedent et celui-ci tomberait.
+        """
+        brut = DriverScripte(identite=IA08,
+                             fenetres=(Fenetre(id=self.ABSOLU),
+                                       Fenetre(id=self.ABSOLU_MODALE)))
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.press("bouton")
+
+    def test_le_constat_garde_l_identifiant_BRUT_a_cote_du_nom(self):
+        """Le journal doit permettre de distinguer « une modale etait la » de
+        « deux ecritures de la meme fenetre ont ete comparees ». Sans
+        l'identifiant brut, il a fallu deduire la cause du reste du rapport."""
+        brut = DriverScripte(identite=IA08,
+                             fenetres=(Fenetre(id=self.ABSOLU),
+                                       Fenetre(id=self.ABSOLU_MODALE)))
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue):
+                garde.press("bouton")
+        detail = garde.constats[-1].detail
+        self.assertEqual(detail["ouvertes"], ["wnd[0]", "wnd[1]"])
+        self.assertEqual(detail["identifiants"],
+                         [self.ABSOLU, self.ABSOLU_MODALE])
+
+    def test_une_fenetre_qu_on_ne_sait_pas_situer_reste_intruse(self):
+        """« je ne sais pas ou je suis » ne s'arrondit pas a « je suis dans la
+        fenetre attendue ». Elle est citee sous sa forme brute."""
+        brut = DriverScripte(identite=IA08,
+                             fenetres=(Fenetre(id="wnd[0]"),
+                                       Fenetre(id="un truc sans segment")))
+        garde = _garde(brut)
+        with garde.sous_contrat(Contrat(ecran_attendu=IA08.triplet)):
+            with self.assertRaises(FenetreImprevue) as leve:
+                garde.press("bouton")
+        self.assertIn("un truc sans segment", str(leve.exception))
+
 
 class TestToutesLesMutationsSontGardees(unittest.TestCase):
     """Constat de revue : fenetres et statut n'etaient releves qu'apres
