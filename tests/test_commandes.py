@@ -320,3 +320,47 @@ class TestLeBitReposeAvantDePeindre(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPromouvoirUneEmpreinteAmbigue(unittest.TestCase):
+    """L'empreinte porte sur les identifiants, pas sur l'ecran.
+
+    Sur la trace de reference, l'esquisse du seul champ de commande porte la
+    MEME empreinte sous IH06, IH08, IW29 et IW39. `--empreinte` seule
+    promouvait la premiere trouvee, en silence : un ecran que personne n'avait
+    designe entrait au catalogue.
+    """
+
+    def setUp(self):
+        from falcon.catalogue import ClefVariante, Variante
+        self._dossier = tempfile.TemporaryDirectory()
+        self.racine = Path(self._dossier.name)
+        ecarte = Depot(Depot(self.racine).quarantaine)
+        for transaction in ("IH06", "IW39"):
+            ecarte.enregistrer(Variante(
+                clef=ClefVariante(transaction, "?", "?", "5d7b662bd606a7ff"),
+                champs=(Champ(id="wnd[0]/tbar[0]/okcd", type=""),),
+                source=ESQUISSE))
+
+    def tearDown(self):
+        self._dossier.cleanup()
+
+    def _lancer(self, *arguments):
+        sortie, erreur = io.StringIO(), io.StringIO()
+        with redirect_stdout(sortie), redirect_stderr(erreur):
+            code = main(["promouvoir", str(self.racine), *arguments])
+        return code, sortie.getvalue(), erreur.getvalue()
+
+    def test_l_empreinte_ambigue_ne_promeut_rien_et_nomme_les_ecrans(self):
+        code, _, erreur = self._lancer("--empreinte", "5d7b662bd606a7ff")
+        self.assertEqual(code, 1)
+        self.assertIn("--ecran IH06/?/?", erreur)
+        self.assertIn("--ecran IW39/?/?", erreur)
+        self.assertEqual(list(Depot(self.racine).triplets()), [])
+
+    def test_ecran_designe_promeut_CELUI_la(self):
+        code, _, _ = self._lancer("--empreinte", "5d7b662bd606a7ff",
+                                  "--ecran", "IW39/?/?")
+        self.assertEqual(code, 0)
+        self.assertEqual(list(Depot(self.racine).triplets()),
+                         [("IW39", "?", "?")])

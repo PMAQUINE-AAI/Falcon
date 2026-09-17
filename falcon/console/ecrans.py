@@ -2201,8 +2201,16 @@ def _cartographier(console: Console, env: Environnement) -> str:
     chemin = demander_chemin(console, "trace du recorder (.vbs)")
     if chemin is None:
         return CONTINUER
-    catalogue = demander_chemin(console, "dossier du catalogue")
+    # `existant=False` : la premiere cartographie est justement celle qui cree
+    # le catalogue, et `falcon explorer --catalogue` l'accepte deja. Exiger un
+    # dossier existant renvoyait au menu le premier essai de tout le monde.
+    catalogue = demander_chemin(console, "dossier du catalogue (cree s'il "
+                                         "n'existe pas)", existant=False)
     if catalogue is None:
+        return CONTINUER
+    if catalogue.exists() and not catalogue.is_dir():
+        console.ecrire(f"\n  {catalogue} existe et n'est pas un dossier.")
+        console.pause()
         return CONTINUER
 
     try:

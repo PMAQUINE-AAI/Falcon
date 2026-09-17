@@ -170,6 +170,11 @@ def analyseur() -> argparse.ArgumentParser:
     promotion.add_argument("--empreinte", default=None,
                            help="empreinte de la capture a promouvoir ; sans "
                                 "elle, la commande se contente de lister")
+    promotion.add_argument("--ecran", default=None,
+                           metavar="TRANSACTION/PROGRAMME/DYNPRO",
+                           help="l'ecran de la capture, tel que la liste "
+                                "l'imprime ; exige quand la meme empreinte "
+                                "figure sous plusieurs ecrans")
 
     exploration = sous.add_parser(
         "explorer", help="rejoue une trace en OBSERVATION et peuple la "
@@ -276,9 +281,26 @@ def _promouvoir(options: argparse.Namespace) -> int:
         return 0
 
     choisies = [c for c in clefs if c.empreinte == options.empreinte]
+    if options.ecran:
+        choisies = [c for c in choisies
+                    if f"{c.transaction}/{c.programme}/{c.dynpro}"
+                    == options.ecran]
     if not choisies:
-        print(f"empreinte {options.empreinte!r} : rien de tel en quarantaine",
+        print(f"empreinte {options.empreinte!r}"
+              + (f" sous {options.ecran!r}" if options.ecran else "")
+              + " : rien de tel en quarantaine", file=sys.stderr)
+        return 1
+    if len(choisies) > 1:
+        # L'empreinte porte sur les identifiants, pas sur l'ecran : deux
+        # esquisses d'un meme champ de commande la partagent sous quatre
+        # transactions. Prendre « la premiere » promouvrait un ecran que
+        # personne n'a designe.
+        print(f"empreinte {options.empreinte!r} : {len(choisies)} captures la "
+              f"portent. Rien n'est promu. Preciser --ecran :",
               file=sys.stderr)
+        for clef in choisies:
+            print(f"  --ecran {clef.transaction}/{clef.programme}"
+                  f"/{clef.dynpro}", file=sys.stderr)
         return 1
 
     try:

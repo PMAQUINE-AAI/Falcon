@@ -532,7 +532,15 @@ def vue_accueil(inventaire: Inventaire, gabarit: Gabarit, *, racine: Path,
             f"{len(inventaire.illisibles)} fichier(s) n'ont pas pu etre lus, "
             f"et n'entrent dans aucun compte :", ton=ALERTE))
         for chemin, motif in inventaire.illisibles[:ILLISIBLES_MONTRES]:
-            blocs.append(texte(gabarit, str(chemin), marge=4))
+            # Relatif a la racine, deja affichee deux lignes plus haut, et coupe
+            # au MILIEU : coupe a droite, un chemin absolu un peu long perdait
+            # justement le nom du fichier — la seule chose a lire ici.
+            try:
+                nom = str(chemin.relative_to(racine))
+            except ValueError:
+                nom = str(chemin)
+            blocs.append(rangee(gabarit, (Cellule(nom, chemin=True),),
+                                marge=4))
             blocs.append(texte(gabarit, motif, marge=6, ton=ATTENUE))
         reste = len(inventaire.illisibles) - ILLISIBLES_MONTRES
         if reste > 0:
