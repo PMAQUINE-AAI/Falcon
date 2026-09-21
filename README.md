@@ -349,6 +349,13 @@ jusqu'au premier import pressé :
   par le contrôleur, qui porte les gardes. Une pipeline ne peut donc pas en
   désactiver une (§5.2).
 
+## `automatismes/`
+
+Des programmes d'un seul fichier sur la couture, sans le moteur — pour ce
+qu'une pipeline YAML ne sait pas dire, comme attraper une modale et
+decider. Le premier affecte des points de mesure a une classe en `CL24N` :
+[automatismes/LISEZMOI.md](automatismes/LISEZMOI.md).
+
 ## `historique/`
 
 Le socle EagleLoader et le harness artisanal développés avant cette spec.
