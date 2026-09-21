@@ -3,8 +3,8 @@
 
 Depuis la racine du depot, SAP GUI ouvert et authentifie par vous-meme :
 
-    python automatismes/cl24n_classer.py points.csv --type-classe 0XX --plafond-points 200
-    python automatismes/cl24n_classer.py points.csv --type-classe 0XX --plafond-points 200 --executer
+    python automatismes/cl24n_classer.py points.csv --type-classe 0XX --plafond-points 20 --classe MA_CLASSE
+    python automatismes/cl24n_classer.py points.csv --type-classe 0XX --plafond-points 500 --executer
 
 `points.csv` porte deux colonnes, `point` et `classe`, une ligne par
 affectation. Une passe par classe : `/nCL24N`, classe et type de classe,
@@ -18,12 +18,15 @@ qu'un automate qui ecrit dans un ERP sans elles n'est pas simplifie, il est nu :
 
 - **a blanc par defaut.** Sans `--executer`, presser « Sauvegarder » est
   refuse mecaniquement (`RefusDryRun`), pas seulement evite. Les saisies
-  restent a l'ecran, jamais validees : on quitte CL24N a la main.
+  restent a l'ecran, jamais sauvegardees : on quitte CL24N a la main, une
+  classe par lancement.
 - **plafond obligatoire.** `--plafond-points` borne chaque passe, et le jeu est
   refuse AVANT tout contact avec SAP s'il le depasse.
-- **l'inconnu arrete.** Une modale qu'aucune regle ne reconnait arrete la passe
-  avant toute sauvegarde (`--executer`). A blanc, elle est annulee (F12) et la
-  passe continue, pour en voir le plus possible dans le rapport.
+- **l'inconnu arrete.** Une modale qu'aucune regle ne reconnait arrete le
+  lancement avant toute sauvegarde (`--executer`). A blanc, si elle suit
+  l'Entree d'un point, elle est annulee (F12), la ligne du point est videe
+  et la passe continue, pour en voir le plus possible dans le rapport ;
+  ailleurs, elle arrete aussi.
 
 **Rien ici n'a encore parle a un SAP.** Ce que le programme SAIT vient de la
 trace du recorder ; ce qu'il SUPPOSE est marque HYPOTHESE dans `Cibles` et
@@ -56,7 +59,7 @@ if str(RACINE) not in sys.path:
     sys.path.insert(0, str(RACINE))
 
 from falcon.couture import Driver, DriverLecture                      # noqa: E402
-from falcon.donnees.entree import JeuInvalide, lire as lire_jeu        # noqa: E402
+from falcon.donnees.entree import JeuInvalide                          # noqa: E402
 from falcon.noyau import (                                             # noqa: E402
     CHAMP_DE_COMMANDE, Champ, Ecran, ErreurFalcon, Fenetre, Identite,
     ObjetIntrouvable, RefusDryRun, SapIndisponible, Statut, maintenant,
@@ -320,6 +323,7 @@ class Automate:
         self.c = cibles
         self._table = ""
         self._depart = 0
+        self._textes_modale = ""
         self._en_attente: list[str] = []
         self._sauvegarde_en_cours = False
 
@@ -553,12 +557,16 @@ class Automate:
         #    utilisateur. Une question (« Oui / Non ») qui contiendrait le
         #    mot reste inconnue : on n'y presse jamais le bouton par defaut.
         if MOTIF_DEJA_AFFECTE.search(textes) and not boutons_de_choix(ecran):
+            self._textes_modale = textes
             self._fermer(fenetre, ecran)
             return V_DEJA
 
         # 2. trace : caracteristiques obligatoires — « poursuivre », puis
-        #    « valider » sur la modale qui suit s'il y en a une. Reconnue par
-        #    son bouton, pas par son texte : c'est ce que la trace montre.
+        #    « valider » sur le wnd[1] present ensuite, que ce soit une autre
+        #    modale ou encore la meme : la trace dit btn[8] puis btn[0], et
+        #    rien de plus. Reconnue par son bouton, pas par son texte. Une
+        #    QUESTION (Oui / Non) apres « poursuivre » n'est jamais validee :
+        #    elle reste a l'ecran, et la regle 3 en decide au tour suivant.
         poursuivre = bouton(ecran, self.c.bouton_poursuivre)
         if poursuivre is not None:
             self._presser(poursuivre)
@@ -568,16 +576,21 @@ class Automate:
                 ecran_suite = self.rapport.relever(
                     fenetre_suite, f"{contexte} : apres « poursuivre »")
                 valider = bouton(ecran_suite, self.c.bouton_valider)
-                if (valider is not None
-                        and bouton(ecran_suite, self.c.bouton_poursuivre) is None):
+                choix = boutons_de_choix(ecran_suite)
+                if valider is not None and not choix:
                     self._presser(valider)
+                elif choix:
+                    self.rapport.ligne(f"  apres « poursuivre » : une question "
+                                       f"({choix}), rien n'est presse")
             return V_VALORISATION
 
         # 3. inconnue.
         if self.executer:
+            suite = ("la sauvegarde a ete PRESSEE, son etat est a verifier "
+                     "dans SAP" if self._sauvegarde_en_cours
+                     else "les saisies en attente ne sont pas sauvegardees")
             raise Arret(f"{contexte} : modale inconnue « {ecran.titre} » "
-                        f"({textes[:300]}) ; voir le rapport, rien n'est "
-                        f"sauvegarde")
+                        f"({textes[:300]}) ; voir le rapport ; {suite}")
         self._touche(12, fenetre)
         return V_INCONNUE
 
@@ -599,26 +612,41 @@ class Automate:
     # -- un point ------------------------------------------------------------------
 
     def _vider(self, cellule: str, point: str) -> str:
-        """Efface la ligne refusee — seulement si elle porte encore ce point.
+        """Efface la ligne refusee — celle-la, et seulement si elle porte encore
+        ce point.
 
-        Effacer a l'aveugle pourrait vider une ligne que SAP a reordonnee,
-        c'est-a-dire une affectation existante.
+        Le defilement est d'abord REMIS la ou la cellule a ete trouvee : un
+        rang visible n'a de sens qu'a une position, et SAP peut avoir remis
+        le defilement a zero en reaffichant l'ecran — la meme cellule visible
+        serait alors une affectation existante, portant peut-etre la meme
+        valeur. Second filet : la valeur relue doit etre ce point.
+
+        Si la ligne refusee n'est plus la, la passe S'ARRETE, a blanc aussi :
+        laissee dans la table, SAP la refuserait a chaque Entree suivante et
+        le refus serait impute au point suivant, un par un, jusqu'au bout.
         """
+        self.d.table_scroll(self._table, self._depart)
         try:
             actuel = self.d.read(cellule)
         except ObjetIntrouvable:
-            return "cellule disparue, rien a vider"
-        if not actuel.strip():
+            actuel = None
+        if actuel is not None and not actuel.strip():
             return "cellule deja vide"
-        if not meme_valeur(point, actuel):
-            return f"cellule non videe : elle porte {actuel!r}"
+        if actuel is None or not meme_valeur(point, actuel):
+            self.rapport.relever("wnd[0]", f"point {point} : ligne refusee introuvable")
+            raise Arret(f"point {point} : la ligne refusee n'est plus la ou elle a "
+                        f"ete ecrite (la cellule "
+                        f"{'a disparu' if actuel is None else 'porte ' + repr(actuel)}) ; "
+                        f"laissee dans la table, elle serait refusee a chaque "
+                        f"Entree suivante. La retirer a la main avant de "
+                        f"relancer ; voir le rapport")
         self.d.write(cellule, "")
         self._touche(0)
         verdicts = self._traiter_modales(f"point {point} : apres effacement")
         statut = self.d.status()
-        if statut.type in ("E", "A"):
+        if statut.type in ("E", "A") or V_DEJA in verdicts:
             raise Arret(f"point {point} : la ligne refusee ne se laisse pas "
-                        f"vider ({statut_texte(statut)})")
+                        f"vider ({statut_texte(statut)} ; modales {verdicts})")
         return "ligne videe" + (f" ; modales {verdicts}" if verdicts else "")
 
     def affecter(self, classe: str, point: str) -> str:
@@ -628,7 +656,9 @@ class Automate:
         self._touche(0)
         verdicts = self._traiter_modales(f"point {point} : apres Entree")
         statut = self.d.status()
+        avertissement = None
         if statut.type == "W":
+            avertissement = statut
             self.rapport.ligne(f"  point {point} : avertissement "
                                f"{statut_texte(statut)}, seconde Entree")
             self._touche(0)
@@ -639,17 +669,24 @@ class Automate:
 
         if V_DEJA in verdicts:
             etat = DEJA_AFFECTE
-            detail = "modale « deja affecte » ; " + self._vider(cellule, point)
+            detail = (f"modale « {self._textes_modale[:200]} » ; "
+                      + self._vider(cellule, point))
         elif statut.type in ("E", "A"):
             etat = REFUSE
             detail = f"{statut_texte(statut)} ; " + self._vider(cellule, point)
         elif V_INCONNUE in verdicts:
             etat = POPUP_INCONNUE
-            detail = "modale inconnue annulee (a blanc) ; voir le rapport"
+            detail = ("modale inconnue annulee (a blanc), voir le rapport ; "
+                      + self._vider(cellule, point))
         else:
             etat = SAISI
-            detail = ("caracteristiques obligatoires laissees vides"
-                      if V_VALORISATION in verdicts else "")
+            morceaux = []
+            if V_VALORISATION in verdicts:
+                morceaux.append("caracteristiques obligatoires laissees vides")
+            if avertissement is not None:
+                morceaux.append(f"avertissement accepte par une seconde Entree : "
+                                f"{statut_texte(avertissement)}")
+            detail = " ; ".join(morceaux)
         self.journal.noter(classe, point, etat, detail)
         return etat
 
@@ -675,7 +712,9 @@ class Automate:
         self._presser(self.c.bouton_sauvegarde)
         verdicts = self._traiter_modales(f"classe {classe} : apres sauvegarde")
         statut = self.d.status()
+        avertissement = None
         if statut.type == "W":
+            avertissement = statut
             self.rapport.ligne(f"  sauvegarde : avertissement "
                                f"{statut_texte(statut)}, seconde Entree")
             self._touche(0)
@@ -700,6 +739,9 @@ class Automate:
             etat = A_VERIFIER
             detail = (f"statut non concluant apres sauvegarde "
                       f"({statut_texte(statut)}) : verifier dans SAP")
+        if avertissement is not None:
+            detail += (f" ; avertissement accepte par une seconde Entree : "
+                       f"{statut_texte(avertissement)}")
         if verdicts:
             detail += f" ; modales {verdicts}"
         for point in saisis:
@@ -750,6 +792,9 @@ class Automate:
         except KeyboardInterrupt:
             self._journaliser_arret(classe, "interrompu au clavier (Ctrl-C)")
             raise
+        except Exception as erreur:                 # un defaut du programme
+            self._journaliser_arret(classe, f"{type(erreur).__name__} : {erreur}")
+            raise
         self.journal.noter(classe, "", PASSE, f"fin : {resume(compte)}")
         return compte
 
@@ -758,17 +803,54 @@ class Automate:
 # Le jeu, le pre-vol, la confirmation
 # =====================================================================
 
+def _decoder(brut: bytes) -> str:
+    if brut.startswith(b"\xef\xbb\xbf"):
+        return brut[3:].decode("utf-8")
+    try:
+        return brut.decode("utf-8")
+    except UnicodeDecodeError:
+        return brut.decode("cp1252")        # un export d'un poste Windows
+
+
+def _lire_lignes(chemin: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """(colonnes, lignes) — le delimiteur est lu dans l'EN-TETE, pas devine.
+
+    `csv.Sniffer` se trompe sur un petit fichier qui finit par une ligne vide
+    — ce qu'Excel produit — et le refus qui suivait parlait d'une colonne
+    absente. Un en-tete `point;classe` contient son delimiteur : on le lit.
+    """
+    if not chemin.exists():
+        raise JeuInvalide(f"jeu introuvable : {chemin}")
+    texte = _decoder(chemin.read_bytes())
+    premiere = texte.split("\n", 1)[0].rstrip("\r")
+    delimiteur = next((d for d in (";", ",", "\t") if d in premiere), None)
+    if delimiteur is None:
+        raise JeuInvalide(f"{chemin} : l'en-tete {premiere!r} ne porte ni « ; » "
+                          f"ni « , » ni tabulation")
+    lecteur = csv.DictReader(texte.splitlines(), delimiter=delimiteur,
+                             restkey="\x00surplus")
+    colonnes = [c.strip() for c in (lecteur.fieldnames or [])]
+    lignes = []
+    for ligne in lecteur:
+        if all(not (v or "").strip() for v in ligne.values()
+               if isinstance(v, str) or v is None):
+            continue                                    # ligne vide
+        lignes.append({c.strip(): (v or "").strip() for c, v in ligne.items()
+                       if isinstance(c, str)})
+    return colonnes, lignes
+
+
 def lire_points(chemin: Path) -> dict[str, list[str]]:
     """{classe: [points]} dans l'ordre du fichier. Refuse plutot que deviner."""
-    lignes, dialecte = lire_jeu(chemin)
+    colonnes, lignes = _lire_lignes(chemin)
     for colonne in (COLONNE_POINT, COLONNE_CLASSE):
-        if colonne not in dialecte.colonnes:
+        if colonne not in colonnes:
             raise JeuInvalide(f"{chemin} : colonne {colonne!r} absente "
-                              f"(colonnes lues : {list(dialecte.colonnes)})")
+                              f"(colonnes lues : {colonnes})")
     par_classe: dict[str, list[str]] = {}
     for rang, ligne in enumerate(lignes, start=2):
-        point = ligne[COLONNE_POINT].strip()
-        classe = ligne[COLONNE_CLASSE].strip()
+        point = ligne.get(COLONNE_POINT, "")
+        classe = ligne.get(COLONNE_CLASSE, "")
         if not classe:
             raise JeuInvalide(f"{chemin}, ligne {rang} : classe vide")
         if not _NUMERO.fullmatch(point):
@@ -817,8 +899,11 @@ def confirmer(classe: str, identite: Identite, *,
            f"  langue {identite.langue or '-'}")
     ecrire(f"  cette passe va SAUVEGARDER dans CL24N les affectations a la "
            f"classe {classe}")
-    reponse = lire("  tapez le nom de la classe pour confirmer, autre chose "
-                   "annule : ")
+    try:
+        reponse = lire("  tapez le nom de la classe pour confirmer, autre chose "
+                       "annule : ")
+    except EOFError:
+        return False
     return reponse.strip().upper() == classe.strip().upper()
 
 
@@ -865,15 +950,18 @@ def executer_sur(driver: Driver, retenues: dict[str, list[str]], *,
     rapport = Rapport(sortie / f"cl24n_{horodatage}_rapport.txt", driver)
 
     identite = driver.screen()
-    mode = "EXECUTION : sauvegarde en fin de passe" if executer else \
-           "A BLANC : aucune sauvegarde, la sauvegarde est refusee"
+    if not executer:
+        mode = "A BLANC : aucune sauvegarde, la sauvegarde est refusee"
+    elif par_lot:
+        mode = f"EXECUTION : sauvegarde toutes les {par_lot} saisies"
+    else:
+        mode = "EXECUTION : sauvegarde en fin de passe"
     entete = [
         f"CL24N — {mode}",
         f"  systeme {identite.systeme or '-'}  mandant {identite.mandant or '-'}"
         f"  langue {identite.langue or '-'}  transaction courante "
         f"{identite.transaction or '-'}",
-        f"  type de classe {type_classe}"
-        + (f"  sauvegarde toutes les {par_lot} saisies" if par_lot else ""),
+        f"  type de classe {type_classe}",
         *(f"  classe {classe} : {len(points)} point(s)"
           for classe, points in retenues.items()),
         f"  journal {journal.chemin}",
@@ -886,8 +974,10 @@ def executer_sur(driver: Driver, retenues: dict[str, list[str]], *,
     automate = Automate(driver, journal, rapport, executer=executer,
                         par_lot=par_lot)
     code = 0
+    restantes = list(retenues)
     try:
         for classe, points in retenues.items():
+            restantes.remove(classe)
             if executer and not confirmer(classe, identite, lire=lire, ecrire=ecrire):
                 journal.noter(classe, "", ARRET, "confirmation refusee : passe non lancee")
                 ecrire(f"  classe {classe} : confirmation refusee, passe non lancee")
@@ -905,6 +995,11 @@ def executer_sur(driver: Driver, retenues: dict[str, list[str]], *,
         ecrire("ARRET : interrompu au clavier ; le journal dit ce qui a ete fait")
         code = 130
     finally:
+        # Un arret termine le LANCEMENT : les classes qui restaient le disent.
+        if code:
+            for classe in restantes:
+                journal.noter(classe, "", PASSE, "non lancee : le lancement "
+                                                 "s'est arrete avant")
         journal.fermer()
         rapport.fermer()
     if not executer:

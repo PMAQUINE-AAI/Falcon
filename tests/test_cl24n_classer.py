@@ -50,6 +50,8 @@ class Theatre(DriverScripte):
     def __init__(self, *, existants=(), obligatoire=False, deja_en_popup=True,
                  trie=False, visibles=3, libres=2, plein=False,
                  type_objet="EQUI", sap_remet_le_defilement_a_zero=False,
+                 sap_deplace_le_refus=False, valorisation_reste_ouverte=False,
+                 question_apres_poursuivre=False,
                  libelles_de_radio=("Equipement", "Point de mesure")):
         super().__init__(identite=Identite(systeme="K62", mandant="060",
                                            langue="FR",
@@ -70,6 +72,9 @@ class Theatre(DriverScripte):
         self.deja_en_popup = deja_en_popup
         self.trie = trie
         self.sap_remet_le_defilement_a_zero = sap_remet_le_defilement_a_zero
+        self.sap_deplace_le_refus = sap_deplace_le_refus
+        self.valorisation_reste_ouverte = valorisation_reste_ouverte
+        self.question_apres_poursuivre = question_apres_poursuivre
         self.libelles_de_radio = list(libelles_de_radio)
         self.sauvegardes = 0
         self.sauvegarde_en_attente = False
@@ -177,6 +182,11 @@ class Theatre(DriverScripte):
         for bouton in modale.get("boutons", ()):
             champs.append(Champ(id=PREFIXE + f"wnd[1]/tbar[0]/{bouton}",
                                 type="GuiButton", texte=bouton, modifiable=True))
+        if modale.get("choix"):
+            champs += [Champ(id=PREFIXE + "wnd[1]/usr/btnSPOP-OPTION1",
+                             type="GuiButton", texte="Oui", modifiable=True),
+                       Champ(id=PREFIXE + "wnd[1]/usr/btnSPOP-OPTION2",
+                             type="GuiButton", texte="Non", modifiable=True)]
         return Ecran(identite=self.screen(), fenetre="wnd[1]",
                      titre=modale["titre"], champs=tuple(champs))
 
@@ -230,7 +240,7 @@ class Theatre(DriverScripte):
         if modale["type"] == "type_objet" and par == "valider":
             self.type_objet = self.choix_radio
             self._reconstruire()
-        elif modale["type"] == "confirmation" and par == "valider":
+        elif modale["type"] in ("confirmation", "valorisation") and par == "valider":
             if self.sauvegarde_en_attente:
                 self._commettre()
         elif modale["type"] == "question" and par == "valider":
@@ -289,11 +299,13 @@ class Theatre(DriverScripte):
     def _valider_table(self) -> None:
         for rang, valeur in enumerate(list(self.lignes)):
             point = valeur.strip()
-            if not point or point in self.valides or point in self.en_erreur:
+            if not point or point in self.valides:
                 continue
             if point in self.existants:
                 if self.lignes.index(point) == rang:
                     continue                       # la ligne existante elle-meme
+                # SAP revalide les lignes visibles a CHAQUE Entree : une ligne
+                # refusee et laissee la est refusee a nouveau.
                 self.en_erreur.add(point)
                 if self.deja_en_popup:
                     self.modale = {"type": "deja", "titre": "Information",
@@ -305,6 +317,9 @@ class Theatre(DriverScripte):
                                          texte=f"Point {point} deja affecte")
                 if self.sap_remet_le_defilement_a_zero:
                     self.position = 0
+                if self.sap_deplace_le_refus and rang > 0:
+                    self.lignes[rang], self.lignes[rang - 1] = (
+                        self.lignes[rang - 1], self.lignes[rang])
                 return
             if point == INEXISTANT:
                 self.en_erreur.add(point)
@@ -316,7 +331,7 @@ class Theatre(DriverScripte):
                 self.statut = Statut(type="W", id="CL", numero="077",
                                      texte=f"Point {point} : verifier le type")
                 return
-            if point == QUESTION:
+            if point == QUESTION and point not in self.avertis:
                 self.en_erreur.add(point)
                 self.modale = {"type": "question", "titre": "Question",
                                "textes": ["Voulez-vous vraiment ?"],
@@ -329,8 +344,7 @@ class Theatre(DriverScripte):
                                "textes": ["Caracteristique CARAC_OBLIG obligatoire"],
                                "boutons": ["btn[8]", "btn[12]"]}
             return
-        # Rien de nouveau : une ligne videe sort de l'erreur.
-        self.en_erreur = {v for v in self.en_erreur if v in self.lignes}
+        # Rien de nouveau : une ligne videe est compactee.
         self._reconstruire()
 
     def _sauvegarder(self) -> None:
@@ -362,11 +376,22 @@ class Theatre(DriverScripte):
             if bouton not in self.modale.get("boutons", ()):
                 raise ObjetIntrouvable(id)
             if bouton == "btn[8]" and self.modale["type"] == "valorisation":
-                self.modale = {"type": "confirmation",
-                               "titre": "Valeurs manquantes",
-                               "textes": ["Des caracteristiques obligatoires "
-                                          "n'ont pas de valeur"],
-                               "boutons": ["btn[0]", "btn[12]"]}
+                if self.valorisation_reste_ouverte:
+                    # F8 fait un controle DANS le dialogue ; Entree le ferme.
+                    self.modale = dict(self.modale, boutons=["btn[8]", "btn[0]",
+                                                             "btn[12]"])
+                elif self.question_apres_poursuivre:
+                    self.modale = {"type": "question", "titre": "Confirmation",
+                                   "textes": ["Les valeurs saisies seront "
+                                              "perdues. Continuer ?"],
+                                   "boutons": ["btn[0]", "btn[12]"],
+                                   "choix": True, "point": ""}
+                else:
+                    self.modale = {"type": "confirmation",
+                                   "titre": "Valeurs manquantes",
+                                   "textes": ["Des caracteristiques obligatoires "
+                                              "n'ont pas de valeur"],
+                                   "boutons": ["btn[0]", "btn[12]"]}
             elif bouton == "btn[0]":
                 self._fermer_modale("valider")
             elif bouton == "btn[12]":
@@ -506,8 +531,8 @@ class TestPasse(Base):
                 theatre.type_objet = "POINT"
         theatre._entree = entree
         self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
-        self.assertNotIn(("press", PREFIXE + "wnd[0]/tbar[1]/btn[33]", ""),
-                         theatre.gestes)
+        pressions = [c for g, c, _ in theatre.gestes if g == "press"]
+        self.assertFalse(any(c.endswith("btn[33]") for c in pressions), pressions)
         self.assertEqual(theatre.existants, ["493303"])
 
     def test_la_radio_est_choisie_par_son_libelle_avant_l_index_de_la_trace(self):
@@ -603,26 +628,60 @@ class TestPointsRefuses(Base):
         self.assertEqual(theatre.existants, ["493303"])
         self.assertNotIn(INEXISTANT, theatre.lignes)
 
-    def test_la_ligne_n_est_videe_que_si_elle_porte_encore_le_point_refuse(self):
-        """SAP a remis le defilement a zero : la meme cellule VISIBLE porte
-        maintenant une affectation existante. L'effacer a l'aveugle la
-        viderait.
+    def test_la_ligne_videe_est_celle_du_refus_meme_si_SAP_a_remis_le_defilement_a_zero(self):
+        """Le point refuse est ecrit en visible 1 apres defilement a 5 (ligne
+        absolue 6) ; SAP remet le defilement a zero ; la visible 1 est alors
+        la ligne 1 — et si l'existante porte la MEME valeur, l'effacer a
+        l'aveugle supprimerait l'affectation existante. Le defilement est
+        remis a 5 avant de relire, et c'est la ligne 6 qui est videe.
         """
-        existants = [f"{n:06d}" for n in range(1, 6)] + ["493253"]
+        existants = ["000001", "493253", "000003", "000004", "000005"]
         theatre = Theatre(existants=existants, visibles=3,
                           sap_remet_le_defilement_a_zero=True)
+        apres_effacement = []
+        original = theatre.write
+
+        def write(id, valeur):
+            original(id, valeur)
+            if valeur == "":
+                apres_effacement.append((theatre.position, list(theatre.lignes)))
+        theatre.write = write
         compte = self.automate(theatre, executer=True).passe(
             "CLASSE_A", "015", ["493253", "493303"])
         self.assertEqual(compte, {DEJA_AFFECTE: 1, SAISI: 1})
-        effacements = [(c, v) for g, c, v in theatre.gestes if g == "write" and v == ""]
-        self.assertEqual(effacements, [], "une cellule a ete videe a l'aveugle")
-        refus = [l for l in self.lignes() if l["point"] == "493253"][0]
-        # ecrit en visible 1 apres defilement a 5 (ligne 6) ; SAP remet le
-        # defilement a zero : la visible 1 est alors la ligne 1, « 000002 ».
-        self.assertIn("cellule non videe : elle porte '000002'", refus["detail"])
+        self.assertEqual(len(apres_effacement), 1)
+        position, lignes = apres_effacement[0]
+        self.assertEqual(position, 3, "le defilement n'a pas ete remis a la "
+                                      "position d'ecriture (5, clampee a 3)")
+        self.assertEqual(lignes[:5], existants, "une ligne existante a ete videe")
+        self.assertEqual(lignes.count("493253"), 1)
+        self.assertIn("ligne videe", [l for l in self.lignes()
+                                      if l["point"] == "493253"][0]["detail"])
         self.assertEqual(theatre.existants, existants + ["493303"])
-        for point in existants:
-            self.assertIn(point, theatre.lignes)
+
+    def test_une_ligne_refusee_qui_n_est_plus_a_sa_place_arrete_sans_rien_vider(self):
+        """SAP a deplace la ligne refusee : la cellule porte une affectation
+        existante. Rien n'est vide, la passe s'arrete, rien n'est sauvegarde."""
+        existants = ["493253", "000002", "000003"]
+        theatre = Theatre(existants=existants, visibles=3, sap_deplace_le_refus=True)
+        with self.assertRaises(Arret) as arret:
+            self.automate(theatre, executer=True).passe(
+                "CLASSE_A", "015", ["493253", "493303"])
+        self.assertIn("n'est plus la ou elle a ete ecrite", str(arret.exception))
+        self.assertIn("porte '000003'", str(arret.exception))
+        effacements = [(c, v) for g, c, v in theatre.gestes if g == "write" and v == ""]
+        self.assertEqual(effacements, [])
+        self.assertEqual(theatre.sauvegardes, 0)
+        self.assertIn("ligne refusee introuvable", self.texte_du_rapport())
+        etats = _etats(self.lignes())
+        self.assertIn(ARRET, etats)
+        self.assertNotIn(SAISI, etats)
+
+    def test_le_detail_du_refus_porte_le_texte_de_la_modale(self):
+        theatre = Theatre(existants=["493253"])
+        self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493253"])
+        refus = [l for l in self.lignes() if l["point"] == "493253"][0]
+        self.assertIn("Le point 493253 est deja affecte a cette classe", refus["detail"])
 
     def test_un_avertissement_est_confirme_par_une_seconde_Entree(self):
         theatre = Theatre()
@@ -631,6 +690,9 @@ class TestPointsRefuses(Base):
         self.assertEqual(compte, {SAISI: 1})
         self.assertEqual(theatre.existants, [AVERTI])
         self.assertIn("avertissement W CL:077", self.texte_du_rapport())
+        saisi = [l for l in self.lignes() if l["point"] == AVERTI][0]
+        self.assertIn("avertissement accepte par une seconde Entree : W CL:077",
+                      saisi["detail"])
 
 
 class TestValorisationObligatoire(Base):
@@ -657,6 +719,36 @@ class TestValorisationObligatoire(Base):
         self.assertIn(V_VALORISATION, sauve["detail"])
 
 
+    def test_si_poursuivre_laisse_le_meme_dialogue_ouvert_valider_le_ferme_quand_meme(self):
+        """L'autre lecture de la trace : btn[8] puis btn[0] sur le MEME wnd[1]."""
+        theatre = Theatre(obligatoire=True, valorisation_reste_ouverte=True)
+        compte = self.automate(theatre, executer=True).passe(
+            "CLASSE_A", "015", ["493303", "493304"])
+        self.assertEqual(compte, {SAISI: 2})
+        self.assertEqual(theatre.sauvegardes, 1)
+        self.assertEqual(theatre.existants, ["493303", "493304"])
+        pressions = [Theatre._court(c) for g, c, _ in theatre.gestes if g == "press"]
+        self.assertEqual(pressions.count("wnd[1]/tbar[0]/btn[8]"), 3)
+
+    def test_une_question_apres_poursuivre_n_est_jamais_validee(self):
+        theatre = Theatre(obligatoire=True, question_apres_poursuivre=True)
+        with self.assertRaises(Arret) as arret:
+            self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
+        self.assertIn("modale inconnue « Confirmation »", str(arret.exception))
+        self.assertIn("Les valeurs saisies seront perdues", str(arret.exception))
+        self.assertEqual(theatre.sauvegardes, 0)
+        self.assertIsNotNone(theatre.modale)
+        pressions = [Theatre._court(c) for g, c, _ in theatre.gestes if g == "press"]
+        self.assertEqual(pressions[-1], "wnd[1]/tbar[0]/btn[8]")
+        self.assertIn("une question", self.texte_du_rapport())
+
+        theatre = Theatre(obligatoire=True, question_apres_poursuivre=True)
+        compte = self.automate(theatre, executer=False).passe(
+            "CLASSE_A", "015", ["493303"])
+        self.assertEqual(compte, {POPUP_INCONNUE: 1})
+        self.assertIn(("vkey", "wnd[1]", "12"), theatre.gestes)
+
+
 class TestModaleInconnue(Base):
 
     def test_une_question_qui_contient_deja_n_est_pas_fermee_par_Entree(self):
@@ -672,20 +764,6 @@ class TestModaleInconnue(Base):
                                   "boutons": ["btn[0]", "btn[12]"], "point": "493253",
                                   "choix": True}
         theatre._valider_table = question
-        original_fields = theatre._fields_modale
-
-        def avec_choix():
-            ecran = original_fields()
-            if theatre.modale and theatre.modale.get("choix"):
-                champs = ecran.champs + (
-                    Champ(id=PREFIXE + "wnd[1]/usr/btnSPOP-OPTION1", type="GuiButton",
-                          texte="Oui", modifiable=True),
-                    Champ(id=PREFIXE + "wnd[1]/usr/btnSPOP-OPTION2", type="GuiButton",
-                          texte="Non", modifiable=True))
-                return Ecran(identite=ecran.identite, fenetre=ecran.fenetre,
-                             titre=ecran.titre, champs=champs)
-            return ecran
-        theatre._fields_modale = avec_choix
         with self.assertRaises(Arret) as arret:
             self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493253"])
         self.assertIn("modale inconnue « Confirmation »", str(arret.exception))
@@ -708,7 +786,7 @@ class TestModaleInconnue(Base):
         self.assertEqual(_etats(lignes, "493304"), [])
         self.assertEqual(_etats(lignes)[-2], ARRET)
 
-    def test_a_blanc_une_modale_inconnue_est_annulee_et_la_passe_continue(self):
+    def test_a_blanc_une_modale_inconnue_est_annulee_sa_ligne_videe_et_la_passe_continue(self):
         theatre = Theatre()
         compte = self.automate(theatre, executer=False).passe(
             "CLASSE_A", "015", ["493303", QUESTION, "493304"])
@@ -717,6 +795,27 @@ class TestModaleInconnue(Base):
         self.assertIsNone(theatre.modale)
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertEqual(_etats(self.lignes(), QUESTION), [POPUP_INCONNUE])
+        # La ligne du point est videe : sinon SAP rejouerait la modale a
+        # l'Entree suivante, et le refus serait impute au point suivant.
+        self.assertNotIn(QUESTION, theatre.lignes)
+        self.assertIn("ligne videe", [l for l in self.lignes()
+                                      if l["point"] == QUESTION][0]["detail"])
+        self.assertEqual(theatre.valides, ["493303", "493304"])
+
+    def test_le_scenario_de_reconnaissance_du_LISEZMOI(self):
+        """A blanc, classe a caracteristiques obligatoires, un point deja
+        affecte et un nouveau : les deux modales sont dans le rapport, rien
+        n'est sauvegarde."""
+        theatre = Theatre(existants=["493253"], obligatoire=True)
+        compte = self.automate(theatre, executer=False).passe(
+            "CLASSE_A", "015", ["493253", "493303"])
+        self.assertEqual(compte, {DEJA_AFFECTE: 1, SAISI: 1})
+        self.assertEqual(theatre.sauvegardes, 0)
+        rapport = self.texte_du_rapport()
+        self.assertIn("« Information »", rapport)
+        self.assertIn("« Valorisation »", rapport)
+        self.assertIn("« Valeurs manquantes »", rapport)
+        self.assertEqual(_etats(self.lignes(), "493303"), [SAISI, NON_SAUVEGARDE])
 
     def test_une_modale_a_l_ouverture_de_la_transaction_arrete(self):
         theatre = Theatre()
@@ -746,8 +845,9 @@ class TestABlanc(Base):
         self.assertEqual(compte, {SAISI: 2})
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertEqual(theatre.valides, ["493303", "493304"])
-        self.assertNotIn("btn[11]", [Theatre._court(c) for g, c, _ in theatre.gestes
-                                     if g == "press"])
+        pressions = [c for g, c, _ in theatre.gestes if g == "press"]
+        self.assertFalse(any(c.endswith("btn[11]") for c in pressions), pressions)
+        self.assertNotIn(("vkey", "wnd[0]", "11"), theatre.gestes)
         for point in ("493303", "493304"):
             self.assertEqual(_etats(self.lignes(), point), [SAISI, NON_SAUVEGARDE])
 
@@ -839,9 +939,19 @@ class TestSauvegarde(Base):
                               "textes": ["Imprimer ?"], "boutons": ["btn[0]"],
                               "point": ""}
         theatre._commettre = question
-        with self.assertRaises(Arret):
+        with self.assertRaises(Arret) as arret:
             self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
         self.assertEqual(_etats(self.lignes(), "493303"), [SAISI, A_VERIFIER])
+        self.assertIn("PRESSEE", str(arret.exception))
+        self.assertNotIn("ne sont pas sauvegardees", str(arret.exception))
+
+    def test_un_defaut_du_programme_est_journalise_avant_de_remonter(self):
+        theatre = Theatre()
+        theatre.table_visible_rows = lambda id: 1 / 0
+        with self.assertRaises(ZeroDivisionError):
+            self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
+        arret = [l for l in self.lignes() if l["etat"] == ARRET][0]
+        self.assertIn("ZeroDivisionError", arret["detail"])
 
     def test_par_lot_sauvegarde_toutes_les_N_saisies_puis_le_reste(self):
         theatre = Theatre()
@@ -917,8 +1027,11 @@ class TestSauvegarde(Base):
     def test_deux_passes_s_enchainent_apres_une_sauvegarde(self):
         theatre = Theatre(obligatoire=True)
         automate = self.automate(theatre, executer=True)
-        automate.passe("CLASSE_A", "015", ["493303"])
-        automate.passe("CLASSE_B", "015", ["493303", "493304"])
+        self.assertEqual(automate.passe("CLASSE_A", "015", ["493303"]), {SAISI: 1})
+        # Le theatre ne connait qu'une classe : la seconde passe prend
+        # d'autres points, sans quoi il repondrait « deja affecte ».
+        self.assertEqual(automate.passe("CLASSE_B", "015", ["493304", "493305"]),
+                         {SAISI: 2})
         self.assertEqual(theatre.sauvegardes, 2)
         self.assertEqual(theatre.saisies["CLASS"], "CLASSE_B")
 
@@ -966,6 +1079,21 @@ class TestJeu(unittest.TestCase):
         jeu = self.dossier / "excel.csv"
         jeu.write_bytes("﻿classe,point\r\nA,493303\r\n".encode("utf-8"))
         self.assertEqual(lire_points(jeu), {"A": ["493303"]})
+
+    def test_une_ligne_vide_finale_et_des_cellules_vides_sont_ignorees(self):
+        jeu = self._jeu("point;classe\r\n493303;A\r\n\r\n;\r\n")
+        self.assertEqual(lire_points(jeu), {"A": ["493303"]})
+
+    def test_un_en_tete_sans_delimiteur_est_refuse(self):
+        jeu = self._jeu("point classe\r\n493303 A\r\n")
+        with self.assertRaises(JeuInvalide) as refus:
+            lire_points(jeu)
+        self.assertIn("ni « ; » ni « , »", str(refus.exception))
+
+    def test_un_export_cp1252_est_lu(self):
+        jeu = self.dossier / "ansi.csv"
+        jeu.write_bytes("point;classe\r\n493303;CLASSE_\xc9T\xc9\r\n".encode("cp1252"))
+        self.assertEqual(lire_points(jeu), {"CLASSE_\xc9T\xc9": ["493303"]})
 
     def test_un_point_de_plus_de_douze_chiffres_est_refuse(self):
         jeu = self._jeu("point;classe\r\n1234567890123;A\r\n")
@@ -1039,6 +1167,11 @@ class TestConfirmation(unittest.TestCase):
                                    ecrire=dits.append))
         self.assertFalse(confirmer("CLASSE_A", identite, lire=lambda _: "",
                                    ecrire=dits.append))
+
+        def fermee(_):
+            raise EOFError
+        self.assertFalse(confirmer("CLASSE_A", identite, lire=fermee,
+                                   ecrire=dits.append))
         self.assertTrue(any("K62" in d and "060" in d for d in dits))
 
 
@@ -1086,16 +1219,22 @@ class TestCommande(unittest.TestCase):
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertTrue(any("ne sont PAS sauvegardees" in d for d in dits))
 
-    def test_un_arret_rend_1_et_les_fichiers_sont_fermes(self):
+    def test_un_arret_rend_1_et_journalise_les_classes_non_lancees(self):
         theatre = Theatre()
         dits = []
-        code = executer_sur(theatre, {"A": [QUESTION]}, type_classe="015",
-                            executer=True, sortie=self.dossier,
-                            lire=lambda _: "A", ecrire=dits.append)
+        reponses = iter(["A", "B"])
+        code = executer_sur(theatre, {"A": [QUESTION], "B": ["493304"]},
+                            type_classe="015", executer=True, sortie=self.dossier,
+                            lire=lambda _: next(reponses), ecrire=dits.append)
         self.assertEqual(code, 1)
         self.assertTrue(any(d.startswith("ARRET : ") for d in dits))
         rapport = next(self.dossier.glob("*_rapport.txt")).read_text(encoding="utf-8-sig")
         self.assertIn("« Question »", rapport)
+        journal = _journal(next(self.dossier.glob("*_journal.csv")))
+        derniere = journal[-1]
+        self.assertEqual((derniere["classe"], derniere["etat"]), ("B", PASSE))
+        self.assertIn("non lancee", derniere["detail"])
+        self.assertEqual(theatre.saisies.get("CLASS"), "A")
 
 
 if __name__ == "__main__":
