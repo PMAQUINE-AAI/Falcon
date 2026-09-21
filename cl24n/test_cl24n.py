@@ -31,8 +31,8 @@ from cl24n import (                                          # noqa: E402
     Arret, Automate, Champ, Ecran, ErreurCouture, Fenetre, Geste, Identite,
     JeuInvalide, Journal, ObjetIntrouvable, Pilote, Prevol, Rapport, Recette,
     RecetteInvalide, RefusSauvegarde, SapIndisponible, Source, Statut,
-    confirmer, dicter_sur, inventorier, lire_points, menu, meme_valeur,
-    prevol, rejouer_sur,
+    MARQUER_KO, Tableau, confirmer, dicter_sur, inventorier, lire_points,
+    menu, meme_valeur, prevol, rejouer_sur, rendre_tableau,
 )
 
 
@@ -60,6 +60,10 @@ PREFIXE = "/app/con[0]/ses[0]/"          # SAP rend des chemins ABSOLUS
 TABLE = ("wnd[0]/usr/subSUBSCR_ZUORD:SAPLCLFM:1512/subOBJEKT:SAPLCBCM:{dynpro}"
          "/tblSAPLCBCMTC_OBJ_CLASS")
 COLONNE = {"EQUI": "ctxtRMCLF-EQUNR", "POINT": "ctxtRMCLF-POINT"}
+#: La seconde colonne du tableau. Elle existe pour que l'index de colonne ne
+#: soit pas toujours zero : le supposer tapait dans la mauvaise colonne, et un
+#: theatre a une seule colonne n'aurait jamais montre le defaut.
+COLONNE_LIBELLE = "ctxtRMCLF-KTEXT"
 DYNPRO = {"EQUI": "0210", "POINT": "0230"}
 RADIO = "wnd[1]/usr/sub:SAPLCLFM:0602/radRMCLF-RADIO[{rang},0]"
 
@@ -100,6 +104,8 @@ class Theatre(DriverDeTheatre):
         self.valorisation_reste_ouverte = valorisation_reste_ouverte
         self.question_apres_poursuivre = question_apres_poursuivre
         self.libelles_de_radio = list(libelles_de_radio)
+        #: Le libelle porte par la seconde colonne, par point.
+        self.libelles: dict[str, str] = {}
         self.sauvegardes = 0
         self.sauvegarde_en_attente = False
         self.saisies: dict[str, str] = {}
@@ -117,6 +123,14 @@ class Theatre(DriverDeTheatre):
     def _cellule(self, id: str) -> int | None:
         """Le rang VISIBLE si `id` est une cellule de la colonne objet."""
         prefixe = f"{self._table()}/{COLONNE[self.type_objet]}[0,"
+        court = self._court(id)
+        if court.startswith(prefixe) and court.endswith("]"):
+            return int(court[len(prefixe):-1])
+        return None
+
+    def _cellule_libelle(self, id: str) -> int | None:
+        """Le rang VISIBLE si `id` est une cellule de la SECONDE colonne."""
+        prefixe = f"{self._table()}/{COLONNE_LIBELLE}[1,"
         court = self._court(id)
         if court.startswith(prefixe) and court.endswith("]"):
             return int(court[len(prefixe):-1])
@@ -198,6 +212,11 @@ class Theatre(DriverDeTheatre):
                     id=f"{table}/{COLONNE[self.type_objet]}[0,{rang}]",
                     type="GuiCTextField", texte=valeur,
                     modifiable=valeur not in self.existants))
+                champs.append(Champ(
+                    id=f"{table}/{COLONNE_LIBELLE}[1,{rang}]",
+                    type="GuiCTextField",
+                    texte=self.libelles.get(valeur, "") if valeur else "",
+                    modifiable=valeur not in self.existants))
         return Ecran(identite=self.screen(), fenetre=fenetre,
                      titre="Affecter objets a une classe", champs=tuple(champs))
 
@@ -229,6 +248,12 @@ class Theatre(DriverDeTheatre):
     # -- lecture et saisie -------------------------------------------------------
 
     def read(self, id: str) -> str:
+        rang = self._cellule_libelle(id)
+        if rang is not None:
+            absolu = self.position + rang
+            if self.ecran != "affectation" or absolu >= len(self.lignes):
+                raise ObjetIntrouvable(id)
+            return self.libelles.get(self.lignes[absolu], "")
         rang = self._cellule(id)
         if rang is not None:
             absolu = self.position + rang
@@ -246,6 +271,14 @@ class Theatre(DriverDeTheatre):
 
     def write(self, id: str, valeur: str) -> None:
         retenue = self.a_l_ecriture(id, valeur) if self.a_l_ecriture else valeur
+        rang = self._cellule_libelle(id)
+        if rang is not None:
+            absolu = self.position + rang
+            if self.ecran != "affectation" or absolu >= len(self.lignes):
+                raise ObjetIntrouvable(id)
+            self.libelles[self.lignes[absolu]] = retenue
+            self._noter("write", id, valeur)
+            return
         rang = self._cellule(id)
         if rang is not None:
             absolu = self.position + rang
@@ -511,6 +544,32 @@ def recette_de_reference(*, avec_cloture: bool = True) -> Recette:
                    mandant="060", transaction="CL24N")
 
 
+def _dans_popup(titre: str, bouton: str, libelle: str) -> Geste:
+    return Geste(type=PRESSER, cible=PREFIXE + f"wnd[1]/tbar[0]/{bouton}",
+                 suffixe=f"tbar[0]/{bouton}", fenetre="wnd[1]",
+                 si_fenetre=titre, libelle=libelle)
+
+
+def recette_avec_popups() -> Recette:
+    """La recette de reference, plus ce qu'on dicte des fenetres surgissantes.
+
+    Aucune de ces fenetres n'est connue du programme : « ce point est deja
+    affecte » se dit par un `ko`, la valorisation se passe par les deux
+    boutons que l'on presse soi-meme. C'est exactement ce que l'on tape au
+    pilotage quand elles apparaissent.
+    """
+    recette = recette_de_reference()
+    refus_et_valorisation = [
+        Geste(type=MARQUER_KO, fenetre="wnd[1]", si_fenetre="Information"),
+        _dans_popup("Information", "btn[0]", "fermer"),
+        _dans_popup("Valorisation", "btn[8]", "poursuivre"),
+        _dans_popup("Valeurs manquantes", "btn[0]", "valider"),
+    ]
+    recette.corps += refus_et_valorisation
+    recette.cloture += refus_et_valorisation[2:]
+    return recette
+
+
 # =====================================================================
 # Outils de test
 # =====================================================================
@@ -658,7 +717,7 @@ class TestPointsRefuses(Base):
     def test_un_point_deja_affecte_en_popup_est_KO_et_sa_ligne_est_videe(self):
         theatre = Theatre(existants=["493253"])
         compte = self.passe(theatre, "CLASSE_A", ["493253", "493303"],
-                            executer=True)
+                            executer=True, recette=recette_avec_popups())
         self.assertEqual(compte, {DEJA_AFFECTE: 1, SAISI: 1})
         self.assertEqual(_etats(self.lignes(), "493253"), [DEJA_AFFECTE])
         refus = [l for l in self.lignes() if l["point"] == "493253"][0]
@@ -698,7 +757,7 @@ class TestPointsRefuses(Base):
                 apres_effacement.append((theatre.position, list(theatre.lignes)))
         theatre.write = write
         compte = self.passe(theatre, "CLASSE_A", ["493253", "493303"],
-                            executer=True)
+                            executer=True, recette=recette_avec_popups())
         self.assertEqual(compte, {DEJA_AFFECTE: 1, SAISI: 1})
         self.assertEqual(len(apres_effacement), 1)
         position, lignes = apres_effacement[0]
@@ -712,7 +771,8 @@ class TestPointsRefuses(Base):
         theatre = Theatre(existants=existants, visibles=3,
                           sap_deplace_le_refus=True)
         with self.assertRaises(Arret) as arret:
-            self.passe(theatre, "CLASSE_A", ["493253", "493303"], executer=True)
+            self.passe(theatre, "CLASSE_A", ["493253", "493303"], executer=True,
+                       recette=recette_avec_popups())
         self.assertIn("n'est plus la ou elle a ete ecrite", str(arret.exception))
         effacements = [(c, v) for g, c, v in theatre.gestes
                        if g == "write" and v == ""]
@@ -735,29 +795,51 @@ class TestValorisationObligatoire(Base):
     def test_la_valorisation_est_passee_par_poursuivre_puis_valider(self):
         theatre = Theatre(obligatoire=True)
         compte = self.passe(theatre, "CLASSE_A", ["493303", "493304"],
-                            executer=True)
+                            executer=True, recette=recette_avec_popups())
         self.assertEqual(compte, {SAISI: 2})
         self.assertEqual(theatre.sauvegardes, 1)
         self.assertEqual(theatre.existants, ["493303", "493304"])
         pressions = [Theatre._court(c) for g, c, _ in theatre.gestes if g == "press"]
         self.assertEqual(pressions.count("wnd[1]/tbar[0]/btn[8]"), 3)
-        saisi = [l for l in self.lignes() if l["point"] == "493303"][0]
-        self.assertIn("caracteristiques obligatoires laissees vides", saisi["detail"])
 
-    def test_si_poursuivre_laisse_le_meme_dialogue_ouvert_valider_le_ferme(self):
+    def test_si_poursuivre_laisse_le_meme_dialogue_ouvert_on_dicte_deux_gestes(self):
+        """F8 ne ferme pas toujours : on dicte alors deux gestes sur la MEME
+        fenetre, ce que le pilotage montre puisqu'elle reste affichee."""
         theatre = Theatre(obligatoire=True, valorisation_reste_ouverte=True)
+        recette = recette_avec_popups()
+        deux = [_dans_popup("Valorisation", "btn[8]", "poursuivre"),
+                _dans_popup("Valorisation", "btn[0]", "valider")]
+        recette.corps = recette.corps[:4] + deux
+        recette.cloture = recette.cloture[:1] + deux
         compte = self.passe(theatre, "CLASSE_A", ["493303", "493304"],
-                            executer=True)
+                            executer=True, recette=recette)
         self.assertEqual(compte, {SAISI: 2})
         self.assertEqual(theatre.sauvegardes, 1)
+        self.assertEqual(theatre.existants, ["493303", "493304"])
+
+    def test_une_fenetre_qui_reste_ouverte_sans_geste_de_plus_arrete(self):
+        """Le pendant du test precedent : un seul geste dicte, la fenetre
+        reste la, et plus rien ne la vise — donc elle est inconnue."""
+        theatre = Theatre(obligatoire=True, valorisation_reste_ouverte=True)
+        with self.assertRaises(Arret) as arret:
+            self.passe(theatre, "CLASSE_A", ["493303"], executer=True,
+                       recette=recette_avec_popups())
+        self.assertIn("fenetre inconnue « Valorisation »", str(arret.exception))
+        self.assertIn("Redicter la passe", str(arret.exception))
+        self.assertEqual(theatre.sauvegardes, 0)
 
     def test_une_question_apres_poursuivre_n_est_jamais_validee(self):
         theatre = Theatre(obligatoire=True, question_apres_poursuivre=True)
         with self.assertRaises(Arret) as arret:
-            self.passe(theatre, "CLASSE_A", ["493303"], executer=True)
+            self.passe(theatre, "CLASSE_A", ["493303"], executer=True,
+                       recette=recette_avec_popups())
         self.assertIn("fenetre inconnue « Confirmation »", str(arret.exception))
         self.assertEqual(theatre.sauvegardes, 0)
-        self.assertIn("une question", self.texte_du_rapport())
+        # La question est relevee AVANT l'arret : c'est ce qu'on relira pour
+        # decider quoi en dicter.
+        self.assertIn("Les valeurs saisies seront perdues",
+                      self.texte_du_rapport())
+        self.assertIn("btnSPOP-OPTION1", self.texte_du_rapport())
 
 
 class TestPopupInconnue(Base):
@@ -818,7 +900,7 @@ class TestABlanc(Base):
     def test_a_blanc_ne_presse_jamais_sauvegarder(self):
         theatre = Theatre(obligatoire=True)
         compte = self.passe(theatre, "CLASSE_A", ["493303", "493304"],
-                            executer=False)
+                            executer=False, recette=recette_avec_popups())
         self.assertEqual(compte, {SAISI: 2})
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertEqual(theatre.valides, ["493303", "493304"])
@@ -962,7 +1044,8 @@ class TestRapport(Base):
 
     def test_le_rapport_releve_une_fenetre_en_entier_une_fois_puis_en_bref(self):
         theatre = Theatre(obligatoire=True)
-        self.passe(theatre, "CLASSE_A", ["493303", "493304"], executer=True)
+        self.passe(theatre, "CLASSE_A", ["493303", "493304"], executer=True,
+                   recette=recette_avec_popups())
         texte = self.texte_du_rapport()
         self.assertEqual(texte.count("champs de wnd[1]"), 3,
                          "type d'objet, valorisation, valeurs manquantes : "
@@ -1173,14 +1256,32 @@ class TestInventaire(unittest.TestCase):
         theatre._reconstruire()
         inventaire = inventorier(theatre.fields("wnd[0]"))
         self.assertEqual(len(inventaire.tableaux), 1)
-        table, colonne, cellules = inventaire.tableaux[0]
-        self.assertTrue(table.endswith("tblSAPLCBCMTC_OBJ_CLASS"), table)
-        self.assertEqual(colonne, "ctxtRMCLF-POINT")
-        self.assertEqual(len(cellules), 2)
+        tableau = inventaire.tableaux[0]
+        self.assertTrue(tableau.id.endswith("tblSAPLCBCMTC_OBJ_CLASS"),
+                        tableau.id)
+        self.assertEqual(tableau.colonnes,
+                         [("ctxtRMCLF-POINT", 0), (COLONNE_LIBELLE, 1)])
+        self.assertEqual(sorted(tableau.lignes), [0, 1])
         # Le champ de commande reste designable : c'est par lui qu'on ouvre
         # une transaction, donc il ne doit jamais disparaitre de la liste.
         self.assertEqual([_fin(c.id) for c in inventaire.champs], ["okcd"])
         self.assertEqual(len(inventaire.boutons), 2)
+
+    def test_un_tableau_de_mille_cellules_ne_donne_pas_mille_champs(self):
+        """Le defaut que ce repli corrige : un releve noye sous les cellules."""
+        theatre = Theatre(existants=[f"{n:06d}" for n in range(1, 61)],
+                          visibles=60, type_objet="POINT")
+        theatre.ecran = "affectation"
+        theatre._reconstruire()
+        ecran = theatre.fields("wnd[0]")
+        self.assertGreater(len(ecran.champs), 120)
+        inventaire = inventorier(ecran)
+        self.assertEqual(len(inventaire.champs), 1, "seul okcd reste un champ")
+        self.assertEqual(len(inventaire.tableaux), 1)
+        rendu = "\n".join(rendre_tableau(inventaire.tableaux[0], 1))
+        self.assertLessEqual(len(rendu.splitlines()), 10,
+                             "l'apercu d'un tableau doit tenir en dix lignes")
+        self.assertIn("ligne(s) visible(s) de plus", rendu)
 
     def test_les_champs_de_saisie_hors_tableau_sont_numerotes(self):
         theatre = Theatre()
@@ -1212,7 +1313,7 @@ class TestPilote(unittest.TestCase):
         self.dossier = Path(tempfile.mkdtemp(prefix="cl24n-pilote-"))
         self.dits = []
 
-    def piloter(self, ordres, theatre=None, valeurs=None):
+    def piloter(self, ordres, theatre=None, valeurs=None, transaction=""):
         theatre = theatre if theatre is not None else Theatre()
         self.theatre = theatre
         rapport = Rapport(self.dossier / "dictee.txt", theatre)
@@ -1223,7 +1324,8 @@ class TestPilote(unittest.TestCase):
                         lire=lambda _: next(suite),
                         ecrire=self.dits.append)
         return pilote.piloter(valeurs or {COLONNE_POINT: "493303",
-                                          COLONNE_CLASSE: "CLASSE_A"})
+                                          COLONNE_CLASSE: "CLASSE_A"},
+                              transaction)
 
     @property
     def texte(self):
@@ -1284,12 +1386,41 @@ class TestPilote(unittest.TestCase):
         self.assertIn("Sauvegarder", self.texte)
         self.assertIn("moment : entete", self.texte)
 
-    def test_le_tableau_est_montre_avec_ses_lignes_libres(self):
+    def test_le_tableau_est_montre_en_grille_et_non_cellule_par_cellule(self):
         ordres = ['1 = "/nCL24N"', "e", "2 = classe", '3 = "015"', "e",
                   "b2", "r2", "b1", "abandon"]
         self.piloter(ordres)
         self.assertIn("TABLEAU T1", self.texte)
-        self.assertIn("2 libre(s)", self.texte)
+        self.assertIn("2 colonne(s)", self.texte)
+        self.assertIn("C1:ctxtRMCLF-POINT", self.texte)
+        self.assertIn(f"C2:{COLONNE_LIBELLE}", self.texte)
+        self.assertIn("L0", self.texte)
+        self.assertNotIn("ctxtRMCLF-POINT[0,0]", self.texte,
+                         "une cellule est apparue comme un champ")
+
+    def test_une_colonne_se_designe_par_son_numero(self):
+        ordres = ['1 = "/nCL24N"', "e", "2 = classe", '3 = "015"', "e", "b2",
+                  "r2", "b1", "boucle", "T1.C1 = point", 'T1.L0.C2 = "Pompe"',
+                  "fin"]
+        recette = self.piloter(ordres)
+        point, libelle = recette.corps
+        self.assertEqual(point.colonne_cible, "ctxtRMCLF-POINT")
+        self.assertEqual(point.index_colonne, 0)
+        self.assertIsNone(point.ligne)
+        self.assertEqual(libelle.colonne_cible, COLONNE_LIBELLE)
+        self.assertEqual(libelle.index_colonne, 1)
+        self.assertEqual(libelle.ligne, 0)
+        self.assertEqual(self.theatre.libelles, {"493303": "Pompe"})
+
+    def test_une_colonne_ou_une_ligne_inexistante_ne_fait_rien(self):
+        ordres = ['1 = "/nCL24N"', "e", "2 = classe", '3 = "015"', "e", "b2",
+                  "r2", "b1", "boucle", "T1.C9 = point", "T1.L9.C1 = point",
+                  "T9.C1 = point", "fin"]
+        recette = self.piloter(ordres)
+        self.assertEqual(recette.corps, [])
+        self.assertIn("pas de colonne C9", self.texte)
+        self.assertIn("ligne L9 n'est pas visible", self.texte)
+        self.assertIn("pas de tableau T9", self.texte)
 
     def test_abandonner_ne_rend_aucune_recette(self):
         self.assertIsNone(self.piloter(["abandon"]))
@@ -1357,6 +1488,53 @@ class TestPilote(unittest.TestCase):
         self.piloter(['1 = "/nCL24N"', "liste", "abandon"])
         self.assertIn("UNE FOIS par classe", self.texte)
         self.assertIn("(1 geste(s))", self.texte)
+
+    def test_ko_se_dicte_dans_une_fenetre_et_classe_le_point_au_rejeu(self):
+        """Le verdict « ce point est refuse » n'est plus une regle codee :
+        il se dit, dans la fenetre qui le signe."""
+        theatre = Theatre(existants=["493303"])
+        ordres = ["2 = classe", '3 = "015"', "e", "b2", "r2", "b1", "boucle",
+                  "T1.C1 = point", "e", "ko", "b1", "cloture", "b1",
+                  "sauvegarder", "fin"]
+        recette = self.piloter(ordres, theatre=theatre,
+                               transaction="CL24N")
+        ko = [g for g in recette.corps if g.type == MARQUER_KO]
+        self.assertEqual(len(ko), 1)
+        self.assertEqual(ko[0].si_fenetre, "Information")
+
+        # et au rejeu, le point sort KO sans qu'aucune regle n'ait servi
+        autre = Theatre(existants=["493304"])
+        journal = Journal(self.dossier / "j.csv")
+        rapport = Rapport(self.dossier / "r.txt", autre)
+        self.addCleanup(journal.fermer)
+        self.addCleanup(rapport.fermer)
+        automate = Automate(autre, journal, rapport, executer=True)
+        compte = automate.passe(recette, "CLASSE_B", ["493304", "493305"])
+        self.assertEqual(compte, {DEJA_AFFECTE: 1, SAISI: 1})
+
+    def test_ko_est_refuse_hors_d_une_fenetre_surgissante(self):
+        recette = self.piloter(["boucle", "ko", "fin"])
+        self.assertEqual(recette.corps, [])
+        self.assertIn("ne se dit que dans une fenetre surgissante", self.texte)
+
+    def test_ko_est_refuse_hors_du_corps(self):
+        """Une fenetre est bien la, mais on est dans l'entete : un refus
+        classe un POINT, pas une classe."""
+        ordres = ["2 = classe", '3 = "015"', "e", "b2", "ko", "abandon"]
+        self.piloter(ordres, transaction="CL24N")
+        self.assertIn("ne vaut que dans « corps »", self.texte)
+
+    def test_la_transaction_donnee_est_ouverte_toute_seule(self):
+        recette = self.piloter(["fin"], transaction="CL24N")
+        self.assertEqual([g.resume() for g in recette.entete],
+                         ["ecrire « /nCL24N » dans okcd", "Entree sur wnd[0]"])
+        self.assertEqual(recette.transaction, "CL24N")
+
+    def test_une_transaction_qui_ne_s_ouvre_pas_est_signalee(self):
+        recette = self.piloter(["fin"], transaction="IW32")
+        self.assertIn("ATTENTION : l'ecran annonce SESSION_MANAGER, pas IW32",
+                      self.texte)
+        self.assertEqual(len(recette.entete), 2)
 
     def test_une_note_est_gardee_dans_la_recette(self):
         recette = self.piloter(['1 = "/nCL24N"', "note K62 mandant 060", "fin"])
@@ -1534,28 +1712,54 @@ class TestMenu(unittest.TestCase):
                       releves[0].read_text(encoding="utf-8-sig"))
 
     #: La dictee, telle qu'on la tape depuis le menu.
-    DICTEE = ['1 = "/nCL24N"', "e", "2 = classe", '3 = "015"', "e", "b2",
-              "r2", "b1", "boucle", "T1 = point", "e", "cloture", "b1",
-              "sauvegarder", "fin"]
+    #: Depuis le menu, la transaction est demandee et ouverte toute seule :
+    #: la dictee commence donc directement par la classe.
+    DICTEE = ["2 = classe", '3 = "015"', "e", "b2", "r2", "b1", "boucle",
+              "T1 = point", "e", "cloture", "b1", "sauvegarder", "fin"]
 
     def test_dicter_puis_rejouer_de_bout_en_bout(self):
-        """Le parcours entier : on dicte une classe, puis on rejoue l'autre."""
-        reponses = (["3", "", "1", "CLASSE_A"] + self.DICTEE
-                    + ["5", "", "", "", "CLASSE_A", "CLASSE_B", "0"])
+        """Le parcours entier : on dicte avec une classe, on rejoue l'autre."""
+        reponses = (["3", "", "1", "", "CLASSE_A"] + self.DICTEE
+                    + ["4", "", "", "2", "", "CLASSE_B", "0"])
         code, theatre = self.lancer(reponses)
         self.assertEqual(code, 0)
         self.assertEqual(len(list(self.dossier.glob("*_recette.json"))), 1)
-        # La dictee a saisi et sauvegarde 493303. Le rejeu repasse CLASSE_A :
-        # ce theatre ne connait qu'une classe, donc il repond « deja affecte »,
-        # ce qui est exactement ce qu'on veut voir a une relance. Puis
-        # CLASSE_B ajoute 493304.
-        self.assertEqual(theatre.existants, ["493303", "493304"])
-        self.assertEqual(theatre.sauvegardes, 2)
+        # La dictee a saisi ET sauvegarde 493303 : c'est une vraie passe.
+        # Le rejeu a blanc saisit 493304 sans rien sauvegarder.
+        self.assertEqual(theatre.existants, ["493303"])
+        self.assertEqual(theatre.valides, ["493304"])
+        self.assertEqual(theatre.sauvegardes, 1)
         journal = _journal(sorted(self.dossier.glob("*_journal.csv"))[-1])
-        self.assertEqual(_etats(journal, "493303"), [DEJA_AFFECTE])
+        self.assertEqual(_etats(journal, "493304"), [SAISI, NON_SAUVEGARDE])
+
+    def test_une_fenetre_que_la_dictee_n_a_pas_vue_arrete_le_rejeu(self):
+        """La dictee s'est faite sans point deja affecte : la fenetre du
+        refus n'a ete dictee par personne, donc le rejeu s'arrete dessus au
+        lieu de presser un bouton au hasard."""
+        reponses = (["3", "", "1", "", "CLASSE_A"] + self.DICTEE
+                    + ["5", "", "", "", "CLASSE_A", "0"])
+        code, theatre = self.lancer(reponses)
+        self.assertEqual(code, 0)
+        self.assertIn("ARRET", self.texte)
+        self.assertIn("fenetre inconnue « Information »", self.texte)
+        self.assertIn("Redicter la passe", self.texte)
+        self.assertEqual(theatre.sauvegardes, 1, "seule la dictee a sauvegarde")
+
+    def test_a_blanc_la_meme_fenetre_est_annulee_pour_qu_on_la_voie(self):
+        """A blanc on ne s'arrete pas : le but est d'en voir le plus possible,
+        et le rapport garde la fenetre pour qu'on sache quoi dicter."""
+        reponses = (["3", "", "1", "", "CLASSE_A"] + self.DICTEE
+                    + ["4", "", "", "1", "", "CLASSE_A", "0"])
+        code, theatre = self.lancer(reponses)
+        self.assertEqual(code, 0)
+        self.assertIn("POPUP_INCONNUE 1", self.texte)
+        self.assertEqual(theatre.sauvegardes, 1, "seule la dictee a sauvegarde")
+        rapport = sorted(self.dossier.glob("*_rapport.txt"))[-1].read_text(
+            encoding="utf-8-sig")
+        self.assertIn("Le point 493303 est deja affecte", rapport)
 
     def test_la_dictee_demande_confirmation_avant_de_toucher_a_SAP(self):
-        code, theatre = self.lancer(["3", "", "1", "non", "0"])
+        code, theatre = self.lancer(["3", "", "1", "", "non", "0"])
         self.assertEqual(code, 0)
         self.assertEqual(theatre.gestes, [])
         self.assertIn("non confirmee", self.texte)

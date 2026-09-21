@@ -430,23 +430,16 @@ class SapGui:
 
 @dataclass(frozen=True)
 class Cibles:
-    """Le peu que le programme sait d'avance. Tout le reste est DICTE.
+    """La seule chose que le programme sait d'avance : ce qui sauvegarde.
 
-    La sequence des gestes n'est pas ici : elle est apprise au pilotage et
-    vit dans une recette. Ne restent que les choses qui doivent etre connues
-    du code lui-meme — ce qui compte comme une sauvegarde, puisque le mode a
-    blanc la refuse mecaniquement, et les deux boutons des fenetres
-    surgissantes que la trace du recorder a montrees.
+    Tout le reste — les champs, les boutons, les fenetres, l'enchainement —
+    se dicte et vit dans une recette. Ceci ne reste ici que parce que le
+    mode a blanc doit pouvoir REFUSER la sauvegarde, et qu'une garde qu'on
+    pourrait dicter ne serait plus une garde.
     """
 
-    #: Le geste que le mode a blanc refuse, quelle que soit la recette.
     bouton_sauvegarde: str = "tbar[0]/btn[11]"
     touche_sauvegarde: int = 11
-
-    # trace — dans la fenetre qui suit une validation quand la classe a des
-    # caracteristiques obligatoires : « poursuivre » puis « valider ».
-    bouton_poursuivre: str = "tbar[0]/btn[8]"
-    bouton_valider: str = "tbar[0]/btn[0]"
 
 
 # =====================================================================
@@ -461,7 +454,8 @@ ECRIRE_LIGNE_LIBRE = "ecrire_ligne_libre"   # dans la 1re cellule libre d'un tab
 PRESSER = "presser"                         # un bouton
 SELECTIONNER = "selectionner"               # une radio, une case, un onglet
 TOUCHE = "touche"                           # Entree, F8, F11...
-GESTES = (ECRIRE, ECRIRE_LIGNE_LIBRE, PRESSER, SELECTIONNER, TOUCHE)
+MARQUER_KO = "marquer_ko"                   # « cette fenetre veut dire : refuse »
+GESTES = (ECRIRE, ECRIRE_LIGNE_LIBRE, PRESSER, SELECTIONNER, TOUCHE, MARQUER_KO)
 
 #: Les trois moments d'une recette. Une passe CL24N n'est pas une boucle
 #: plate : ouvrir la transaction et saisir la classe se font UNE fois, chaque
@@ -528,7 +522,13 @@ class Geste:
     source: Source | None = None
     touche: int = 0
     table: str = ""             # ECRIRE_LIGNE_LIBRE : le tableau
-    colonne_cible: str = ""     # ECRIRE_LIGNE_LIBRE : la colonne du tableau
+    colonne_cible: str = ""     # ECRIRE_LIGNE_LIBRE : le nom de la colonne
+    #: L'index de la colonne DANS l'identifiant SAP : `COLONNE[x,ligne]`.
+    #: Il ne vaut pas toujours zero — la deuxieme colonne d'un tableau
+    #: s'ecrit `[1,ligne]` — et le supposer tapait dans la mauvaise colonne.
+    index_colonne: int = 0
+    #: Une ligne VISIBLE precise ; `None` veut dire « la premiere libre ».
+    ligne: int | None = None
     libelle: str = ""           # ce qu'un humain lit a l'ecran
     si_fenetre: str = ""        # titre de la fenetre surgissante exigee
 
@@ -541,12 +541,16 @@ class Geste:
         if self.type == ECRIRE:
             return f"ecrire {self.source} dans {self.libelle or self.suffixe}{condition}"
         if self.type == ECRIRE_LIGNE_LIBRE:
-            return (f"ecrire {self.source} dans la premiere ligne libre de "
+            ou = ("la premiere ligne libre" if self.ligne is None
+                  else f"la ligne {self.ligne}")
+            return (f"ecrire {self.source} dans {ou} de "
                     f"{self.colonne_cible}{condition}")
         if self.type == TOUCHE:
             nom = {0: "Entree", 11: "Sauvegarder (F11)", 12: "Annuler (F12)"}.get(
                 self.touche, f"touche {self.touche}")
             return f"{nom} sur {self.fenetre}{condition}"
+        if self.type == MARQUER_KO:
+            return f"marquer le point REFUSE{condition}"
         verbe = "presser" if self.type == PRESSER else "selectionner"
         return f"{verbe} {self.libelle or self.suffixe}{condition}"
 
@@ -558,6 +562,10 @@ class Geste:
                 brut[nom] = getattr(self, nom)
         if self.type == TOUCHE:
             brut["touche"] = self.touche
+        if self.type == ECRIRE_LIGNE_LIBRE:
+            brut["index_colonne"] = self.index_colonne
+            if self.ligne is not None:
+                brut["ligne"] = self.ligne
         if self.source is not None:
             brut["source"] = self.source.en_json()
         return brut
@@ -574,6 +582,8 @@ class Geste:
             touche=int(brut.get("touche", 0)),
             table=str(brut.get("table", "")),
             colonne_cible=str(brut.get("colonne_cible", "")),
+            index_colonne=int(brut.get("index_colonne", 0)),
+            ligne=(int(brut["ligne"]) if brut.get("ligne") is not None else None),
             libelle=str(brut.get("libelle", "")),
             si_fenetre=str(brut.get("si_fenetre", "")),
         )
@@ -700,8 +710,7 @@ PASSE = "PASSE"                     # debut et fin de passe
 ARRET = "ARRET"                     # la passe s'est arretee ; le detail dit pourquoi
 
 # -- verdicts sur une fenetre surgissante ------------------------------------
-V_DEJA = "deja_affecte"
-V_VALORISATION = "valorisation_ignoree"
+V_KO = "refus_dicte"                # un geste `ko` a marque la fenetre
 V_INCONNUE = "popup_inconnue_annulee"
 
 
@@ -829,7 +838,14 @@ class Rapport:
 
 
 def rendre_ecran(driver: Any, ecran: Ecran) -> str:
-    """Un ecran, en texte. Lecture seule, aucun geste."""
+    """Un ecran, en texte. Lecture seule, aucun geste.
+
+    **Les tableaux y sont replies en grilles.** Un tableau de trois cents
+    lignes sur cinq colonnes expose mille cinq cents champs : les lister un
+    par un noyait le releve, au point qu'on n'y retrouvait plus les champs de
+    saisie ni les boutons. Les colonnes sont nommees une fois, les lignes
+    sont un apercu.
+    """
     identite = ecran.identite
     lignes = [
         f"  identite  systeme {identite.systeme or '-'}  mandant "
@@ -842,13 +858,25 @@ def rendre_ecran(driver: Any, ecran: Ecran) -> str:
                       f"{'surgissante' if ouverte.surgissante else 'principale'}"
                       f"  « {ouverte.titre} »")
     lignes.append(f"  statut    {statut_texte(driver.status())}")
-    lignes.append(f"  champs de {ecran.fenetre} ({len(ecran.champs)}) : "
+
+    inventaire = inventorier(ecran)
+    dans_un_tableau = {champ.id
+                       for tableau in inventaire.tableaux
+                       for cellules in tableau.lignes.values()
+                       for champ in cellules.values()}
+    hors_tableau = [c for c in ecran.champs if c.id not in dans_un_tableau]
+    lignes.append(f"  champs de {ecran.fenetre} ({len(hors_tableau)} hors "
+                  f"tableau, {len(ecran.champs)} en tout) : "
                   f"id | type | nom | « texte » | infobulle | modifiable")
-    for champ in ecran.champs:
+    for champ in hors_tableau:
         soustype = f"/{champ.soustype}" if champ.soustype else ""
         modifiable = {True: "oui", False: "non"}.get(champ.modifiable, "?")
         lignes.append(f"    {champ.id} | {champ.type}{soustype} | {champ.nom} | "
                       f"« {champ.texte} » | {champ.infobulle} | {modifiable}")
+    for rang, tableau in enumerate(inventaire.tableaux, start=1):
+        lignes.append("")
+        lignes.append(f"  {tableau.id}")
+        lignes.extend(rendre_tableau(tableau, rang))
     return "\n".join(lignes)
 
 
@@ -880,7 +908,8 @@ class Automate:
         self._depart = 0
         #: (tableau, cellule) de la derniere ligne libre ecrite, ou None.
         self._derniere_cellule: tuple[str, str] | None = None
-        self._textes_popup = ""
+        #: Les textes de la fenetre qu'un geste `ko` a marquee, ou "".
+        self._ko = ""
         self._en_attente: list[str] = []
         self._sauvegarde_en_cours = False
 
@@ -962,11 +991,12 @@ class Automate:
 
     # -- le tableau : index VISIBLE, defilement explicite ------------------------
 
-    def _cellule(self, table: str, colonne: str, rang: int) -> str:
-        return f"{table}/{colonne}[0,{rang}]"
+    @staticmethod
+    def _cellule(table: str, colonne: str, rang: int, index: int = 0) -> str:
+        return f"{table}/{colonne}[{index},{rang}]"
 
     def _page(self, table: str, colonne: str, position: int,
-              visibles: int) -> list[str]:
+              visibles: int, index: int = 0) -> list[str]:
         """Les textes des cellules visibles, apres defilement.
 
         Par `read`, cellule par cellule, et non par `fields`, qui traverse
@@ -977,13 +1007,14 @@ class Automate:
         page: list[str] = []
         for rang in range(visibles):
             try:
-                page.append(self.d.read(self._cellule(table, colonne, rang)))
+                page.append(self.d.read(
+                    self._cellule(table, colonne, rang, index)))
             except ObjetIntrouvable:
                 break
         return page
 
     def _ligne_vide_depuis(self, table: str, colonne: str, depart: int,
-                           visibles: int) -> int | None:
+                           visibles: int, index: int = 0) -> int | None:
         """Rang VISIBLE d'une cellule vide, le defilement laisse dessus ; None
         si rien depuis `depart`.
 
@@ -993,7 +1024,7 @@ class Automate:
         """
         position, precedente = depart, None
         while position < self.PLAFOND_LIGNES:
-            page = self._page(table, colonne, position, visibles)
+            page = self._page(table, colonne, position, visibles, index)
             if not page:
                 raise Arret(f"tableau {table} : aucune cellule lisible a la "
                             f"position {position}")
@@ -1008,7 +1039,8 @@ class Automate:
         raise Arret(f"tableau {table} : aucune ligne vide dans les "
                     f"{self.PLAFOND_LIGNES} premieres lignes")
 
-    def _premiere_ligne_vide(self, table: str, colonne: str) -> int:
+    def _premiere_ligne_vide(self, table: str, colonne: str,
+                             index: int = 0) -> int:
         """Le balayage part de la page ou la derniere ligne vide a ete trouvee.
 
         Le tableau ne fait que grandir sous nos ecritures, et les lignes
@@ -1019,10 +1051,11 @@ class Automate:
         visibles = self.d.table_visible_rows(table)
         if visibles <= 0:
             raise Arret(f"tableau {table} : aucune ligne visible")
-        rang = self._ligne_vide_depuis(table, colonne, self._depart, visibles)
+        rang = self._ligne_vide_depuis(table, colonne, self._depart, visibles,
+                                       index)
         if rang is None and self._depart:
             self._depart = 0
-            rang = self._ligne_vide_depuis(table, colonne, 0, visibles)
+            rang = self._ligne_vide_depuis(table, colonne, 0, visibles, index)
         if rang is None:
             raise Arret(f"tableau {table} : aucune ligne vide, le defilement "
                         f"ne progresse plus")
@@ -1030,56 +1063,23 @@ class Automate:
 
     # -- les fenetres surgissantes ------------------------------------------------
 
-    def _fermer(self, fenetre: str, ecran: Ecran) -> None:
-        valider = bouton(ecran, self.c.bouton_valider)
-        if valider is not None:
-            self._presser(valider)
-        else:
-            self._touche(0, fenetre)
-
     def _appliquer_regle(self, fenetre: str, ecran: Ecran, contexte: str) -> str:
-        """Une fenetre, un verdict. L'ordre des regles est celui-ci a dessein."""
+        """Ce qu'on fait d'une fenetre que PERSONNE n'a dictee.
+
+        **Il n'y a pas de regle ici, et c'est le point.** Ce qu'il faut faire
+        d'une fenetre surgissante se dicte — un geste conditionne a son titre
+        la ferme, un `ko` dit qu'elle signe un refus. Une fenetre qui arrive
+        jusqu'ici n'a ete prevue par personne : la supposer benigne, c'est
+        presser un bouton par defaut sur une boite qu'on n'a pas lue.
+        """
         textes = " | ".join(textes_de(ecran))
-
-        # 1. HYPOTHESE : un point deja affecte le dit dans un texte — et c'est
-        #    une boite de MESSAGE, sans bouton de choix. Une QUESTION qui
-        #    contiendrait le mot reste inconnue : on n'y presse jamais le
-        #    bouton par defaut.
-        if MOTIF_DEJA_AFFECTE.search(textes) and not boutons_de_choix(ecran):
-            self._textes_popup = textes
-            self._fermer(fenetre, ecran)
-            return V_DEJA
-
-        # 2. trace : caracteristiques obligatoires — « poursuivre », puis
-        #    « valider » sur la fenetre presente ensuite, que ce soit une
-        #    autre ou encore la meme : la trace dit btn[8] puis btn[0], et
-        #    rien de plus. Reconnue par son bouton, pas par son texte. Une
-        #    QUESTION apres « poursuivre » n'est jamais validee : elle reste
-        #    a l'ecran, et la regle 3 en decide au tour suivant.
-        poursuivre = bouton(ecran, self.c.bouton_poursuivre)
-        if poursuivre is not None:
-            self._presser(poursuivre)
-            suite = self._popups()
-            if suite:
-                fenetre_suite = suite[0].nom or suite[0].id
-                ecran_suite = self.rapport.relever(
-                    fenetre_suite, f"{contexte} : apres « poursuivre »")
-                valider = bouton(ecran_suite, self.c.bouton_valider)
-                choix = boutons_de_choix(ecran_suite)
-                if valider is not None and not choix:
-                    self._presser(valider)
-                elif choix:
-                    self.rapport.ligne(f"  apres « poursuivre » : une question "
-                                       f"({choix}), rien n'est presse")
-            return V_VALORISATION
-
-        # 3. inconnue.
         if self.executer:
             suite = ("la sauvegarde a ete PRESSEE, son etat est a verifier "
                      "dans SAP" if self._sauvegarde_en_cours
                      else "les saisies en attente ne sont pas sauvegardees")
             raise Arret(f"{contexte} : fenetre inconnue « {ecran.titre} » "
-                        f"({textes[:300]}) ; voir le rapport ; {suite}")
+                        f"({textes[:300]}) ; voir le rapport ; {suite}. "
+                        f"Redicter la passe en disant quoi en faire")
         self._touche(12, fenetre)
         return V_INCONNUE
 
@@ -1130,10 +1130,11 @@ class Automate:
                         f"Entree suivante. La retirer a la main avant de "
                         f"relancer ; voir le rapport")
         self.d.write(cellule, "")
+        self._ko = ""           # ce qui suit doit parler de l'EFFACEMENT
         self._touche(0)
         verdicts = self._traiter_popups(f"point {point} : apres effacement")
         statut = self.d.status()
-        if statut.type in ("E", "A") or V_DEJA in verdicts:
+        if statut.type in ("E", "A") or self._ko:
             raise Arret(f"point {point} : la ligne refusee ne se laisse pas "
                         f"vider ({statut_texte(statut)} ; fenetres {verdicts})")
         return "ligne videe" + (f" ; fenetres {verdicts}" if verdicts else "")
@@ -1156,24 +1157,29 @@ class Automate:
                 return popup.nom or popup.id
         return ""
 
-    def _jouer(self, geste: Geste, ligne: dict[str, str]) -> bool:
-        """Joue un geste. Rend FAUX si sa condition de fenetre n'est pas la."""
+    def _jouer(self, geste: Geste, ligne: dict[str, str]) -> None:
+        """Fait un geste. La condition de fenetre a deja ete verifiee."""
         if geste.si_fenetre:
-            ouverte = self._fenetre_ouverte(geste.si_fenetre)
-            if not ouverte:
-                self.rapport.ligne(f"  saute (« {geste.si_fenetre} » absente) : "
-                                   f"{geste.resume()}")
-                return False
             # Une fenetre que la RECETTE gere ne passe pas par
             # `_traiter_popups` : sans ce releve, elle serait la seule a
             # traverser une passe sans laisser de trace dans le rapport.
-            self.rapport.relever(ouverte, f"geste dicte : {geste.resume()}")
+            self.rapport.relever(self._fenetre_ouverte(geste.si_fenetre),
+                                 f"geste dicte : {geste.resume()}")
         valeur = geste.source.valeur(ligne) if geste.source is not None else ""
-        if geste.type == TOUCHE:
+        if geste.type == MARQUER_KO:
+            self._ko = " | ".join(textes_de(self.d.fields(geste.fenetre)))
+            self.rapport.ligne(f"  refus dicte : {self._ko[:200]}")
+        elif geste.type == TOUCHE:
             self._touche(geste.touche, geste.fenetre)
         elif geste.type == ECRIRE_LIGNE_LIBRE:
-            rang = self._premiere_ligne_vide(geste.table, geste.colonne_cible)
-            cellule = self._cellule(geste.table, geste.colonne_cible, rang)
+            if geste.ligne is None:
+                rang = self._premiere_ligne_vide(geste.table,
+                                                 geste.colonne_cible,
+                                                 geste.index_colonne)
+            else:
+                rang = geste.ligne
+            cellule = self._cellule(geste.table, geste.colonne_cible, rang,
+                                    geste.index_colonne)
             self._derniere_cellule = (geste.table, cellule)
             self._ecrire(cellule, valeur)
         elif geste.type == ECRIRE:
@@ -1182,28 +1188,47 @@ class Automate:
             self._presser(self._resoudre(geste))
         else:                                       # SELECTIONNER
             self.d.select(self._resoudre(geste))
-        return True
 
     def _jouer_moment(self, gestes: list[Geste], ligne: dict[str, str],
                       contexte: str) -> list[str]:
         """Joue une suite de gestes, en traitant ce qui surgit entre deux.
 
-        **Les regles automatiques ne passent pas devant la recette.** Si le
-        geste suivant est conditionne a une fenetre qui vient de s'ouvrir,
-        c'est lui qui agit ; sinon seulement, les regles connues decident.
-        Sans cet ordre, une regle fermerait la fenetre qu'un geste dicte
-        attendait, et le rejeu differerait de ce qui a ete dicte.
+        **C'est la fenetre presente qui decide, pas le rang du geste.** Quand
+        une fenetre surgissante est ouverte, seul un geste qui la VISE peut
+        agir, ou qu'il soit dans la liste ; les autres attendent. Sans cela,
+        deux fenetres qui ne surgissent pas toujours dans le meme ordre —
+        « deja affecte » pour un point, « valorisation » pour le suivant —
+        auraient exige d'etre dictees dans l'ordre exact de chaque cas, ce
+        qui est impossible a dicter.
+
+        **Les regles ne passent jamais devant la recette.** Ce n'est qu'une
+        fois qu'aucun geste ne vise la fenetre ouverte qu'elle est traitee
+        comme inconnue : arret, ou F12 a blanc.
         """
         verdicts: list[str] = []
-        for rang, geste in enumerate(gestes):
-            self._jouer(geste, ligne)
-            suivant = gestes[rang + 1] if rang + 1 < len(gestes) else None
-            if (suivant is not None and suivant.si_fenetre
-                    and self._fenetre_ouverte(suivant.si_fenetre)):
+        restants = list(gestes)
+        plafond = len(gestes) + 2 * self.PLAFOND_POPUPS + 2
+        for _ in range(plafond):
+            if self._popups():
+                vise = next((g for g in restants if g.si_fenetre
+                             and self._fenetre_ouverte(g.si_fenetre)), None)
+                if vise is not None:
+                    restants.remove(vise)
+                    self._jouer(vise, ligne)
+                    continue
+                verdicts += self._traiter_popups(contexte)
                 continue
-            verdicts += self._traiter_popups(
-                f"{contexte} : apres « {geste.resume()} »")
-        return verdicts
+            if not restants:
+                return verdicts
+            geste = restants.pop(0)
+            if geste.si_fenetre:
+                self.rapport.ligne(f"  saute (« {geste.si_fenetre} » absente) : "
+                                   f"{geste.resume()}")
+                continue
+            self._jouer(geste, ligne)
+        raise Arret(f"{contexte} : {plafond} tours sans venir a bout des "
+                    f"gestes restants {[g.resume() for g in restants]} ; "
+                    f"voir le rapport")
 
     def _garde_transaction(self, recette: Recette, quand: str) -> None:
         """La garde d'identite, apprise plutot que codee."""
@@ -1220,6 +1245,7 @@ class Automate:
         """Joue le corps de la recette pour un point. Rend son etat."""
         ligne = {COLONNE_POINT: point, COLONNE_CLASSE: classe}
         self._derniere_cellule = None
+        self._ko = ""
         verdicts = self._jouer_moment(recette.corps, ligne, f"point {point}")
         statut = self.d.status()
         avertissement = None
@@ -1233,10 +1259,9 @@ class Automate:
         self.rapport.ligne(f"  point {point} : statut {statut_texte(statut)} ; "
                            f"fenetres {verdicts or '-'}")
 
-        if V_DEJA in verdicts:
+        if self._ko:
             etat = DEJA_AFFECTE
-            detail = (f"fenetre « {self._textes_popup[:200]} » ; "
-                      + self._retirer(point))
+            detail = f"refus dicte « {self._ko[:200]} » ; " + self._retirer(point)
         elif statut.type in ("E", "A"):
             etat = REFUSE
             detail = f"{statut_texte(statut)} ; " + self._retirer(point)
@@ -1246,13 +1271,9 @@ class Automate:
                       + self._retirer(point))
         else:
             etat = SAISI
-            morceaux = []
-            if V_VALORISATION in verdicts:
-                morceaux.append("caracteristiques obligatoires laissees vides")
-            if avertissement is not None:
-                morceaux.append(f"avertissement accepte par une seconde Entree : "
-                                f"{statut_texte(avertissement)}")
-            detail = " ; ".join(morceaux)
+            detail = (f"avertissement accepte par une seconde Entree : "
+                      f"{statut_texte(avertissement)}"
+                      if avertissement is not None else "")
         self.journal.noter(classe, point, etat, detail)
         return etat
 
@@ -1385,6 +1406,13 @@ class Automate:
 _CELLULE = re.compile(r"^(?P<table>.*/tbl[^/]+)/(?P<colonne>[^/\[]+)"
                       r"\[(?P<x>\d+),(?P<y>\d+)\]$")
 
+#: Comment on designe une cellule au clavier : `T1.C2` vise la colonne 2 du
+#: tableau 1, dans la premiere ligne LIBRE ; `T1.L5.C2` vise la ligne 5.
+#: `T1` seul vise la colonne 1 — commode quand le tableau n'en a qu'une.
+_DESIGNATION = re.compile(
+    r"^T(?P<tableau>\d+)(?:\.?L(?P<ligne>\d+))?(?:\.?C(?P<colonne>\d+))?$",
+    re.IGNORECASE)
+
 #: Ce qu'on peut selectionner : une radio, une case, un onglet.
 SELECTIONNABLES = frozenset({"GuiRadioButton", "GuiCheckBox", "GuiTab"})
 
@@ -1397,12 +1425,17 @@ AIDE = """  COMMANDES
 
     1 = "015"      ecrire la constante « 015 » dans le champ 1
     1 = classe     ecrire la colonne `classe` du fichier dans le champ 1
-    T1 = point     ecrire la colonne `point` dans la premiere LIGNE LIBRE
-                   du tableau T1 — c'est ce qu'il faut pour une liste
+    T1.C2 = point  ecrire la colonne `point` du fichier dans la colonne C2
+                   du tableau T1, a sa premiere LIGNE LIBRE — c'est ce
+                   qu'il faut pour alimenter une liste
+    T1.L5.C2 = ... la meme chose, mais dans la ligne visible L5
     b2             presser le bouton 2
     r1             selectionner le choix 1 (radio, case, onglet)
     e              Entree
     t11            touche de fonction 11 (11 = sauvegarder, 12 = annuler)
+    ko             dans une fenetre surgissante : « celle-ci veut dire que
+                   le point est REFUSE ». Au rejeu, le point sortira KO et
+                   sa ligne sera retiree. A dire avant le geste qui ferme
 
     v              revoir l'ecran     v wnd[1]  voir une autre fenetre
     liste          revoir la recette dictee jusqu'ici
@@ -1418,11 +1451,46 @@ AIDE = """  COMMANDES
 
 
 @dataclass
+class Tableau:
+    """Un tableau vu comme une GRILLE : ses colonnes, puis ses lignes.
+
+    **C'est le point qui rendait un releve illisible.** Un tableau de trois
+    cents lignes sur cinq colonnes expose mille cinq cents champs, et les
+    lister un par un noyait l'ecran — on n'y retrouvait ni les vrais champs
+    de saisie, ni les boutons. Ici les colonnes sont nommees UNE fois, et les
+    lignes ne sont qu'un apercu : on designe ensuite une cellule par sa
+    colonne et sa ligne, pas par son identifiant.
+    """
+
+    id: str
+    #: (nom de la colonne, index dans l'identifiant `NOM[index,ligne]`).
+    colonnes: list[tuple[str, int]] = field(default_factory=list)
+    #: ligne visible -> {nom de colonne: champ}
+    lignes: dict[int, dict[str, Champ]] = field(default_factory=dict)
+
+    @property
+    def nom(self) -> str:
+        return self.id.rsplit("/", 1)[-1]
+
+    def colonne(self, rang: int) -> tuple[str, int] | None:
+        """La colonne numero `rang` (1 pour la premiere), ou None."""
+        if 1 <= rang <= len(self.colonnes):
+            return self.colonnes[rang - 1]
+        return None
+
+    def libres(self, nom: str) -> int:
+        """Combien de lignes VISIBLES ont cette colonne vide."""
+        return sum(1 for cellules in self.lignes.values()
+                   if not (cellules.get(nom).texte.strip()
+                           if cellules.get(nom) else ""))
+
+
+@dataclass
 class Inventaire:
     """Ce qu'un ecran offre, numerote pour etre designe au clavier."""
 
     champs: list[Champ] = field(default_factory=list)
-    tableaux: list[tuple[str, str, list[Champ]]] = field(default_factory=list)
+    tableaux: list[Tableau] = field(default_factory=list)
     boutons: list[Champ] = field(default_factory=list)
     choix: list[Champ] = field(default_factory=list)
 
@@ -1430,26 +1498,67 @@ class Inventaire:
 def inventorier(ecran: Ecran) -> Inventaire:
     """Trie les champs d'un ecran en quatre familles designables.
 
-    Les cellules de tableau sont mises a part : on ne dicte pas « ecris en
-    ligne 3 », on dicte « ecris dans la premiere ligne libre ». Un rang fige
-    traiterait la mauvaise ligne des que la liste change, sans rien lever.
+    Les cellules de tableau sont repliees en grilles : on ne dicte pas un
+    identifiant de cellule, on dicte « tableau 1, colonne 2, premiere ligne
+    libre ». Un identifiant fige traiterait la mauvaise ligne des que la
+    liste change, sans rien lever.
     """
     inventaire = Inventaire()
-    tableaux: dict[tuple[str, str], list[Champ]] = {}
+    tableaux: dict[str, Tableau] = {}
     for champ in ecran.champs:
         trouve = _CELLULE.match(champ.id)
-        if trouve is not None and champ.type in SAISISSABLES:
-            cle = (trouve.group("table"), trouve.group("colonne"))
-            tableaux.setdefault(cle, []).append(champ)
+        if trouve is not None and champ.type in SAISISSABLES_DICTEES:
+            tableau = tableaux.setdefault(trouve.group("table"),
+                                          Tableau(id=trouve.group("table")))
+            nom = trouve.group("colonne")
+            index, ligne = int(trouve.group("x")), int(trouve.group("y"))
+            if (nom, index) not in tableau.colonnes:
+                tableau.colonnes.append((nom, index))
+            tableau.lignes.setdefault(ligne, {})[nom] = champ
         elif champ.type in SAISISSABLES_DICTEES:
             inventaire.champs.append(champ)
         elif champ.type == "GuiButton":
             inventaire.boutons.append(champ)
         elif champ.type in SELECTIONNABLES:
             inventaire.choix.append(champ)
-    inventaire.tableaux = [(t, c, cellules)
-                           for (t, c), cellules in tableaux.items()]
+    for tableau in tableaux.values():
+        tableau.colonnes.sort(key=lambda paire: paire[1])
+    inventaire.tableaux = list(tableaux.values())
     return inventaire
+
+
+#: Au-dela, l'apercu d'un tableau est tronque : il sert a DESIGNER une
+#: cellule, pas a lire les donnees. Le tableau entier se lit dans SAP.
+APERCU_LIGNES = 6
+APERCU_COLONNES = 6
+
+
+def rendre_tableau(tableau: Tableau, numero: int) -> list[str]:
+    """Un tableau en grille : ses colonnes nommees une fois, puis un apercu."""
+    colonnes = tableau.colonnes[:APERCU_COLONNES]
+    largeur = 22
+    lignes = [f" TABLEAU T{numero}  {tableau.nom}   "
+              f"{len(tableau.lignes)} ligne(s) visible(s)"
+              + (f", {len(tableau.colonnes)} colonnes dont "
+                 f"{len(colonnes)} montrees"
+                 if len(tableau.colonnes) > len(colonnes)
+                 else f", {len(tableau.colonnes)} colonne(s)")]
+    entete = "       " + "".join(
+        f"C{rang}:{nom}"[:largeur].ljust(largeur + 1)
+        for rang, (nom, _) in enumerate(colonnes, start=1))
+    lignes.append(entete.rstrip())
+    for ligne in sorted(tableau.lignes)[:APERCU_LIGNES]:
+        cellules = tableau.lignes[ligne]
+        rendu = f"   L{ligne:<3} "
+        for nom, _ in colonnes:
+            champ = cellules.get(nom)
+            texte = (champ.texte.strip() if champ else "")
+            rendu += (texte or "·")[:largeur].ljust(largeur + 1)
+        lignes.append(rendu.rstrip())
+    if len(tableau.lignes) > APERCU_LIGNES:
+        lignes.append(f"   ... {len(tableau.lignes) - APERCU_LIGNES} "
+                      f"ligne(s) visible(s) de plus")
+    return lignes
 
 
 def _court(identifiant: str) -> str:
@@ -1480,13 +1589,9 @@ def rendre_inventaire(driver: Any, ecran: Ecran,
             fige = "" if champ.modifiable is not False else "   (fige)"
             lignes.append(f"   {rang:>3}  {_fin(champ.id):<28} "
                           f"« {champ.texte[:24]} »{fige}")
-    for rang, (table, colonne, cellules) in enumerate(inventaire.tableaux, start=1):
-        libres = sum(1 for c in cellules if not c.texte.strip())
+    for rang, tableau in enumerate(inventaire.tableaux, start=1):
         lignes.append("")
-        lignes.append(f" TABLEAU T{rang}  {_fin(table)} / {colonne}")
-        lignes.append(f"        {len(cellules)} ligne(s) visible(s), "
-                      f"{libres} libre(s) : "
-                      + ", ".join(f"« {c.texte[:12]} »" for c in cellules[:6]))
+        lignes.extend(rendre_tableau(tableau, rang))
     if inventaire.choix:
         lignes.append("")
         lignes.append(" CHOIX")
@@ -1602,12 +1707,17 @@ class Pilote:
         if not self._autorise(geste):
             return
         valeur = geste.source.valeur(self._exemple()) if geste.source else ""
-        if geste.type == TOUCHE:
+        if geste.type == MARQUER_KO:
+            pass                # il ne touche a rien : il CLASSE, au rejeu
+        elif geste.type == TOUCHE:
             self.d.vkey(geste.touche, geste.fenetre)
         elif geste.type == ECRIRE_LIGNE_LIBRE:
-            rang = self._ligne_libre(geste.table, geste.colonne_cible)
+            rang = (geste.ligne if geste.ligne is not None
+                    else self._ligne_libre(geste.table, geste.colonne_cible,
+                                           geste.index_colonne))
             self._ecrire_et_relire(
-                f"{geste.table}/{geste.colonne_cible}[0,{rang}]", valeur)
+                f"{geste.table}/{geste.colonne_cible}"
+                f"[{geste.index_colonne},{rang}]", valeur)
         elif geste.type == ECRIRE:
             self._ecrire_et_relire(geste.cible, valeur)
         elif geste.type == PRESSER:
@@ -1626,7 +1736,7 @@ class Pilote:
         """
         return dict(self._valeurs)
 
-    def _ligne_libre(self, table: str, colonne: str) -> int:
+    def _ligne_libre(self, table: str, colonne: str, index: int = 0) -> int:
         """Le rang VISIBLE de la premiere cellule libre, defilement laisse dessus."""
         visibles = self.d.table_visible_rows(table)
         position = 0
@@ -1636,7 +1746,8 @@ class Pilote:
             page = []
             for rang in range(visibles):
                 try:
-                    page.append(self.d.read(f"{table}/{colonne}[0,{rang}]"))
+                    page.append(self.d.read(
+                        f"{table}/{colonne}[{index},{rang}]"))
                 except ObjetIntrouvable:
                     break
             if not page:
@@ -1675,6 +1786,30 @@ class Pilote:
             return None
         return self._inventaire.champs[int(numero) - 1]
 
+    def _cellule_designee(self, gauche: str):
+        """(tableau, nom de colonne, index, ligne) pour un `T1.L5.C2`, ou None."""
+        trouve = _DESIGNATION.match(gauche)
+        if trouve is None:
+            return None
+        rang = int(trouve.group("tableau"))
+        if not 1 <= rang <= len(self._inventaire.tableaux):
+            self.ecrire(f"   il n'y a pas de tableau T{rang}.")
+            return None
+        tableau = self._inventaire.tableaux[rang - 1]
+        numero = int(trouve.group("colonne") or 1)
+        colonne = tableau.colonne(numero)
+        if colonne is None:
+            self.ecrire(f"   le tableau T{rang} n'a pas de colonne C{numero} "
+                        f"(il en a {len(tableau.colonnes)}).")
+            return None
+        ligne = trouve.group("ligne")
+        if ligne is not None and int(ligne) not in tableau.lignes:
+            self.ecrire(f"   la ligne L{ligne} n'est pas visible dans T{rang} "
+                        f"(visibles : {sorted(tableau.lignes)}).")
+            return None
+        nom, index = colonne
+        return tableau, nom, index, (int(ligne) if ligne is not None else None)
+
     def _affectation(self, ordre: str) -> None:
         gauche, _, droite = ordre.partition("=")
         gauche, droite = gauche.strip(), droite.strip()
@@ -1683,16 +1818,15 @@ class Pilote:
             return
         condition = self._titre_surgissante()
         if gauche.upper().startswith("T"):
-            numero = gauche[1:]
-            if (not numero.isdigit()
-                    or not 1 <= int(numero) <= len(self._inventaire.tableaux)):
-                self.ecrire(f"   il n'y a pas de tableau {gauche}.")
+            designee = self._cellule_designee(gauche)
+            if designee is None:
                 return
-            table, colonne, _ = self._inventaire.tableaux[int(numero) - 1]
-            self._faire(Geste(type=ECRIRE_LIGNE_LIBRE, table=table,
-                              colonne_cible=colonne, fenetre=self._fenetre,
+            tableau, nom, index, ligne = designee
+            self._faire(Geste(type=ECRIRE_LIGNE_LIBRE, table=tableau.id,
+                              colonne_cible=nom, index_colonne=index,
+                              ligne=ligne, fenetre=self._fenetre,
                               source=source, si_fenetre=condition,
-                              libelle=f"{_fin(table)}/{colonne}"))
+                              libelle=f"{tableau.nom}/{nom}"))
             return
         champ = self._champ(gauche)
         if champ is None:
@@ -1724,6 +1858,25 @@ class Pilote:
                           fenetre=self._fenetre, si_fenetre=condition,
                           libelle=nom))
 
+    def _marquer_ko(self) -> None:
+        """« cette fenetre veut dire que le point est refuse ».
+
+        Refuse hors d'une fenetre surgissante : un refus qui ne serait
+        conditionne a rien marquerait TOUS les points, y compris ceux qui
+        passent.
+        """
+        condition = self._titre_surgissante()
+        if not condition:
+            self.ecrire("   `ko` ne se dit que dans une fenetre surgissante : "
+                        "c'est elle qui signe le refus.")
+            return
+        if self.moment != CORPS:
+            self.ecrire("   `ko` ne vaut que dans « corps » : c'est un point "
+                        "qui est refuse, pas une classe.")
+            return
+        self._faire(Geste(type=MARQUER_KO, fenetre=self._fenetre,
+                          si_fenetre=condition))
+
     def _annuler(self) -> None:
         gestes = self.recette.moment(self.moment)
         if not gestes:
@@ -1742,11 +1895,38 @@ class Pilote:
 
     # -- la boucle -----------------------------------------------------------------
 
-    def piloter(self, valeurs: dict[str, str]) -> Recette | None:
+    def _ouvrir(self, transaction: str) -> None:
+        """Pose les deux premiers gestes de toute recette : `/nXXXX`, Entree.
+
+        Les dicter serait deux lignes a taper a chaque fois, et surtout on
+        pourrait les oublier : sans eux la recette ne dit pas sur quelle
+        transaction elle travaille, et la garde d'identite n'a plus rien a
+        comparer avant une sauvegarde.
+        """
+        code = transaction.strip().upper()
+        champ = next((c for c in self._inventaire.champs
+                      if c.id.endswith("okcd")), None)
+        if champ is None:
+            self.ecrire("   pas de champ de commande sur cet ecran : ouvrir "
+                        f"{code} a la main, puis dicter la suite.")
+            return
+        self._faire(Geste(type=ECRIRE, cible=champ.id, suffixe="okcd",
+                          fenetre=self._fenetre,
+                          source=Source(constante=f"/n{code}"), libelle="okcd"))
+        self._faire(Geste(type=TOUCHE, touche=0, fenetre="wnd[0]"))
+        courante = self.d.screen().transaction
+        if courante != code:
+            self.ecrire(f"   ATTENTION : l'ecran annonce {courante or '-'}, pas "
+                        f"{code}.")
+
+    def piloter(self, valeurs: dict[str, str],
+                transaction: str = "") -> Recette | None:
         """Dicte la passe. Rend la recette, ou None si on a abandonne.
 
         `valeurs` est la ligne du fichier avec laquelle on dicte : de vraies
-        valeurs, pour que SAP accepte et que la passe aboutisse.
+        valeurs, pour que SAP accepte et que la passe aboutisse. `transaction`,
+        si elle est donnee, est ouverte d'emblee — les deux gestes entrent
+        dans la recette comme s'ils avaient ete dictes.
         """
         self._valeurs = dict(valeurs)
         identite = self.d.screen()
@@ -1760,6 +1940,8 @@ class Pilote:
                     + ", ".join(f"{c} = {v}" for c, v in valeurs.items()))
         self.ecrire("  `?` pour l'aide, `fin` pour enregistrer.")
         self.montrer()
+        if transaction:
+            self._ouvrir(transaction)
         while True:
             try:
                 ordre = self.lire("  > ").strip()
@@ -1790,6 +1972,8 @@ class Pilote:
                     self.ecrire(f"   note : {self.recette.note}")
                 elif bas in ALIAS_DE_MOMENT:
                     self._changer_de_moment(ALIAS_DE_MOMENT[bas])
+                elif bas == "ko":
+                    self._marquer_ko()
                 elif bas == "e":
                     self._faire(Geste(type=TOUCHE, touche=0,
                                       fenetre=self._fenetre,
@@ -1927,7 +2111,7 @@ def _sorties(sortie: Path, driver: Any) -> tuple[Journal, Rapport, str]:
 
 
 def dicter_sur(driver: Any, valeurs: dict[str, str], *, colonnes: list[str],
-               sortie: Path,
+               sortie: Path, transaction: str = "",
                lire: Callable[[str], str] = input,
                ecrire: Callable[[str], None] = print) -> Path | None:
     """La premiere passe, dictee. Rend le chemin de la recette, ou None."""
@@ -1937,7 +2121,7 @@ def dicter_sur(driver: Any, valeurs: dict[str, str], *, colonnes: list[str],
     try:
         pilote = Pilote(driver, rapport, colonnes=colonnes, lire=lire,
                         ecrire=ecrire)
-        recette = pilote.piloter(valeurs)
+        recette = pilote.piloter(valeurs, transaction)
     finally:
         rapport.fermer()
     if recette is None:
@@ -2117,6 +2301,7 @@ def _dicter(driver, lire, ecrire, sortie: Path, jeu_defaut: Path) -> None:
     if classe is None:
         return
     points = par_classe[classe]
+    transaction = _demander(lire, ecrire, "transaction a ouvrir :", "CL24N")
     ecrire(f"  la dictee se fait avec le premier point de {classe} : "
            f"{points[0]}")
     ecrire("  ce point sera REELLEMENT saisi dans SAP — c'est ce qui fait que "
@@ -2127,7 +2312,7 @@ def _dicter(driver, lire, ecrire, sortie: Path, jeu_defaut: Path) -> None:
         return
     dicter_sur(driver, {COLONNE_POINT: points[0], COLONNE_CLASSE: classe},
                colonnes=[COLONNE_POINT, COLONNE_CLASSE], sortie=sortie,
-               lire=lire, ecrire=ecrire)
+               transaction=transaction, lire=lire, ecrire=ecrire)
 
 
 def _rejouer(driver, lire, ecrire, sortie: Path, jeu_defaut: Path, *,
