@@ -22,6 +22,12 @@ SUITES = [
     ("FALCON", ["-m", "unittest", "discover", "-s", "tests", "-t", "."]),
     ("archive", ["-m", "unittest", "discover", "-s", "historique/tests",
                  "-t", "historique"]),
+    # `cl24n/` est autonome — il n'importe rien de FALCON — mais il est livre
+    # par ce depot, donc ce depot le verifie. Le fichier se lance tel quel,
+    # sans `discover` : c'est ainsi que son LISEZMOI dit de le lancer, et une
+    # commande verifiee differemment de celle qu'on documente ne verifie pas
+    # ce qu'on documente.
+    ("CL24N", ["cl24n/test_cl24n.py"]),
 ]
 
 

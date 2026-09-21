@@ -1,35 +1,58 @@
-"""`automatismes/cl24n_classer.py`, contre un CL24N de theatre.
+"""`cl24n.py`, contre un CL24N de theatre.
 
-Le theatre ci-dessous est un `DriverScripte` qui joue les reponses qu'on lui a
-ecrites : ecran initial, choix du type d'objet, table control qui defile,
-modales « valorisation » et « deja affecte », sauvegarde. **Il n'etablit
-aucune fidelite a SAP** — c'est la regle de `falcon/couture/double.py`, et elle
-vaut ici mot pour mot. Ces tests prouvent que l'automate fait ce qu'il dit
-ETANT DONNE ces reponses : qu'il s'arrete sur l'inconnu, qu'il ne sauvegarde
-jamais a blanc, qu'il ne vide pas une ligne qui ne porte plus le point refuse.
-Ils ne prouvent pas que SAP repond ainsi. Le rapport du premier lancement reel
-le dira.
+Le theatre ci-dessous joue les reponses qu'on lui a ecrites : ecran initial,
+choix du type d'objet, tableau qui defile, fenetres « valorisation » et
+« deja affecte », sauvegarde. **Il n'etablit aucune fidelite a SAP.** Ces
+tests prouvent que le programme fait ce qu'il dit ETANT DONNE ces reponses :
+qu'il s'arrete sur l'inconnu, qu'il ne sauvegarde jamais a blanc, qu'il ne
+vide pas une ligne qui ne porte plus le point refuse, qu'il cherche la ligne
+libre au-dela de la page visible. Ils ne prouvent PAS que SAP repond ainsi —
+un theatre nourri d'hypotheses confirme les hypotheses. Le rapport du premier
+passage a blanc sur un vrai systeme, lui, le dira.
+
+    python test_cl24n.py
 """
 
 from __future__ import annotations
 
 import csv
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable
 
-from automatismes.cl24n_classer import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from cl24n import (                                          # noqa: E402
     A_VERIFIER, ARRET, DEJA_AFFECTE, NON_SAUVEGARDE, PASSE, POPUP_INCONNUE,
-    REFUSE, SAISI, SAUVEGARDE, V_DEJA, V_VALORISATION, Arret, Automate,
-    Journal, Prevol, Rapport, executer_sur, lire_points, meme_valeur, prevol,
-    confirmer,
+    REFUSE, SAISI, SAUVEGARDE, V_DEJA, V_VALORISATION, Arret, Automate, Champ,
+    Ecran, ErreurCouture, Fenetre, Identite, Journal, JeuInvalide,
+    ObjetIntrouvable, Prevol, Rapport, RefusSauvegarde, SapIndisponible,
+    Statut, confirmer, executer_sur, lire_points, menu, meme_valeur,
+    prevol,
 )
-from falcon.couture.double import DriverScripte
-from falcon.donnees.entree import JeuInvalide
-from falcon.noyau import (
-    Champ, Ecran, ErreurCouture, Fenetre, Identite, ObjetIntrouvable,
-    RefusDryRun, Statut,
-)
+
+
+class DriverDeTheatre:
+    """Le socle d'un driver joue : il note les gestes, il n'etablit rien.
+
+    Un test qui s'appuie sur ce que ce double repond verifie le comportement
+    du programme ETANT DONNE cette reponse, jamais que SAP repondrait ainsi.
+    """
+
+    def __init__(self, identite: Identite):
+        self.identite = identite
+        self.statut = Statut()
+        #: (geste, cible, valeur) — ce qui a reellement ete fait.
+        self.gestes: list[tuple[str, str, str]] = []
+        #: Transforme une valeur a l'ecriture, pour jouer ce que SAP fait
+        #: subir aux saisies : troncature, majuscules, refus.
+        self.a_l_ecriture: Callable[[str, str], str] | None = None
+
+    def _noter(self, geste: str, cible: str, valeur: str) -> None:
+        self.gestes.append((geste, cible, valeur))
+
 
 PREFIXE = "/app/con[0]/ses[0]/"          # SAP rend des chemins ABSOLUS
 TABLE = ("wnd[0]/usr/subSUBSCR_ZUORD:SAPLCLFM:1512/subOBJEKT:SAPLCBCM:{dynpro}"
@@ -44,7 +67,7 @@ AVERTI = "777777"            # statut W, puis accepte a la seconde Entree
 QUESTION = "666666"          # une modale que l'automate ne connait pas
 
 
-class Theatre(DriverScripte):
+class Theatre(DriverDeTheatre):
     """CL24N de theatre. Voir l'en-tete : aucune fidelite."""
 
     def __init__(self, *, existants=(), obligatoire=False, deja_en_popup=True,
@@ -53,11 +76,10 @@ class Theatre(DriverScripte):
                  sap_deplace_le_refus=False, valorisation_reste_ouverte=False,
                  question_apres_poursuivre=False,
                  libelles_de_radio=("Equipement", "Point de mesure")):
-        super().__init__(identite=Identite(systeme="K62", mandant="060",
-                                           langue="FR",
-                                           transaction="SESSION_MANAGER",
-                                           programme="SAPLSMTR_NAVIGATION",
-                                           dynpro="0100"))
+        super().__init__(Identite(systeme="K62", mandant="060", langue="FR",
+                                  transaction="SESSION_MANAGER",
+                                  programme="SAPLSMTR_NAVIGATION",
+                                  dynpro="0100"))
         self.ecran = "accueil"
         self.type_objet = type_objet
         self.existants = list(existants)
@@ -570,7 +592,8 @@ class TestPasse(Base):
             self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
         self.assertIn("aucune radio", str(arret.exception))
         self.assertIn("['Equipement']", str(arret.exception))
-        self.assertIn("0 champ(s) *radRMCLF-RADIO[1,0]", str(arret.exception))
+        self.assertIn("0 champ(s) finissant par radRMCLF-RADIO[1,0]",
+                      str(arret.exception))
 
     def test_sans_modale_apres_le_bouton_type_d_objet_la_passe_continue_si_la_colonne_est_la(self):
         theatre = Theatre()
@@ -586,7 +609,7 @@ class TestPasse(Base):
         theatre.press = press
         compte = self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
         self.assertEqual(compte, {SAISI: 1})
-        self.assertIn("aucune modale apres", self.texte_du_rapport())
+        self.assertIn("aucune fenetre apres", self.texte_du_rapport())
 
     def test_une_transaction_qui_ne_demarre_pas_arrete(self):
         theatre = Theatre()
@@ -734,7 +757,7 @@ class TestValorisationObligatoire(Base):
         theatre = Theatre(obligatoire=True, question_apres_poursuivre=True)
         with self.assertRaises(Arret) as arret:
             self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493303"])
-        self.assertIn("modale inconnue « Confirmation »", str(arret.exception))
+        self.assertIn("fenetre inconnue « Confirmation »", str(arret.exception))
         self.assertIn("Les valeurs saisies seront perdues", str(arret.exception))
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertIsNotNone(theatre.modale)
@@ -766,7 +789,7 @@ class TestModaleInconnue(Base):
         theatre._valider_table = question
         with self.assertRaises(Arret) as arret:
             self.automate(theatre, executer=True).passe("CLASSE_A", "015", ["493253"])
-        self.assertIn("modale inconnue « Confirmation »", str(arret.exception))
+        self.assertIn("fenetre inconnue « Confirmation »", str(arret.exception))
         apres = theatre.gestes[[g[2] for g in theatre.gestes].index("493253"):]
         self.assertEqual([g for g in apres if g[0] in ("press", "select")], [],
                          "un bouton a ete presse sur la question")
@@ -777,7 +800,7 @@ class TestModaleInconnue(Base):
         with self.assertRaises(Arret) as arret:
             self.automate(theatre, executer=True).passe(
                 "CLASSE_A", "015", ["493303", QUESTION, "493304"])
-        self.assertIn("modale inconnue « Question »", str(arret.exception))
+        self.assertIn("fenetre inconnue « Question »", str(arret.exception))
         self.assertIn("Voulez-vous vraiment ?", str(arret.exception))
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertIsNotNone(theatre.modale, "la modale est laissee telle quelle")
@@ -853,9 +876,9 @@ class TestABlanc(Base):
 
     def test_la_sauvegarde_est_refusee_mecaniquement_a_blanc(self):
         automate = self.automate(Theatre(), executer=False)
-        with self.assertRaises(RefusDryRun):
+        with self.assertRaises(RefusSauvegarde):
             automate._presser("/app/con[0]/ses[0]/wnd[0]/tbar[0]/btn[11]")
-        with self.assertRaises(RefusDryRun):
+        with self.assertRaises(RefusSauvegarde):
             automate._touche(11)
 
     def test_une_exception_de_couture_est_journalisee_avant_de_remonter(self):
@@ -1138,7 +1161,7 @@ class TestPrevol(unittest.TestCase):
     def test_a_blanc_exige_une_seule_classe(self):
         with self.assertRaises(Prevol) as refus:
             prevol(self.JEU, classes=[], plafond=10, executer=False)
-        self.assertIn("--classe", str(refus.exception))
+        self.assertIn("Choisir parmi", str(refus.exception))
         self.assertEqual(prevol(self.JEU, classes=["B"], plafond=10, executer=False),
                          {"B": ["4"]})
 
@@ -1161,18 +1184,31 @@ class TestConfirmation(unittest.TestCase):
     def test_le_nom_de_la_classe_en_toutes_lettres(self):
         identite = Identite(systeme="K62", mandant="060")
         dits = []
-        self.assertTrue(confirmer("CLASSE_A", identite, lire=lambda _: " classe_a ",
-                                  ecrire=dits.append))
-        self.assertFalse(confirmer("CLASSE_A", identite, lire=lambda _: "o",
-                                   ecrire=dits.append))
-        self.assertFalse(confirmer("CLASSE_A", identite, lire=lambda _: "",
-                                   ecrire=dits.append))
+
+        def demander(reponse):
+            return confirmer("CLASSE_A", identite, executer=True,
+                             lire=lambda _: reponse, ecrire=dits.append)
+
+        self.assertTrue(demander(" classe_a "))
+        self.assertFalse(demander("o"))
+        self.assertFalse(demander(""))
+        self.assertFalse(demander("oui"))
 
         def fermee(_):
             raise EOFError
-        self.assertFalse(confirmer("CLASSE_A", identite, lire=fermee,
-                                   ecrire=dits.append))
+        self.assertFalse(confirmer("CLASSE_A", identite, executer=True,
+                                   lire=fermee, ecrire=dits.append))
         self.assertTrue(any("K62" in d and "060" in d for d in dits))
+
+    def test_le_mode_est_dit_avant_de_demander(self):
+        identite = Identite(systeme="K62", mandant="060")
+        execution, blanc = [], []
+        confirmer("A", identite, executer=True, lire=lambda _: "A",
+                  ecrire=execution.append)
+        confirmer("A", identite, executer=False, lire=lambda _: "A",
+                  ecrire=blanc.append)
+        self.assertTrue(any("SAUVEGARDER" in d for d in execution))
+        self.assertTrue(any("SANS RIEN SAUVEGARDER" in d for d in blanc))
 
 
 class TestCommande(unittest.TestCase):
@@ -1208,16 +1244,25 @@ class TestCommande(unittest.TestCase):
         journal = _journal(next(self.dossier.glob("*_journal.csv")))
         self.assertEqual(_etats(journal), [ARRET])
 
-    def test_a_blanc_ne_demande_rien_et_le_dit(self):
+    def test_a_blanc_demande_aussi_la_confirmation_et_dit_que_rien_n_est_sauvegarde(self):
         theatre = Theatre()
         dits = []
         code = executer_sur(theatre, {"A": ["493303"]}, type_classe="015",
                             executer=False, sortie=self.dossier,
-                            lire=lambda _: self.fail("aucune saisie attendue"),
-                            ecrire=dits.append)
+                            lire=lambda _: "A", ecrire=dits.append)
         self.assertEqual(code, 0)
         self.assertEqual(theatre.sauvegardes, 0)
         self.assertTrue(any("ne sont PAS sauvegardees" in d for d in dits))
+        self.assertTrue(any("A BLANC" in d for d in dits))
+
+    def test_a_blanc_une_confirmation_refusee_ne_touche_a_rien(self):
+        theatre = Theatre()
+        dits = []
+        code = executer_sur(theatre, {"A": ["493303"]}, type_classe="015",
+                            executer=False, sortie=self.dossier,
+                            lire=lambda _: "non", ecrire=dits.append)
+        self.assertEqual(code, 1)
+        self.assertEqual(theatre.gestes, [])
 
     def test_un_arret_rend_1_et_journalise_les_classes_non_lancees(self):
         theatre = Theatre()
@@ -1237,5 +1282,128 @@ class TestCommande(unittest.TestCase):
         self.assertEqual(theatre.saisies.get("CLASS"), "A")
 
 
+class TestMenu(unittest.TestCase):
+    """Le menu, sans terminal : `lire` et `ecrire` sont injectes.
+
+    La connexion l'est aussi — `fabrique` rend le theatre — donc rien ici ne
+    touche a COM, et le menu ne sait pas s'il parle a SAP.
+    """
+
+    def setUp(self):
+        self.dossier = Path(tempfile.mkdtemp(prefix="cl24n-menu-"))
+        self.jeu = self.dossier / "points.csv"
+        self.jeu.write_text("point;classe\r\n493303;CLASSE_A\r\n"
+                            "493304;CLASSE_B\r\n", encoding="utf-8")
+        self.dits = []
+
+    def lancer(self, reponses, theatre=None, fabrique=None):
+        theatre = theatre if theatre is not None else Theatre()
+        suite = iter(reponses)
+        code = menu(fabrique or (lambda: theatre), sortie=self.dossier,
+                    jeu_defaut=self.jeu, lire=lambda _: next(suite),
+                    ecrire=self.dits.append)
+        return code, theatre
+
+    @property
+    def texte(self):
+        return "\n".join(self.dits)
+
+    def test_zero_quitte_sans_se_connecter(self):
+        appels = []
+
+        def fabrique():
+            appels.append(1)
+            return Theatre()
+        code, _ = self.lancer(["0"], fabrique=fabrique)
+        self.assertEqual(code, 0)
+        self.assertEqual(appels, [], "le menu s'est connecte pour rien")
+        self.assertIn("Quitter", self.texte)
+
+    def test_une_entree_fermee_quitte(self):
+        def lire(_):
+            raise EOFError
+        code = menu(lambda: Theatre(), sortie=self.dossier, jeu_defaut=self.jeu,
+                    lire=lire, ecrire=self.dits.append)
+        self.assertEqual(code, 0)
+
+    def test_un_choix_inconnu_redemande(self):
+        code, _ = self.lancer(["42", "0"])
+        self.assertEqual(code, 0)
+        self.assertIn("choix inconnu", self.texte)
+
+    def test_sap_injoignable_le_dit_et_rend_la_main_au_menu(self):
+        def fabrique():
+            raise SapIndisponible("pywin32 n'est pas installe")
+        code, _ = self.lancer(["1", "0"], fabrique=fabrique)
+        self.assertEqual(code, 0)
+        self.assertIn("SAP injoignable", self.texte)
+        self.assertIn("pywin32", self.texte)
+
+    def test_verifier_la_connexion_ne_fait_aucun_geste(self):
+        code, theatre = self.lancer(["1", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(theatre.gestes, [])
+        self.assertIn("K62", self.texte)
+        self.assertIn("060", self.texte)
+
+    def test_relever_l_ecran_ecrit_un_fichier_et_ne_fait_aucun_geste(self):
+        code, theatre = self.lancer(["2", "", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(theatre.gestes, [])
+        releves = list(self.dossier.glob("cl24n_*_ecran.txt"))
+        self.assertEqual(len(releves), 1)
+        self.assertIn("champs de wnd[0]", releves[0].read_text(encoding="utf-8-sig"))
+
+    def test_le_passage_a_blanc_se_deroule_depuis_le_menu(self):
+        code, theatre = self.lancer(["3", "", "015", "1", "", "CLASSE_A", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(theatre.sauvegardes, 0)
+        self.assertEqual(theatre.valides, ["493303"])
+        self.assertEqual(theatre.saisies["CLASS"], "CLASSE_A")
+        self.assertEqual(len(list(self.dossier.glob("*_journal.csv"))), 1)
+        self.assertIn("A BLANC", self.texte)
+
+    def test_l_execution_se_deroule_depuis_le_menu_pour_toutes_les_classes(self):
+        code, theatre = self.lancer(["4", "", "015", "", "CLASSE_A", "CLASSE_B", "0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(theatre.sauvegardes, 2)
+        self.assertEqual(sorted(theatre.existants), ["493303", "493304"])
+
+    def test_un_fichier_illisible_est_refuse_sans_toucher_a_SAP(self):
+        casse = self.dossier / "casse.csv"
+        casse.write_text("pdm;classe\r\n493303;A\r\n", encoding="utf-8")
+        code, theatre = self.lancer(["3", str(casse), "0"])
+        self.assertEqual(code, 0)
+        self.assertIn("REFUS", self.texte)
+        self.assertIn("'point' absente", self.texte)
+        self.assertEqual(theatre.gestes, [])
+
+    def test_un_plafond_depasse_est_refuse_avant_tout_contact(self):
+        code, theatre = self.lancer(["4", "", "015", "0", "0"])
+        self.assertEqual(code, 0)
+        self.assertIn("REFUS avant tout contact avec SAP", self.texte)
+        self.assertEqual(theatre.gestes, [])
+
+    def test_un_type_de_classe_vide_est_refuse(self):
+        code, theatre = self.lancer(["3", "", "", "0"])
+        self.assertEqual(code, 0)
+        self.assertIn("type de classe est obligatoire", self.texte)
+        self.assertEqual(theatre.gestes, [])
+
+    def test_lister_les_sorties_dit_quand_il_n_y_en_a_pas(self):
+        code, _ = self.lancer(["5", "0"])
+        self.assertEqual(code, 0)
+        self.assertIn("aucune sortie", self.texte)
+
+    def test_un_arret_ne_fait_pas_tomber_le_menu(self):
+        theatre = Theatre()
+        theatre.screen = lambda: Identite(systeme="K62", mandant="060",
+                                          transaction="SESSION_MANAGER")
+        code, _ = self.lancer(["3", "", "015", "1", "", "CLASSE_A", "0"],
+                              theatre=theatre)
+        self.assertEqual(code, 0)
+        self.assertIn("ARRET", self.texte)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

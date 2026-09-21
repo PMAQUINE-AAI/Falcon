@@ -349,12 +349,13 @@ jusqu'au premier import pressé :
   par le contrôleur, qui porte les gardes. Une pipeline ne peut donc pas en
   désactiver une (§5.2).
 
-## `automatismes/`
+## `cl24n/`
 
-Des programmes d'un seul fichier sur la couture, sans le moteur — pour ce
-qu'une pipeline YAML ne sait pas dire, comme attraper une modale et
-decider. Le premier affecte des points de mesure a une classe en `CL24N` :
-[automatismes/LISEZMOI.md](automatismes/LISEZMOI.md).
+Un programme **autonome**, hors FALCON : il n'importe rien du paquet et
+n'a aucune dependance. Il affecte des points de mesure a une classe en
+`CL24N`, avec un menu et un double-clic Windows, parce qu'une pipeline
+YAML ne sait pas attraper une fenetre surgissante et decider.
+[cl24n/LISEZMOI.md](cl24n/LISEZMOI.md).
 
 ## `historique/`
 
