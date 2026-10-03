@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -40,9 +41,13 @@ class Journal:
         # Ouverture/fermeture à chaque ligne : rien n'est perdu en cas de crash.
         with open(self.chemin_journal, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(ligne, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         if statut == "KO":
             with open(self.chemin_ko, "a", encoding="utf-8", newline="") as f:
                 self._csv(f).writerow([donnees.get(e, "") for e in self.entetes])
+                f.flush()
+                os.fsync(f.fileno())
 
 
 def lire(chemin: Path) -> list[dict]:
