@@ -32,9 +32,35 @@ class Session:
         except Exception as e:
             raise type(e)(f"{action} {id} : {e}") from e
 
-    def objet(self, id: str) -> Any:
-        """Objet COM brut, pour la lecture (ex. arborescence)."""
-        return self._objet(id, "findById")
+    def arbre(self, id: str, profondeur: int = 3, texte_max: int = 40) -> list[dict]:
+        """Parcours en lecture seule : [{id, type, texte}], propriétés illisibles loguées."""
+        # Id, Type, Text, Children (Count, indexation) : non vérifié sur SAP
+        lignes: list[dict] = []
+
+        def lire(o: Any, nom: str, defaut: str = "") -> Any:
+            try:
+                return getattr(o, nom)
+            except Exception as e:
+                log.warning("arbre %s : propriété %s illisible : %s", id, nom, e)
+                return defaut
+
+        def parcourir(o: Any, niveau: int) -> None:
+            oid = str(lire(o, "Id", "?"))
+            lignes.append({"id": oid, "type": str(lire(o, "Type")),
+                           "texte": str(lire(o, "Text"))[:texte_max]})
+            if niveau >= profondeur - 1:
+                return
+            enfants = lire(o, "Children", None)
+            if enfants is None:
+                return
+            for i in range(enfants.Count):
+                try:
+                    parcourir(enfants(i), niveau + 1)
+                except Exception as e:
+                    log.warning("arbre %s : enfant %d illisible : %s", oid, i, e)
+
+        parcourir(self._objet(id, "arbre"), 0)
+        return lignes
 
     def definir(self, id: str, propriete: str, valeur: Any) -> None:
         log.debug("%s definir %s=%r", id, propriete, valeur)
