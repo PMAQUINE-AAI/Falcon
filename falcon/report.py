@@ -84,7 +84,12 @@ class Rapport:
         self._handler.flush()
         horodatage = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.dossier.mkdir(parents=True, exist_ok=True)
-        zip_path = self.dossier / f"falcon_{horodatage}_{self.commande}.zip"
+        base = f"falcon_{horodatage}_{self.commande}"
+        zip_path = self.dossier / f"{base}.zip"
+        n = 2
+        while zip_path.exists():
+            zip_path = self.dossier / f"{base}_{n}.zip"
+            n += 1
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(self._log, "falcon.log")
             z.writestr("environnement.json",
