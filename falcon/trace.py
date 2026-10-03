@@ -20,6 +20,7 @@ _CHAINE = re.compile(r'"((?:[^"]|"")*)"')
 @dataclass(frozen=True)
 class Etape:
     id: str
+    verbe: str  # propriété ou méthode après findById(...).
     action: str  # set, press, vkey, select, other
     valeur: str | None
     ligne: int
@@ -58,5 +59,5 @@ def lire_trace(chemin: str | Path) -> list[Etape]:
             action = "select"
         else:
             action = "other"
-        etapes.append(Etape(m["id"].replace('""', '"'), action, valeur, numero))
+        etapes.append(Etape(m["id"].replace('""', '"'), verbe, action, valeur, numero))
     return etapes
