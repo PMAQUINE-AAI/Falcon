@@ -24,6 +24,8 @@ def depuis_trace(chemin_vbs: str | Path, nom: str) -> Recette:
 
 
 def lier(recette: Recette, indice: int, colonne: str) -> Recette:
+    if not 0 <= indice < len(recette.etapes):
+        raise ValueError(f"indice {indice} hors bornes (0..{len(recette.etapes) - 1})")
     action = recette.etapes[indice].action
     if action not in LIABLES:
         raise ValueError(f"étape {indice} ({action}) non liable : seules set/select le sont")
@@ -46,13 +48,16 @@ def ecrire(recette: Recette, chemin: str | Path) -> None:
 
 def lire(chemin: str | Path) -> Recette:
     donnees = yaml.safe_load(Path(chemin).read_text(encoding="utf-8"))
-    etapes, liaisons = [], {}
+    etapes, colonnes = [], {}
     for i, e in enumerate(donnees["etapes"]):
         valeur = e["valeur"]
         etapes.append(Etape(e["id"], e["verbe"], e["action"], None if valeur is None else str(valeur), e["ligne"]))
         if e.get("colonne"):
-            liaisons[i] = e["colonne"]
-    return Recette(donnees["nom"], etapes, liaisons)
+            colonnes[i] = e["colonne"]
+    recette = Recette(donnees["nom"], etapes, {})
+    for i, colonne in colonnes.items():
+        recette = lier(recette, i, colonne)
+    return recette
 
 
 def appliquer(recette: Recette, ligne: dict[str, str]) -> list[Etape]:
