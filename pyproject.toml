@@ -7,7 +7,7 @@ name = "falcon"
 version = "1.0.0.dev0"
 description = "Rejeu de traces SAP GUI sur un CSV"
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6.0"]
+dependencies = ["PyYAML>=6.0", "pywin32>=306; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
